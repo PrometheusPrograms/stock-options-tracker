@@ -755,6 +755,11 @@ def get_chart_data():
         print(f'Error fetching chart data: {e}')
         return jsonify({'error': 'Failed to fetch chart data'}), 500
 
+@app.route('/test')
+def test_endpoint():
+    """Simple test endpoint to verify app is running"""
+    return 'App is running!', 200
+
 @app.route('/webhook/deploy', methods=['POST'])
 def webhook_deploy():
     """Webhook endpoint for automatic deployment from GitHub"""
