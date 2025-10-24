@@ -755,6 +755,33 @@ def get_chart_data():
         print(f'Error fetching chart data: {e}')
         return jsonify({'error': 'Failed to fetch chart data'}), 500
 
+@app.route('/webhook/deploy', methods=['POST'])
+def webhook_deploy():
+    """Webhook endpoint for automatic deployment from GitHub"""
+    try:
+        import subprocess
+        import os
+        
+        # Change to the project directory
+        project_dir = '/home/PrometheusPrograms/stock-options-tracker'
+        
+        # Pull latest changes from GitHub
+        result = subprocess.run(['git', 'pull'], 
+                              cwd=project_dir, 
+                              capture_output=True, 
+                              text=True)
+        
+        if result.returncode == 0:
+            print(f"Deployment successful: {result.stdout}")
+            return 'Deployment successful', 200
+        else:
+            print(f"Deployment failed: {result.stderr}")
+            return f'Deployment failed: {result.stderr}', 500
+            
+    except Exception as e:
+        print(f"Webhook deployment error: {e}")
+        return f'Deployment error: {str(e)}', 500
+
 if __name__ == '__main__':
     init_db()
     app.run(debug=True, port=5005)
