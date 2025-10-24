@@ -1,0 +1,32 @@
+name: Deploy to PythonAnywhere
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Deploy to PythonAnywhere
+      run: |
+        echo "🚀 Deploying to PythonAnywhere..."
+        echo "This workflow will trigger when you push to main branch"
+        echo ""
+        echo "To set up automatic deployment:"
+        echo "1. Add your PythonAnywhere SSH key to GitHub Secrets"
+        echo "2. Update the SSH command below with your username"
+        echo "3. Uncomment the SSH command"
+        echo ""
+        echo "Manual deployment command:"
+        echo "ssh YOUR_USERNAME@ssh.pythonanywhere.com 'cd stock-options-tracker && git pull'"
+        echo ""
+        # Uncomment and modify this line when you have SSH access set up:
+        # ssh ${{ secrets.PYTHONANYWHERE_USER }}@ssh.pythonanywhere.com 'cd stock-options-tracker && git pull'
+        
+    - name: Notify Deployment
+      run: |
+        echo "✅ Deployment workflow completed"
+        echo "Check your PythonAnywhere web app for updates"
