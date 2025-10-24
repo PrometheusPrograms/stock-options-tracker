@@ -1,0 +1,36 @@
+PRAGMA foreign_keys=OFF;
+BEGIN TRANSACTION;
+CREATE TABLE trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            expiration_date TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            premium REAL NOT NULL,
+            total_premium REAL NOT NULL,
+            days_to_expiration INTEGER NOT NULL,
+            current_price REAL NOT NULL,
+            strike_price REAL DEFAULT 0,
+            status TEXT DEFAULT 'open',
+            trade_type TEXT DEFAULT 'ROCT PUT',
+            shares INTEGER DEFAULT 0,
+            cost_per_share REAL DEFAULT 0,
+            total_cost REAL DEFAULT 0,
+            closing_amount REAL DEFAULT 0,
+            transaction_type TEXT DEFAULT 'sell',
+            trade_description TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+INSERT INTO trades VALUES(1,'AAPL','2024-10-24','2024-11-15',1,2.5,250.0,22,175.5,180.0,'open','ROCT PUT',100,0.0,0.0,0.0,'sell','','2025-10-24 20:10:17');
+INSERT INTO trades VALUES(2,'TSLA','2024-10-23','2024-11-22',2,1.75,350.0,29,245.3000000000000113,250.0,'open','ROCT CALL',200,0.0,0.0,0.0,'sell','','2025-10-24 20:10:17');
+INSERT INTO trades VALUES(3,'MSFT','2024-10-22','2024-12-20',1,3.200000000000000177,320.0,57,420.1499999999999773,425.0,'expired','ROCT PUT',100,0.0,0.0,0.0,'sell','','2025-10-24 20:10:17');
+INSERT INTO trades VALUES(4,'GOOGL','2024-10-21','2024-11-29',3,1.399999999999999912,420.0,36,135.8000000000000113,140.0,'assigned','ROCT CALL',300,0.0,0.0,0.0,'sell','','2025-10-24 20:10:17');
+INSERT INTO trades VALUES(5,'NVDA','2024-10-20','2024-12-13',2,4.5,900.0,50,850.25,860.0,'closed','ROCT PUT',200,0.0,0.0,0.0,'sell','','2025-10-24 20:10:17');
+INSERT INTO trades VALUES(6,'AMZN','2024-10-19','2024-11-08',1,2.799999999999999823,280.0,15,155.4000000000000056,160.0,'open','ROCT CALL',100,0.0,0.0,0.0,'sell','','2025-10-24 20:10:17');
+INSERT INTO trades VALUES(7,'META','2024-10-18','2024-12-06',2,3.75,750.0,43,380.8999999999999773,385.0,'assigned','ROCT PUT',200,0.0,0.0,0.0,'sell','','2025-10-24 20:10:17');
+INSERT INTO trades VALUES(8,'NFLX','2024-10-17','2024-11-15',1,1.899999999999999912,190.0,22,485.6000000000000227,490.0,'closed','ROCT CALL',100,0.0,0.0,0.0,'sell','','2025-10-24 20:10:17');
+INSERT INTO trades VALUES(9,'AAPL','2024-10-15','2024-10-15',10,0.0,0.0,0,175.5,175.5,'open','BTO',10,175.5,0.0,0.0,'sell','','2025-10-24 20:10:26');
+INSERT INTO trades VALUES(10,'AAPL','2024-10-20','2024-10-20',5,0.0,0.0,0,180.25,180.25,'open','STC',5,180.25,0.0,0.0,'sell','','2025-10-24 20:10:26');
+INSERT INTO trades VALUES(11,'TSLA','2024-10-10','2024-10-10',20,0.0,0.0,0,240.8000000000000113,240.8000000000000113,'open','BTO',20,240.8000000000000113,0.0,0.0,'sell','','2025-10-24 20:10:26');
+INSERT INTO sqlite_sequence VALUES('trades',11);
+COMMIT;
