@@ -10,38 +10,46 @@ let lastTradeCount = 0; // Track number of trades for change detection
 let selectedTicker = null; // Track selected ticker for cost basis
 let premiumChart = null;
 
-// Initialize the application
+// Add trade type functionality
+function addTradeType(tradeType) {
+    console.log(`addTradeType called with: ${tradeType}`);
+    if (tradeType === 'BTO') {
+        console.log('Calling addBTOTrade...');
+        addBTOTrade();
+    } else {
+        // For other trade types, show a message or implement specific functionality
+        console.log(`Adding ${tradeType} trade - functionality to be implemented`);
+        alert(`${tradeType} functionality not yet implemented`);
+    }
+}
+
+// Legacy function - now replaced by openBTOModal()
+
+// Initialize the application when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
-    updateCurrentDate();
-    initializeChart();
+    console.log('DOM loaded, initializing app...');
+    
+    // Load commission settings
+    loadCommission();
+    
+    // Load initial data
     loadTrades();
     loadSummary();
-    updateChart(); // Load chart data
-    hideCostBasisTable(); // Hide cost basis table by default
+    loadCostBasis();
     
-    // Set up form submission
-    document.getElementById('trade-form').addEventListener('submit', handleTradeSubmit);
+    // Initialize chart
+    initializeChart();
     
-    // Start monitoring for trade status changes
-    startStatusMonitoring();
+    // Update chart with data
+    setTimeout(() => {
+        updateChart();
+    }, 100);
     
-    // Set up ticker input for real-time price lookup
-    setupTickerInput();
-    
-    // Set up expiration date input for days calculation
-    setupExpirationDateInput();
-    
-    // Set up trade type handler
-    setupTradeTypeHandler();
-    
-    // Set up symbol filter
+    // Set up event listeners
+    setupStatusFilter();
     setupSymbolFilter();
     
-    // Set up status filter
-    setupStatusFilter();
-    
-    // Load commission from localStorage
-    loadCommission();
+    console.log('App initialized');
 });
 
 // Update current date in trade date field
@@ -53,25 +61,42 @@ function updateCurrentDate() {
 
 // Initialize Chart.js chart
 function initializeChart() {
-    const ctx = document.getElementById('premiumChart').getContext('2d');
+    const ctx = document.getElementById('premiumChart');
+    if (!ctx) {
+        console.error('Chart canvas not found');
+        return;
+    }
+    
     premiumChart = new Chart(ctx, {
         type: 'line',
         data: {
             labels: [],
             datasets: [{
-                label: 'Daily Premium',
+                label: 'Daily Premium ($)',
                 data: [],
                 borderColor: 'rgb(75, 192, 192)',
                 backgroundColor: 'rgba(75, 192, 192, 0.2)',
-                tension: 0.1
+                borderWidth: 2,
+                tension: 0.1,
+                fill: false
             }]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: true
+                }
+            },
             scales: {
                 y: {
-                    beginAtZero: true
+                    beginAtZero: true,
+                    ticks: {
+                        callback: function(value) {
+                            return '$' + value.toLocaleString();
+                        }
+                    }
                 }
             }
         }
@@ -91,7 +116,7 @@ async function loadTrades() {
         console.log('Trades table updated');
     } catch (error) {
         console.error('Error loading trades:', error);
-        showAlert('Error loading trades', 'danger');
+        console.error('Error loading trades:', error);
     }
 }
 
@@ -148,8 +173,8 @@ function updateTradesTable() {
     }
     
     // Apply symbol filter
-    if (symbolFilter) {
-        filteredTrades = filteredTrades.filter(trade => trade.ticker === symbolFilter);
+    if (window.symbolFilter) {
+        filteredTrades = filteredTrades.filter(trade => trade.ticker === window.symbolFilter);
     }
     
     // Sort trades if sort column is specified
@@ -236,6 +261,11 @@ function updateTradesTable() {
             firstCell.style.width = '150px';
             firstCell.style.minWidth = '150px';
             firstCell.style.maxWidth = '150px';
+            firstCell.style.textAlign = 'center';
+            firstCell.style.whiteSpace = 'normal';
+            firstCell.style.wordWrap = 'break-word';
+            firstCell.style.verticalAlign = 'middle';
+            firstCell.style.backgroundColor = 'transparent';
         }
         
         // Create columns for ALL trades (unlimited scalability)
@@ -273,7 +303,7 @@ function updateTradesTable() {
                     const today = new Date();
                     const expirationDate = new Date(trade.expiration_date);
                     const isExpired = trade.status === 'open' && today > expirationDate;
-                    cellContent = `<strong>${isExpired ? '<i class="fas fa-exclamation-triangle text-danger me-1" title="Expired"></i>' : ''}<span class="clickable-symbol" onclick="filterBySymbol('${trade.ticker}')" style="cursor: pointer; color: #007bff; text-decoration: underline;">${trade.ticker}</span> ${tradeType}</strong>`;
+                    cellContent = `<div style="text-align: center; white-space: normal; word-wrap: break-word; vertical-align: middle;"><strong>${isExpired ? '<i class="fas fa-exclamation-triangle text-danger me-1" title="Expired"></i>' : ''}<span class="clickable-symbol" onclick="filterBySymbol('${trade.ticker}')" style="cursor: pointer; color: #007bff; text-decoration: underline;">${trade.ticker}</span> ${tradeType}</strong></div>`;
                     break;
                 case 1: // Trade Date (moved to second row) - Editable
                     cellContent = `<input type="date" class="form-control form-control-sm text-center" value="${trade.trade_date || trade.created_at}" data-trade-id="${trade.id}" data-field="trade_date" onchange="updateTradeField(${trade.id}, 'trade_date', this.value)">`;
@@ -444,7 +474,7 @@ async function handleTradeSubmit(event) {
         const result = await response.json();
         
         if (result.success) {
-            showAlert('Trade added successfully', 'success');
+        console.log('Trade added successfully');
             document.getElementById('trade-form').reset();
             updateCurrentDate();
             await loadTrades();
@@ -454,11 +484,11 @@ async function handleTradeSubmit(event) {
                 loadCostBasis(selectedTicker);
             }
         } else {
-            showAlert(result.error || 'Failed to add trade', 'danger');
+            console.error(result.error || 'Failed to add trade');
         }
     } catch (error) {
         console.error('Error adding trade:', error);
-        showAlert('Failed to add trade', 'danger');
+        console.error('Failed to add trade');
     }
 }
 
@@ -480,13 +510,13 @@ async function deleteTrade(tradeId) {
                     loadCostBasis(selectedTicker);
                 }
                 
-                showAlert('Trade deleted successfully', 'success');
+                console.log('Trade deleted successfully');
             } else {
-                showAlert(result.error || 'Failed to delete trade', 'danger');
+                console.error(result.error || 'Failed to delete trade');
             }
         } catch (error) {
             console.error('Error deleting trade:', error);
-            showAlert('Failed to delete trade', 'danger');
+            console.error('Failed to delete trade');
         }
     }
 }
@@ -499,36 +529,61 @@ function setupSymbolFilter() {
     
     if (!symbolFilterInput || !suggestionsDiv) return;
     
+    let debounceTimer;
+    
     // Add input event listener for autocomplete
     symbolFilterInput.addEventListener('input', function() {
-        const value = this.value.toUpperCase();
-        symbolFilter = value;
+        const value = this.value.trim();
+        symbolFilter = value.toUpperCase();
+        
+        // Clear previous timer
+        clearTimeout(debounceTimer);
         
         if (value.length === 0) {
             suggestionsDiv.style.display = 'none';
             symbolFilter = '';
             if (clearButton) clearButton.style.display = 'none';
+            updateTradesTable();
         } else {
             if (clearButton) clearButton.style.display = 'block';
             
-            // Get unique symbols from current trades (excluding BTO/STC)
-            const uniqueSymbols = [...new Set(trades
-                .filter(trade => trade.trade_type !== 'BTO' && trade.trade_type !== 'STC' && trade.trade_type !== 'ASSIGNED')
-                .map(trade => trade.ticker))];
-            
-            // Filter symbols that match the input
-            const matches = uniqueSymbols.filter(symbol => 
-                symbol.toUpperCase().includes(value)
-            );
-            
-            if (matches.length > 0) {
-                suggestionsDiv.innerHTML = matches.map(symbol => 
-                    `<div class="dropdown-item" onclick="selectSymbol('${symbol}')" style="cursor: pointer;">${symbol}</div>`
-                ).join('');
-                suggestionsDiv.style.display = 'block';
-            } else {
-                suggestionsDiv.style.display = 'none';
-            }
+            // Debounce API calls
+            debounceTimer = setTimeout(async () => {
+                try {
+                    const response = await fetch(`/api/company-search?query=${encodeURIComponent(value)}`);
+                    const data = await response.json();
+                    
+                    if (data.companies && data.companies.length > 0) {
+                        suggestionsDiv.innerHTML = data.companies.slice(0, 10).map(company => 
+                            `<div class="dropdown-item" onclick="selectSymbol('${company.symbol}')" style="cursor: pointer;">
+                                <strong>${company.symbol}</strong> - ${company.name}
+                            </div>`
+                        ).join('');
+                        suggestionsDiv.style.display = 'block';
+                    } else {
+                        // Fallback to local symbols if API fails
+                        const uniqueSymbols = [...new Set(trades
+                            .filter(trade => trade.trade_type !== 'BTO' && trade.trade_type !== 'STC' && trade.trade_type !== 'ASSIGNED')
+                            .map(trade => trade.ticker))];
+                        
+                        const matches = uniqueSymbols.filter(symbol => 
+                            symbol.toUpperCase().includes(value.toUpperCase())
+                        );
+                        
+                        if (matches.length > 0) {
+                            suggestionsDiv.innerHTML = matches.map(symbol => 
+                                `<div class="dropdown-item" onclick="selectSymbol('${symbol}')" style="cursor: pointer;">${symbol}</div>`
+                            ).join('');
+                            suggestionsDiv.style.display = 'block';
+                        } else {
+                            suggestionsDiv.style.display = 'none';
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error fetching company suggestions:', error);
+                    suggestionsDiv.style.display = 'none';
+                }
+            }, 300);
         }
         
         updateTradesTable();
@@ -560,11 +615,28 @@ function setupSymbolFilter() {
 function selectSymbol(symbol) {
     const symbolFilterInput = document.getElementById('symbol-filter');
     const suggestionsDiv = document.getElementById('symbol-suggestions');
+    const clearButton = document.getElementById('clear-symbol');
     
     if (symbolFilterInput) {
         symbolFilterInput.value = symbol;
-        symbolFilter = symbol;
+        window.symbolFilter = symbol; // Set global symbolFilter variable
         suggestionsDiv.style.display = 'none';
+        
+        // Show clear button when symbol is selected
+        if (clearButton) clearButton.style.display = 'inline-block';
+        
+        // Also update cost basis symbol filter input
+        const costBasisSymbolFilter = document.getElementById('cost-basis-symbol-filter');
+        const costBasisClearButton = document.getElementById('clear-cost-basis-symbol');
+        
+        if (costBasisSymbolFilter) {
+            costBasisSymbolFilter.value = symbol;
+        }
+        
+        if (costBasisClearButton) {
+            costBasisClearButton.style.display = 'inline-block';
+        }
+        
         updateTradesTable();
         loadCostBasis(symbol);
         
@@ -580,20 +652,34 @@ function selectSymbol(symbol) {
 
 // Filter by symbol function (called when clicking on symbol)
 function filterBySymbol(symbol) {
-    symbolFilter = symbol;
+    window.symbolFilter = symbol; // Set global symbolFilter variable
     const symbolFilterInput = document.getElementById('symbol-filter');
+    const clearButton = document.getElementById('clear-symbol');
+    
     if (symbolFilterInput) {
         symbolFilterInput.value = symbol;
     }
+    
+    // Show clear button for trades table
+    if (clearButton) {
+        clearButton.style.display = 'inline-block';
+    }
+    
+    // Also update cost basis symbol filter input
+    const costBasisSymbolFilter = document.getElementById('cost-basis-symbol-filter');
+    const costBasisClearButton = document.getElementById('clear-cost-basis-symbol');
+    
+    if (costBasisSymbolFilter) {
+        costBasisSymbolFilter.value = symbol;
+    }
+    
+    if (costBasisClearButton) {
+        costBasisClearButton.style.display = 'inline-block';
+    }
+    
     updateTradesTable();
     // Load cost basis for the selected symbol
     loadCostBasis(symbol);
-    
-    // Show clear cost basis button
-    const clearCostBasisButton = document.getElementById('clear-cost-basis-filter');
-    if (clearCostBasisButton) {
-        clearCostBasisButton.style.display = 'block';
-    }
     
     // Scroll to cost basis table
     setTimeout(() => {
@@ -610,11 +696,147 @@ function clearSymbolFilter() {
     const suggestionsDiv = document.getElementById('symbol-suggestions');
     const clearButton = document.getElementById('clear-symbol');
     
+    // Clear trades table symbol filter
     if (symbolFilterInput) {
         symbolFilterInput.value = '';
-        symbolFilter = '';
+        window.symbolFilter = ''; // Set global symbolFilter variable
         suggestionsDiv.style.display = 'none';
         if (clearButton) clearButton.style.display = 'none';
+        updateTradesTable();
+    }
+    
+    // Clear cost basis symbol filter
+    const costBasisSymbolFilter = document.getElementById('cost-basis-symbol-filter');
+    const costBasisSuggestions = document.getElementById('cost-basis-symbol-suggestions');
+    const costBasisClearButton = document.getElementById('clear-cost-basis-symbol');
+    
+    if (costBasisSymbolFilter) {
+        costBasisSymbolFilter.value = '';
+        costBasisSuggestions.style.display = 'none';
+        if (costBasisClearButton) costBasisClearButton.style.display = 'none';
+        loadCostBasis(); // Show all symbols
+    }
+}
+
+// Set up cost basis symbol filter
+function setupCostBasisSymbolFilter() {
+    const symbolFilter = document.getElementById('cost-basis-symbol-filter');
+    const suggestions = document.getElementById('cost-basis-symbol-suggestions');
+    const clearButton = document.getElementById('clear-cost-basis-symbol');
+    
+    if (!symbolFilter || !suggestions || !clearButton) return;
+    
+    symbolFilter.addEventListener('input', function() {
+        const query = this.value.toLowerCase();
+        
+        if (query.length === 0) {
+            suggestions.style.display = 'none';
+            clearButton.style.display = 'none';
+            return;
+        }
+        
+        clearButton.style.display = 'inline-block';
+        
+        // Get unique symbols from trades
+        const symbols = [...new Set(trades.map(trade => trade.ticker))];
+        const matches = symbols.filter(symbol => 
+            symbol.toLowerCase().includes(query)
+        ).slice(0, 5);
+        
+        if (matches.length > 0) {
+            suggestions.innerHTML = matches.map(symbol => 
+                `<div class="dropdown-item" onclick="selectCostBasisSymbol('${symbol}')">${symbol}</div>`
+            ).join('');
+            suggestions.style.display = 'block';
+        } else {
+            suggestions.style.display = 'none';
+        }
+    });
+    
+    // Handle when user types a symbol and presses Enter or loses focus
+    symbolFilter.addEventListener('blur', function() {
+        const symbol = this.value.trim().toUpperCase();
+        if (symbol && symbol.length > 0) {
+            // Check if the symbol exists in trades
+            const symbols = [...new Set(trades.map(trade => trade.ticker))];
+            if (symbols.includes(symbol)) {
+                selectCostBasisSymbol(symbol);
+            }
+        }
+    });
+    
+    // Handle Enter key press
+    symbolFilter.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            const symbol = this.value.trim().toUpperCase();
+            if (symbol && symbol.length > 0) {
+                // Check if the symbol exists in trades
+                const symbols = [...new Set(trades.map(trade => trade.ticker))];
+                if (symbols.includes(symbol)) {
+                    selectCostBasisSymbol(symbol);
+                }
+            }
+        }
+    });
+    
+    // Hide suggestions when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!symbolFilter.contains(e.target) && !suggestions.contains(e.target)) {
+            suggestions.style.display = 'none';
+        }
+    });
+}
+
+// Select cost basis symbol
+function selectCostBasisSymbol(symbol) {
+    const symbolFilter = document.getElementById('cost-basis-symbol-filter');
+    const suggestions = document.getElementById('cost-basis-symbol-suggestions');
+    const clearButton = document.getElementById('clear-cost-basis-symbol');
+    
+    symbolFilter.value = symbol;
+    suggestions.style.display = 'none';
+    clearButton.style.display = 'inline-block';
+    
+    // Also filter trades table on the same symbol
+    const tradesSymbolFilterInput = document.getElementById('symbol-filter');
+    const tradesClearButton = document.getElementById('clear-symbol');
+    
+    if (tradesSymbolFilterInput) {
+        tradesSymbolFilterInput.value = symbol;
+        window.symbolFilter = symbol; // Set global symbolFilter variable
+        
+        if (tradesClearButton) tradesClearButton.style.display = 'inline-block';
+        updateTradesTable();
+    }
+    
+    // Load cost basis for the selected symbol only
+    loadCostBasis(symbol);
+}
+
+// Clear cost basis symbol filter
+function clearCostBasisSymbolFilter() {
+    // Clear cost basis symbol filter
+    const symbolFilter = document.getElementById('cost-basis-symbol-filter');
+    const suggestions = document.getElementById('cost-basis-symbol-suggestions');
+    const clearButton = document.getElementById('clear-cost-basis-symbol');
+    
+    if (symbolFilter) {
+        symbolFilter.value = '';
+        suggestions.style.display = 'none';
+        if (clearButton) clearButton.style.display = 'none';
+        loadCostBasis(); // Show all symbols
+    }
+    
+    // Clear trades table symbol filter
+    const tradesSymbolFilterInput = document.getElementById('symbol-filter');
+    const tradesSuggestionsDiv = document.getElementById('symbol-suggestions');
+    const tradesClearButton = document.getElementById('clear-symbol');
+    
+    if (tradesSymbolFilterInput) {
+        tradesSymbolFilterInput.value = '';
+        window.symbolFilter = ''; // Set global symbolFilter variable
+        tradesSuggestionsDiv.style.display = 'none';
+        if (tradesClearButton) tradesClearButton.style.display = 'none';
         updateTradesTable();
     }
 }
@@ -622,16 +844,10 @@ function clearSymbolFilter() {
 // Clear cost basis filter
 function clearCostBasisFilter() {
     // Clear symbol filter
-    symbolFilter = '';
+    window.symbolFilter = ''; // Set global symbolFilter variable
     const symbolFilterInput = document.getElementById('symbol-filter');
     if (symbolFilterInput) {
         symbolFilterInput.value = '';
-    }
-    
-    // Hide clear cost basis button
-    const clearCostBasisButton = document.getElementById('clear-cost-basis-filter');
-    if (clearCostBasisButton) {
-        clearCostBasisButton.style.display = 'none';
     }
     
     // Hide cost basis table
@@ -729,6 +945,25 @@ function setupStatusFilter() {
         statusFilter = this.value;
         updateTradesTable();
     });
+    
+    // Set up cost basis symbol filter
+    setupCostBasisSymbolFilter();
+    
+    // Set up cost basis status filter
+    const costBasisStatusFilter = document.getElementById('cost-basis-status-filter');
+    if (costBasisStatusFilter) {
+        costBasisStatusFilter.addEventListener('change', function() {
+            // Get the currently selected symbol from the filter
+            const symbolFilter = document.getElementById('cost-basis-symbol-filter');
+            const selectedSymbol = symbolFilter ? symbolFilter.value : null;
+            
+            if (selectedSymbol) {
+                loadCostBasis(selectedSymbol);
+            } else {
+                loadCostBasis();
+            }
+        });
+    }
 }
 
 // Update trade status
@@ -748,7 +983,7 @@ async function updateTradeStatus(tradeId, newStatus) {
             // If status changed to "roll", reload all trades to get the new duplicate
             if (newStatus === 'roll') {
                 await loadTrades();
-                showAlert(`Trade status updated to ${newStatus} and duplicate entry created`, 'success');
+                console.log(`Trade status updated to ${newStatus} and duplicate entry created`);
             } else {
                 // Update the trade in our local array
                 const tradeIndex = trades.findIndex(trade => trade.id === tradeId);
@@ -764,14 +999,14 @@ async function updateTradeStatus(tradeId, newStatus) {
                     await loadCostBasis(selectedTicker);
                 }
                 
-                showAlert(`Trade status updated to ${newStatus}`, 'success');
+                console.log(`Trade status updated to ${newStatus}`);
             }
         } else {
-            showAlert('Error updating trade status: ' + (result.error || 'Unknown error'), 'danger');
+            console.error('Error updating trade status: ' + (result.error || 'Unknown error'));
         }
     } catch (error) {
         console.error('Error updating trade status:', error);
-        showAlert('Error updating trade status. Please try again.', 'danger');
+        console.error('Error updating trade status. Please try again.');
     }
 }
 
@@ -815,52 +1050,115 @@ async function updateTradeField(tradeId, fieldName, newValue) {
             // Update the table
             updateTradesTable();
             
-            showAlert(`${fieldName} updated successfully`, 'success');
+            // Update cost basis table if any field that affects cost basis was changed
+            if (fieldName === 'quantity' || fieldName === 'premium' || fieldName === 'trade_date' || 
+                fieldName === 'expiration_date' || fieldName === 'strike_price' || fieldName === 'status') {
+                await loadCostBasis(selectedTicker);
+            }
+            
+            console.log(`${fieldName} updated successfully`);
         } else {
-            showAlert('Error updating field: ' + (result.error || 'Unknown error'), 'danger');
+            console.error('Error updating field: ' + (result.error || 'Unknown error'));
         }
     } catch (error) {
         console.error('Error updating trade field:', error);
-        showAlert('Error updating field. Please try again.', 'danger');
+        console.error('Error updating field. Please try again.');
     }
 }
 
 // Load cost basis data
 async function loadCostBasis(ticker = null) {
-    if (!ticker) {
-        // Hide cost basis table if no ticker selected
-        hideCostBasisTable();
-        return;
-    }
-    
     try {
-        const response = await fetch(`/api/cost-basis?commission=${commission}`);
-        const costBasisData = await response.json();
+        const commission = localStorage.getItem('commission') || '0.0';
+        const url = ticker ? `/api/cost-basis?ticker=${ticker}&commission=${commission}` : `/api/cost-basis?commission=${commission}`;
         
-        if (response.ok) {
-            // Filter data for the selected ticker only
-            const tickerData = costBasisData.filter(data => data.ticker === ticker);
-            await updateCostBasisTable(tickerData);
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (ticker) {
             selectedTicker = ticker;
+            updateCostBasisTable(data);
         } else {
-            console.error('Error loading cost basis:', costBasisData.error);
+            // Show all available symbols
+            showAllSymbols(data);
         }
     } catch (error) {
         console.error('Error loading cost basis:', error);
     }
 }
 
+// Show all available symbols when no ticker is selected
+function showAllSymbols(data) {
+    const costBasisContainer = document.getElementById('cost-basis-table-container');
+    if (!costBasisContainer) return;
+    
+    if (!data || data.length === 0) {
+        costBasisContainer.innerHTML = `
+            <div class="text-center text-muted">
+                <i class="fas fa-info-circle me-2"></i>
+                No trades found. Add some trades to see symbols here.
+            </div>
+        `;
+        return;
+    }
+    
+    // Create a list of all available symbols
+    const symbols = data.map(item => item.ticker).sort();
+    const uniqueSymbols = [...new Set(symbols)];
+    
+    let symbolsHtml = '<div class="row">';
+    uniqueSymbols.forEach(symbol => {
+        const symbolData = data.find(item => item.ticker === symbol);
+        const tradeCount = symbolData ? symbolData.trades.length : 0;
+        
+        symbolsHtml += `
+            <div class="col-md-3 col-sm-4 col-6 mb-3">
+                <div class="card h-100 symbol-card" onclick="selectCostBasisSymbol('${symbol}')" style="cursor: pointer;">
+                    <div class="card-body text-center">
+                        <h5 class="card-title text-primary">${symbol}</h5>
+                        <p class="card-text text-muted">${tradeCount} trade${tradeCount !== 1 ? 's' : ''}</p>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    symbolsHtml += '</div>';
+    
+    costBasisContainer.innerHTML = `
+        <div class="mb-3">
+            <h6 class="text-primary mb-3">
+                <i class="fas fa-list me-2"></i>
+                Available Stock Symbols (${uniqueSymbols.length})
+            </h6>
+            ${symbolsHtml}
+            <div class="text-center mt-3">
+                <small class="text-muted">Click on any symbol to view its cost basis</small>
+            </div>
+        </div>
+    `;
+}
+
 function hideCostBasisTable() {
-    const container = document.getElementById('cost-basis-summary');
-    container.innerHTML = '<p class="text-muted">Click on a stock symbol in the Trades table to view its cost basis summary.</p>';
+    const container = document.getElementById('cost-basis-table-container');
+    container.innerHTML = `
+        <div class="text-center text-muted">
+            <i class="fas fa-info-circle me-2"></i>
+            Click on a stock symbol above to view its cost basis
+        </div>
+    `;
     selectedTicker = null;
 }
 
 async function updateCostBasisTable(costBasisData) {
-    const container = document.getElementById('cost-basis-summary');
+    const container = document.getElementById('cost-basis-table-container');
     
     if (!costBasisData || costBasisData.length === 0) {
-        container.innerHTML = '<p class="text-muted">No cost basis data available for the selected stock symbol.</p>';
+        container.innerHTML = `
+            <div class="text-center text-muted">
+                <i class="fas fa-info-circle me-2"></i>
+                No cost basis data available for the selected stock symbol.
+            </div>
+        `;
         return;
     }
     
@@ -875,11 +1173,13 @@ async function updateCostBasisTable(costBasisData) {
         
         html += `
             <div class="mb-4">
-                <h6 class="text-primary mb-3">
-                    <i class="fas fa-chart-line me-2"></i>${displayTitle}
-                </h6>
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h6 class="text-primary mb-0">
+                        <i class="fas fa-chart-line me-2"></i>${displayTitle}
+                    </h6>
+                </div>
                 
-                <!-- Summary Row -->
+                <!-- Summary Cards -->
                 <div class="row mb-3">
                     <div class="col-md-3">
                         <div class="card bg-light">
@@ -917,18 +1217,18 @@ async function updateCostBasisTable(costBasisData) {
                 
                 <!-- Individual Trades Table -->
                 <div class="table-responsive">
-                    <table class="table table-sm">
-                        <thead style="background-color: transparent;">
+                    <table class="table table-sm table-striped">
+                        <thead class="table-dark">
                             <tr>
-                                <th class="text-center" style="color: black; background-color: transparent;">Trade Date</th>
-                                <th class="text-start" style="color: black; background-color: transparent;">Trade Description</th>
-                                <th class="text-end" style="color: black; background-color: transparent;">Shares</th>
-                                <th class="text-end" style="color: black; background-color: transparent;">Cost</th>
-                                <th class="text-end" style="color: black; background-color: transparent;">Amount</th>
-                                <th class="text-end" style="color: black; background-color: transparent;">Closing Amount</th>
-                                <th class="text-end" style="color: black; background-color: transparent;">Basis</th>
-                                <th class="text-end" style="color: black; background-color: transparent;">Basis/Share</th>
-                                <th class="text-center" style="color: black; background-color: transparent;"></th>
+                                <th class="text-center">Trade Date</th>
+                                <th class="text-start">Trade Description</th>
+                                <th class="text-end">Shares</th>
+                                <th class="text-end">Cost</th>
+                                <th class="text-end">Amount</th>
+                                <th class="text-end">Closing Amount</th>
+                                <th class="text-end">Basis</th>
+                                <th class="text-end">Basis/Share</th>
+                                <th class="text-center"></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -950,6 +1250,19 @@ async function updateCostBasisTable(costBasisData) {
                     return `(${formatted.replace('-', '')})`;
                 }
                 return formatted;
+            };
+            
+            // Format date as DD-MMM-YY
+            const formatDate = (dateString) => {
+                if (!dateString) return '';
+                const date = new Date(dateString);
+                if (isNaN(date.getTime())) return dateString; // Return original if invalid date
+                
+                const day = date.getDate().toString().padStart(2, '0');
+                const month = date.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+                const year = date.getFullYear().toString().slice(-2);
+                
+                return `${day}-${month}-${year}`;
             };
             
             const sharesClass = trade.shares < 0 ? 'text-danger' : '';
@@ -981,14 +1294,17 @@ async function updateCostBasisTable(costBasisData) {
             html += `
                 <tr ${rowStyle}>
                     <td class="text-center">${formatDate(trade.trade_date)}</td>
-                    <td class="text-start">${trade.trade_description}</td>
-                    <td class="text-end ${sharesClass}">${formatShares(trade.shares)}</td>
-                    <td class="text-end ${costClass}">${formatNumber(trade.cost_per_share)}</td>
-                    <td class="text-end ${amountClass}">${formatNumber(trade.amount)}</td>
-                    <td class="text-end ${closingAmountClass}">${formatNumber(trade.closing_amount)}</td>
+                    <td class="text-start">${trade.trade_description || ''}</td>
+                    <td class="text-end ${sharesClass}">${formatShares(trade.shares || 0)}</td>
+                    <td class="text-end ${costClass}">${formatNumber(trade.cost_per_share || 0)}</td>
+                    <td class="text-end ${amountClass}">${formatNumber(trade.amount || 0)}</td>
+                    <td class="text-end ${closingAmountClass}">${formatNumber(trade.closing_amount || 0)}</td>
                     <td class="text-end ${runningBasisClass}">${formatNumber(trade.running_basis)}</td>
                     <td class="text-end ${runningBasisPerShareClass}">${formatNumber(trade.running_basis_per_share)}</td>
                     <td class="text-center">
+                        <button class="btn btn-sm btn-outline-primary me-1" onclick="editCostBasisTrade(${trade.id})" title="Edit Trade">
+                            <i class="fas fa-edit"></i>
+                        </button>
                         <button class="btn btn-sm btn-outline-danger" onclick="deleteCostBasisTrade(${trade.id})" title="Delete Trade">
                             <i class="fas fa-trash"></i>
                         </button>
@@ -1006,6 +1322,124 @@ async function updateCostBasisTable(costBasisData) {
     }
     
     container.innerHTML = html;
+    
+    // Add event listeners for editable cells
+    addEditableCellListeners();
+}
+
+// Add event listeners for editable cells
+function addEditableCellListeners() {
+    const editableCells = document.querySelectorAll('.editable-cell');
+    
+    editableCells.forEach(cell => {
+        cell.addEventListener('blur', async function() {
+            const tradeId = this.dataset.tradeId;
+            const field = this.dataset.field;
+            const value = this.value;
+            
+            try {
+                const response = await fetch(`/api/trades/${tradeId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        [field]: value
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    console.log(`Updated ${field} for trade ${tradeId}`);
+                    // Reload cost basis to update running totals
+                    if (selectedTicker) {
+                        await loadCostBasis(selectedTicker);
+                    }
+                } else {
+                    console.error('Failed to update field:', result.error);
+                    // Revert the value
+                    this.value = this.dataset.originalValue || '';
+                }
+            } catch (error) {
+                console.error('Error updating field:', error);
+                // Revert the value
+                this.value = this.dataset.originalValue || '';
+            }
+        });
+        
+        // Store original value for reverting
+        cell.addEventListener('focus', function() {
+            this.dataset.originalValue = this.value;
+        });
+    });
+}
+
+// Edit cost basis trade - opens BTO form in edit mode
+function editCostBasisTrade(tradeId) {
+    // Find the trade data
+    const trade = trades.find(t => t.id === tradeId);
+    if (!trade) {
+        alert('Trade not found');
+        return;
+    }
+    
+    // Determine which modal to open based on trade type
+    if (trade.trade_type === 'STC') {
+        // Open STC modal for STC trades
+        const modal = new bootstrap.Modal(document.getElementById('stcModal'));
+        modal.show();
+        
+        // Populate STC form with trade data
+        document.getElementById('stc-trade-date').value = trade.trade_date || '';
+        document.getElementById('stc-underlying').value = trade.ticker || '';
+        document.getElementById('stc-sale-price').value = trade.strike_price || 0;
+        document.getElementById('stc-shares').value = Math.abs(trade.shares) || 1; // Use absolute value for display
+        
+        // Store the trade ID for updating
+        document.getElementById('stcModal').dataset.editingTradeId = tradeId;
+        // Flag that this edit came from cost basis table
+        document.getElementById('stcModal').dataset.fromCostBasis = 'true';
+        // Store the ticker for reloading the correct filtered view
+        document.getElementById('stcModal').dataset.editingTicker = trade.ticker || '';
+        
+        // Change modal title to indicate editing
+        document.getElementById('stcModalLabel').innerHTML = '<i class="fas fa-edit me-2"></i>Edit STC Trade';
+        
+        // Change submit button text
+        const submitButton = document.querySelector('#stcModal .btn-primary');
+        submitButton.innerHTML = '<i class="fas fa-save me-2"></i>Update STC Trade';
+        
+        // Set up underlying autocomplete
+        setupSTCUnderlyingAutocomplete();
+    } else {
+        // Open BTO modal for BTO trades (existing logic)
+        const modal = new bootstrap.Modal(document.getElementById('btoModal'));
+        modal.show();
+        
+        // Populate form with trade data
+        document.getElementById('bto-trade-date').value = trade.trade_date || '';
+        document.getElementById('bto-underlying').value = trade.ticker || '';
+        document.getElementById('bto-purchase-price').value = trade.strike_price || 0;
+        document.getElementById('bto-shares').value = trade.quantity || 1;
+        
+        // Store the trade ID for updating
+        document.getElementById('btoModal').dataset.editingTradeId = tradeId;
+        // Flag that this edit came from cost basis table
+        document.getElementById('btoModal').dataset.fromCostBasis = 'true';
+        // Store the ticker for reloading the correct filtered view
+        document.getElementById('btoModal').dataset.editingTicker = trade.ticker || '';
+        
+        // Change modal title to indicate editing
+        document.getElementById('btoModalLabel').innerHTML = '<i class="fas fa-edit me-2"></i>Edit BTO Trade';
+        
+        // Change submit button text
+        const submitButton = document.querySelector('#btoModal .btn-primary');
+        submitButton.innerHTML = '<i class="fas fa-save me-2"></i>Update BTO Trade';
+        
+        // Set up underlying autocomplete
+        setupBTOUnderlyingAutocomplete();
+    }
 }
 
 // Delete cost basis trade function
@@ -1019,18 +1453,18 @@ async function deleteCostBasisTrade(tradeId) {
             const result = await response.json();
             
             if (result.success) {
-                showAlert('Cost basis entry deleted successfully', 'success');
+                console.log('Cost basis entry deleted successfully');
                 // Reload trades and cost basis to refresh the display
                 await loadTrades();
                 if (selectedTicker) {
                     await loadCostBasis(selectedTicker);
                 }
             } else {
-                showAlert('Error deleting cost basis entry: ' + (result.error || 'Unknown error'), 'danger');
+                console.error('Error deleting cost basis entry: ' + (result.error || 'Unknown error'));
             }
         } catch (error) {
             console.error('Error deleting cost basis entry:', error);
-            showAlert('Error deleting cost basis entry. Please try again.', 'danger');
+            console.error('Error deleting cost basis entry. Please try again.');
         }
     }
 }
@@ -1119,28 +1553,6 @@ async function getCompanyName(ticker) {
     return `${ticker} Corp`;
 }
 
-// Show alert message
-function showAlert(message, type = 'info') {
-    const alertContainer = document.getElementById('alert-container');
-    const alertId = 'alert-' + Date.now();
-    
-    const alertHtml = `
-        <div id="${alertId}" class="alert alert-${type} alert-dismissible fade show" role="alert">
-            ${message}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    `;
-    
-    alertContainer.insertAdjacentHTML('beforeend', alertHtml);
-    
-    // Auto-remove after 5 seconds
-    setTimeout(() => {
-        const alertElement = document.getElementById(alertId);
-        if (alertElement) {
-            alertElement.remove();
-        }
-    }, 5000);
-}
 
 // Load summary data
 async function loadSummary() {
@@ -1153,6 +1565,9 @@ async function loadSummary() {
             document.getElementById('total-trades').textContent = summary.total_trades;
             document.getElementById('open-trades').textContent = summary.open_trades;
             document.getElementById('closed-trades').textContent = summary.closed_trades;
+            document.getElementById('wins').textContent = summary.wins;
+            document.getElementById('losses').textContent = summary.losses;
+            document.getElementById('winning-percentage').textContent = `${summary.winning_percentage}%`;
             document.getElementById('total-net-credit').textContent = `$${summary.total_net_credit.toFixed(2)}`;
             document.getElementById('days-remaining').textContent = summary.days_remaining;
             document.getElementById('days-done').textContent = summary.days_done;
@@ -1184,7 +1599,10 @@ function saveCommission() {
     // Update trades table to reflect new commission
     updateTradesTable();
     
-    showAlert('Commission settings saved', 'success');
+    // Update cost basis table to reflect new commission
+    loadCostBasis(selectedTicker);
+    
+    console.log('Commission settings saved');
 }
 
 function loadCommission() {
@@ -1251,7 +1669,7 @@ function applyFilter() {
     loadSummary();
     updateChartForFilter();
     
-    showAlert('Filter applied', 'success');
+    console.log('Filter applied');
 }
 
 function clearFilter() {
@@ -1269,7 +1687,7 @@ function clearFilter() {
     loadSummary();
     updateChartForFilter();
     
-    showAlert('Filter cleared', 'info');
+    console.log('Filter cleared');
 }
 
 function updateChartForFilter() {
@@ -1282,19 +1700,949 @@ function updateChartForFilter() {
 }
 
 function updateChart() {
+    // Ensure chart is initialized before updating
+    if (!premiumChart) {
+        console.log('Chart not initialized yet, skipping update');
+        return;
+    }
+    
+    // Build URL with filter parameters
+    let url = '/api/chart-data';
+    const params = new URLSearchParams();
+    
+    if (currentFilter.startDate) {
+        params.append('start_date', currentFilter.startDate);
+    }
+    if (currentFilter.endDate) {
+        params.append('end_date', currentFilter.endDate);
+    }
+    
+    if (params.toString()) {
+        url += '?' + params.toString();
+    }
+    
+    console.log('Updating chart with URL:', url);
+    
     // Fetch chart data from API
-    fetch('/api/chart-data')
+    fetch(url)
         .then(response => response.json())
         .then(data => {
+            console.log('Chart data received:', data);
             if (data.dates && data.premiums) {
                 if (premiumChart) {
+                    console.log('Updating chart with data:', data.dates, data.premiums);
                     premiumChart.data.labels = data.dates;
                     premiumChart.data.datasets[0].data = data.premiums;
                     premiumChart.update();
+                    console.log('Chart updated successfully');
+                } else {
+                    console.error('premiumChart is null');
                 }
+            } else {
+                console.error('Invalid chart data format:', data);
             }
         })
         .catch(error => {
             console.error('Error loading chart data:', error);
         });
+}
+
+// Open ROCT CALL modal
+function openROCTCallModal() {
+    const modal = new bootstrap.Modal(document.getElementById('roctCallModal'));
+    modal.show();
+    
+    // Set default values
+    const today = new Date();
+    const eightDaysFromNow = new Date(today);
+    eightDaysFromNow.setDate(today.getDate() + 8);
+    
+    // Set trade date to today
+    document.getElementById('roct-call-trade-date').value = today.toISOString().split('T')[0];
+    
+    // Set expiration date to 8 days from today
+    document.getElementById('roct-call-expiration-date').value = eightDaysFromNow.toISOString().split('T')[0];
+    
+    // Calculate DTE
+    updateROCTCallDTE();
+    
+    // Set up autocomplete for underlying field
+    setupROCTCallUnderlyingAutocomplete();
+    
+    // Add event listeners for date changes to update DTE
+    document.getElementById('roct-call-trade-date').addEventListener('change', updateROCTCallDTE);
+    document.getElementById('roct-call-expiration-date').addEventListener('change', updateROCTCallDTE);
+}
+
+// Update DTE calculation for ROCT CALL
+function updateROCTCallDTE() {
+    const tradeDate = document.getElementById('roct-call-trade-date').value;
+    const expirationDate = document.getElementById('roct-call-expiration-date').value;
+    
+    if (tradeDate && expirationDate) {
+        const trade = new Date(tradeDate);
+        const expiration = new Date(expirationDate);
+        const diffTime = expiration - trade;
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        document.getElementById('roct-call-dte').value = diffDays;
+    }
+}
+
+// Setup autocomplete for ROCT CALL underlying field
+function setupROCTCallUnderlyingAutocomplete() {
+    const underlyingInput = document.getElementById('roct-call-underlying');
+    const suggestionsDiv = document.getElementById('roct-call-underlying-suggestions');
+    
+    if (!underlyingInput || !suggestionsDiv) return;
+    
+    let debounceTimer;
+    
+    underlyingInput.addEventListener('input', function() {
+        const value = this.value.trim();
+        
+        clearTimeout(debounceTimer);
+        
+        if (value.length === 0) {
+            suggestionsDiv.style.display = 'none';
+        } else {
+            debounceTimer = setTimeout(async () => {
+                try {
+                    const response = await fetch(`/api/company-search?query=${encodeURIComponent(value)}`);
+                    const data = await response.json();
+                    
+                    if (data.companies && data.companies.length > 0) {
+                        suggestionsDiv.innerHTML = data.companies.slice(0, 10).map(company => 
+                            `<div class="dropdown-item" onclick="selectROCTCallUnderlying('${company.symbol}', '${company.name}')" style="cursor: pointer;">
+                                <strong>${company.symbol}</strong> - ${company.name}
+                            </div>`
+                        ).join('');
+                        suggestionsDiv.style.display = 'block';
+                    } else {
+                        suggestionsDiv.style.display = 'none';
+                    }
+                } catch (error) {
+                    console.error('Error fetching company suggestions:', error);
+                    suggestionsDiv.style.display = 'none';
+                }
+            }, 300);
+        }
+    });
+    
+    // Handle keyboard navigation
+    underlyingInput.addEventListener('keydown', function(e) {
+        const suggestions = suggestionsDiv.querySelectorAll('.dropdown-item');
+        let currentIndex = -1;
+        
+        suggestions.forEach((item, index) => {
+            if (item.classList.contains('active')) {
+                currentIndex = index;
+            }
+        });
+        
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            suggestions.forEach(item => item.classList.remove('active'));
+            if (currentIndex < suggestions.length - 1) {
+                suggestions[currentIndex + 1].classList.add('active');
+            } else {
+                suggestions[0].classList.add('active');
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            suggestions.forEach(item => item.classList.remove('active'));
+            if (currentIndex > 0) {
+                suggestions[currentIndex - 1].classList.add('active');
+            } else {
+                suggestions[suggestions.length - 1].classList.add('active');
+            }
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            const activeItem = suggestionsDiv.querySelector('.dropdown-item.active');
+            if (activeItem) {
+                activeItem.click();
+            }
+        } else if (e.key === 'Escape') {
+            suggestionsDiv.style.display = 'none';
+        }
+    });
+    
+    // Hide suggestions when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!underlyingInput.contains(e.target) && !suggestionsDiv.contains(e.target)) {
+            suggestionsDiv.style.display = 'none';
+        }
+    });
+}
+
+// Select ROCT CALL underlying from autocomplete
+function selectROCTCallUnderlying(symbol, name) {
+    const underlyingInput = document.getElementById('roct-call-underlying');
+    const suggestionsDiv = document.getElementById('roct-call-underlying-suggestions');
+    
+    underlyingInput.value = `${symbol} - ${name}`;
+    underlyingInput.dataset.symbol = symbol;
+    suggestionsDiv.style.display = 'none';
+    
+    // Load cost basis for the selected symbol
+    loadCostBasisForSymbol(symbol);
+}
+
+// Load cost basis for selected symbol
+async function loadCostBasisForSymbol(symbol) {
+    try {
+        const commission = localStorage.getItem('commission') || '0.0';
+        const response = await fetch(`/api/cost-basis?ticker=${symbol}&commission=${commission}`);
+        const data = await response.json();
+        
+        if (data && data.length > 0) {
+            // Get the cost basis for this symbol
+            const symbolData = data.find(item => item.ticker === symbol);
+            if (symbolData) {
+                document.getElementById('roct-call-cost-basis').value = symbolData.total_cost_basis || 0;
+            } else {
+                document.getElementById('roct-call-cost-basis').value = 0;
+            }
+        } else {
+            document.getElementById('roct-call-cost-basis').value = 0;
+        }
+    } catch (error) {
+        console.error('Error loading cost basis:', error);
+        document.getElementById('roct-call-cost-basis').value = 0;
+    }
+}
+
+// Submit ROCT CALL form
+async function submitROCTCallForm(action = 'addAndClose') {
+    const form = document.getElementById('roctCallForm');
+    const underlyingInput = document.getElementById('roct-call-underlying');
+    
+    // Get the symbol from the underlying field
+    const underlyingValue = underlyingInput.value;
+    const symbol = underlyingInput.dataset.symbol || underlyingValue.split(' - ')[0];
+    
+    const formData = {
+        ticker: symbol,
+        tradeDate: document.getElementById('roct-call-trade-date').value,
+        expirationDate: document.getElementById('roct-call-expiration-date').value,
+        strikePrice: parseFloat(document.getElementById('roct-call-strike-price').value),
+        premium: parseFloat(document.getElementById('roct-call-credit-debit').value),
+        quantity: 1, // Default to 1 contract for ROCT CALL
+        currentPrice: parseFloat(document.getElementById('roct-call-price').value),
+        tradeType: 'ROCT CALL'
+    };
+    
+    try {
+        const response = await fetch('/api/trades', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(formData)
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            // Handle different actions
+            if (action === 'addAndClose') {
+                // Close modal
+                const modal = document.getElementById('roctCallModal');
+                const modalInstance = bootstrap.Modal.getInstance(modal);
+                modalInstance.hide();
+            } else if (action === 'addAnother') {
+                // Reset form for new entry
+                resetROCTCallForm();
+            }
+            
+            // Reload data
+            await loadTrades();
+            loadSummary();
+            await loadCostBasis();
+        } else {
+            alert('Failed to add ROCT CALL trade: ' + result.error);
+        }
+    } catch (error) {
+        console.error('Error adding ROCT CALL trade:', error);
+        alert('Error adding ROCT CALL trade: ' + error.message);
+    }
+}
+
+// Reset ROCT CALL form for new entry
+function resetROCTCallForm() {
+    const today = new Date();
+    const eightDaysFromNow = new Date(today);
+    eightDaysFromNow.setDate(today.getDate() + 8);
+    
+    // Reset form fields
+    document.getElementById('roct-call-trade-date').value = today.toISOString().split('T')[0];
+    document.getElementById('roct-call-underlying').value = '';
+    document.getElementById('roct-call-underlying').dataset.symbol = '';
+    document.getElementById('roct-call-price').value = '';
+    document.getElementById('roct-call-expiration-date').value = eightDaysFromNow.toISOString().split('T')[0];
+    document.getElementById('roct-call-strike-price').value = '';
+    document.getElementById('roct-call-credit-debit').value = '';
+    document.getElementById('roct-call-cost-basis').value = '';
+    
+    // Hide suggestions
+    document.getElementById('roct-call-underlying-suggestions').style.display = 'none';
+    
+    // Recalculate DTE
+    updateROCTCallDTE();
+    
+    // Focus on first field
+    document.getElementById('roct-call-trade-date').focus();
+}
+
+// Open ROCT PUT modal
+function openROCTPutModal() {
+    const modal = new bootstrap.Modal(document.getElementById('roctPutModal'));
+    modal.show();
+    
+    // Set default values
+    const today = new Date();
+    const eightDaysFromNow = new Date(today);
+    eightDaysFromNow.setDate(today.getDate() + 8);
+    
+    // Set trade date to today
+    document.getElementById('roct-put-trade-date').value = today.toISOString().split('T')[0];
+    
+    // Set expiration date to 8 days from today
+    document.getElementById('roct-put-expiration-date').value = eightDaysFromNow.toISOString().split('T')[0];
+    
+    // Calculate DTE
+    updateROCTPutDTE();
+    
+    // Set up autocomplete for underlying field
+    setupROCTPutUnderlyingAutocomplete();
+    
+    // Add event listeners for date changes to update DTE
+    document.getElementById('roct-put-trade-date').addEventListener('change', updateROCTPutDTE);
+    document.getElementById('roct-put-expiration-date').addEventListener('change', updateROCTPutDTE);
+}
+
+// Update DTE calculation for ROCT PUT
+function updateROCTPutDTE() {
+    const tradeDate = document.getElementById('roct-put-trade-date').value;
+    const expirationDate = document.getElementById('roct-put-expiration-date').value;
+    
+    if (tradeDate && expirationDate) {
+        const trade = new Date(tradeDate);
+        const expiration = new Date(expirationDate);
+        const diffTime = expiration - trade;
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        document.getElementById('roct-put-dte').value = diffDays;
+    }
+}
+
+// Setup autocomplete for ROCT PUT underlying field
+function setupROCTPutUnderlyingAutocomplete() {
+    const underlyingInput = document.getElementById('roct-put-underlying');
+    const suggestionsDiv = document.getElementById('roct-put-underlying-suggestions');
+    
+    if (!underlyingInput || !suggestionsDiv) return;
+    
+    let debounceTimer;
+    
+    underlyingInput.addEventListener('input', function() {
+        const value = this.value.trim();
+        
+        clearTimeout(debounceTimer);
+        
+        if (value.length === 0) {
+            suggestionsDiv.style.display = 'none';
+        } else {
+            debounceTimer = setTimeout(async () => {
+                try {
+                    const response = await fetch(`/api/company-search?query=${encodeURIComponent(value)}`);
+                    const data = await response.json();
+                    
+                    if (data.companies && data.companies.length > 0) {
+                        suggestionsDiv.innerHTML = data.companies.slice(0, 10).map(company => 
+                            `<div class="dropdown-item" onclick="selectROCTPutUnderlying('${company.symbol}', '${company.name}')" style="cursor: pointer;">
+                                <strong>${company.symbol}</strong> - ${company.name}
+                            </div>`
+                        ).join('');
+                        suggestionsDiv.style.display = 'block';
+                    } else {
+                        suggestionsDiv.style.display = 'none';
+                    }
+                } catch (error) {
+                    console.error('Error fetching company suggestions:', error);
+                    suggestionsDiv.style.display = 'none';
+                }
+            }, 300);
+        }
+    });
+    
+    // Handle keyboard navigation
+    underlyingInput.addEventListener('keydown', function(e) {
+        const suggestions = suggestionsDiv.querySelectorAll('.dropdown-item');
+        let currentIndex = -1;
+        
+        suggestions.forEach((item, index) => {
+            if (item.classList.contains('active')) {
+                currentIndex = index;
+            }
+        });
+        
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            suggestions.forEach(item => item.classList.remove('active'));
+            if (currentIndex < suggestions.length - 1) {
+                suggestions[currentIndex + 1].classList.add('active');
+            } else {
+                suggestions[0].classList.add('active');
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            suggestions.forEach(item => item.classList.remove('active'));
+            if (currentIndex > 0) {
+                suggestions[currentIndex - 1].classList.add('active');
+            } else {
+                suggestions[suggestions.length - 1].classList.add('active');
+            }
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            const activeItem = suggestionsDiv.querySelector('.dropdown-item.active');
+            if (activeItem) {
+                activeItem.click();
+            }
+        } else if (e.key === 'Escape') {
+            suggestionsDiv.style.display = 'none';
+        }
+    });
+    
+    // Hide suggestions when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!underlyingInput.contains(e.target) && !suggestionsDiv.contains(e.target)) {
+            suggestionsDiv.style.display = 'none';
+        }
+    });
+}
+
+// Select ROCT PUT underlying from autocomplete
+function selectROCTPutUnderlying(symbol, name) {
+    const underlyingInput = document.getElementById('roct-put-underlying');
+    const suggestionsDiv = document.getElementById('roct-put-underlying-suggestions');
+    
+    underlyingInput.value = `${symbol} - ${name}`;
+    underlyingInput.dataset.symbol = symbol;
+    suggestionsDiv.style.display = 'none';
+}
+
+// Submit ROCT PUT form
+async function submitROCTPutForm(action = 'addAndClose') {
+    const form = document.getElementById('roctPutForm');
+    const underlyingInput = document.getElementById('roct-put-underlying');
+    
+    // Get the symbol from the underlying field
+    const underlyingValue = underlyingInput.value;
+    const symbol = underlyingInput.dataset.symbol || underlyingValue.split(' - ')[0];
+    
+    const formData = {
+        ticker: symbol,
+        tradeDate: document.getElementById('roct-put-trade-date').value,
+        expirationDate: document.getElementById('roct-put-expiration-date').value,
+        strikePrice: parseFloat(document.getElementById('roct-put-strike-price').value),
+        premium: parseFloat(document.getElementById('roct-put-credit-debit').value),
+        quantity: 1, // Default to 1 contract for ROCT PUT
+        currentPrice: parseFloat(document.getElementById('roct-put-price').value),
+        tradeType: 'ROCT PUT'
+    };
+    
+    try {
+        const response = await fetch('/api/trades', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(formData)
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            // Handle different actions
+            if (action === 'addAndClose') {
+                // Close modal
+                const modal = document.getElementById('roctPutModal');
+                const modalInstance = bootstrap.Modal.getInstance(modal);
+                modalInstance.hide();
+            } else if (action === 'addAnother') {
+                // Reset form for new entry
+                resetROCTPutForm();
+            }
+            
+            // Reload data
+            await loadTrades();
+            loadSummary();
+            await loadCostBasis();
+        } else {
+            alert('Failed to add ROCT PUT trade: ' + result.error);
+        }
+    } catch (error) {
+        console.error('Error adding ROCT PUT trade:', error);
+        alert('Error adding ROCT PUT trade: ' + error.message);
+    }
+}
+
+// Reset ROCT PUT form for new entry
+function resetROCTPutForm() {
+    const today = new Date();
+    const eightDaysFromNow = new Date(today);
+    eightDaysFromNow.setDate(today.getDate() + 8);
+    
+    // Reset form fields
+    document.getElementById('roct-put-trade-date').value = today.toISOString().split('T')[0];
+    document.getElementById('roct-put-underlying').value = '';
+    document.getElementById('roct-put-underlying').dataset.symbol = '';
+    document.getElementById('roct-put-price').value = '';
+    document.getElementById('roct-put-expiration-date').value = eightDaysFromNow.toISOString().split('T')[0];
+    document.getElementById('roct-put-strike-price').value = '';
+    document.getElementById('roct-put-credit-debit').value = '';
+    
+    // Hide suggestions
+    document.getElementById('roct-put-underlying-suggestions').style.display = 'none';
+    
+    // Recalculate DTE
+    updateROCTPutDTE();
+    
+    // Focus on first field
+    document.getElementById('roct-put-trade-date').focus();
+}
+
+// Open BTO modal and set default values
+function openBTOModal() {
+    // Set today's date as default
+    const today = new Date();
+    const todayString = today.toISOString().split('T')[0];
+    
+    document.getElementById('bto-trade-date').value = todayString;
+    document.getElementById('bto-purchase-price').value = '';
+    document.getElementById('bto-shares').value = '1';
+    document.getElementById('bto-underlying').value = '';
+    
+    // Show the modal
+    const modal = new bootstrap.Modal(document.getElementById('btoModal'));
+    modal.show();
+    
+    // Set up underlying autocomplete
+    setupBTOUnderlyingAutocomplete();
+}
+
+// Set up autocomplete for BTO underlying field
+function setupBTOUnderlyingAutocomplete() {
+    const underlyingInput = document.getElementById('bto-underlying');
+    const suggestionsDiv = document.getElementById('bto-underlying-suggestions');
+    
+    if (!underlyingInput || !suggestionsDiv) return;
+    
+    // Remove any existing event listeners to prevent duplicates
+    underlyingInput.removeEventListener('input', handleUnderlyingInput);
+    underlyingInput.removeEventListener('keydown', handleUnderlyingKeydown);
+    
+    // Add new event listeners
+    underlyingInput.addEventListener('input', handleUnderlyingInput);
+    underlyingInput.addEventListener('keydown', handleUnderlyingKeydown);
+    
+    // Hide suggestions when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!underlyingInput.contains(e.target) && !suggestionsDiv.contains(e.target)) {
+            suggestionsDiv.style.display = 'none';
+        }
+    });
+    
+    async function handleUnderlyingInput() {
+        const query = this.value.toLowerCase().trim();
+        
+        if (query.length < 1) {
+            suggestionsDiv.style.display = 'none';
+            return;
+        }
+        
+        try {
+            // Call the company search API
+            const response = await fetch(`/api/company-search?query=${encodeURIComponent(query)}`);
+            const data = await response.json();
+            
+            if (data.companies && data.companies.length > 0) {
+                suggestionsDiv.innerHTML = data.companies.slice(0, 10).map(company => 
+                    `<div class="dropdown-item" onclick="selectBTOUnderlying('${company.symbol}', '${company.name}')" style="cursor: pointer; padding: 8px 12px;">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>${company.symbol}</strong>
+                                <small class="text-muted d-block">${company.name}</small>
+                            </div>
+                        </div>
+                    </div>`
+                ).join('');
+                suggestionsDiv.style.display = 'block';
+                suggestionsDiv.style.position = 'absolute';
+                suggestionsDiv.style.top = '100%';
+                suggestionsDiv.style.left = '0';
+                suggestionsDiv.style.zIndex = '1000';
+                suggestionsDiv.style.maxHeight = '200px';
+                suggestionsDiv.style.overflowY = 'auto';
+            } else {
+                suggestionsDiv.style.display = 'none';
+            }
+        } catch (error) {
+            console.error('Error searching companies:', error);
+            suggestionsDiv.style.display = 'none';
+        }
+    }
+    
+    function handleUnderlyingKeydown(e) {
+        const items = suggestionsDiv.querySelectorAll('.dropdown-item');
+        const currentIndex = Array.from(items).findIndex(item => item.classList.contains('active'));
+        
+        switch(e.key) {
+            case 'ArrowDown':
+                e.preventDefault();
+                if (currentIndex < items.length - 1) {
+                    items[currentIndex + 1]?.classList.add('active');
+                    items[currentIndex]?.classList.remove('active');
+                }
+                break;
+            case 'ArrowUp':
+                e.preventDefault();
+                if (currentIndex > 0) {
+                    items[currentIndex - 1]?.classList.add('active');
+                    items[currentIndex]?.classList.remove('active');
+                }
+                break;
+            case 'Enter':
+                e.preventDefault();
+                const activeItem = suggestionsDiv.querySelector('.dropdown-item.active');
+                if (activeItem) {
+                    activeItem.click();
+                }
+                break;
+            case 'Escape':
+                suggestionsDiv.style.display = 'none';
+                break;
+        }
+    }
+}
+
+// Select underlying from autocomplete
+function selectBTOUnderlying(symbol, name) {
+    const underlyingInput = document.getElementById('bto-underlying');
+    const suggestionsDiv = document.getElementById('bto-underlying-suggestions');
+    
+    underlyingInput.value = `${symbol} - ${name}`;
+    underlyingInput.dataset.symbol = symbol;
+    suggestionsDiv.style.display = 'none';
+}
+
+// Submit BTO form
+async function submitBTOForm(action = 'addAndClose') {
+    const form = document.getElementById('btoForm');
+    const underlyingInput = document.getElementById('bto-underlying');
+    const modal = document.getElementById('btoModal');
+    const editingTradeId = modal.dataset.editingTradeId;
+    
+    // Get the symbol from the underlying field
+    const underlyingValue = underlyingInput.value;
+    const symbol = underlyingInput.dataset.symbol || underlyingValue.split(' - ')[0];
+    
+    const formData = {
+        ticker: symbol,
+        tradeDate: document.getElementById('bto-trade-date').value,
+        expirationDate: document.getElementById('bto-trade-date').value, // Use trade date as expiration for BTO
+        strikePrice: parseFloat(document.getElementById('bto-purchase-price').value),
+        premium: 0, // BTO doesn't have premium
+        quantity: parseInt(document.getElementById('bto-shares').value),
+        currentPrice: 0, // BTO doesn't need current price
+        tradeType: 'BTO'
+    };
+    
+    try {
+        let response;
+        let successMessage;
+        
+        if (editingTradeId) {
+            // Update existing trade
+            response = await fetch(`/api/trades/${editingTradeId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(formData)
+            });
+            successMessage = 'BTO trade updated successfully!';
+        } else {
+            // Create new trade
+            response = await fetch('/api/trades', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(formData)
+            });
+            successMessage = 'BTO trade added successfully!';
+        }
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            // Check if this was an edit from cost basis table before resetting modal state
+            const wasFromCostBasis = modal.dataset.fromCostBasis === 'true';
+            
+            // Handle different actions
+            if (action === 'addAndClose' || wasFromCostBasis) {
+                // Close modal
+                const modalInstance = bootstrap.Modal.getInstance(modal);
+                modalInstance.hide();
+            } else if (action === 'addAnother') {
+                // Reset form for new entry
+                document.getElementById('btoForm').reset();
+                // Set today's date as default
+                const today = new Date().toISOString().split('T')[0];
+                document.getElementById('bto-trade-date').value = today;
+            }
+            
+            // Reset modal state
+            modal.dataset.editingTradeId = '';
+            modal.dataset.fromCostBasis = '';
+            modal.dataset.editingTicker = '';
+            document.getElementById('btoModalLabel').innerHTML = '<i class="fas fa-plus-circle me-2"></i>Add BTO Trade';
+            
+            // Reload data
+            await loadTrades();
+            loadSummary();
+            
+            if (wasFromCostBasis) {
+                // Keep the cost basis table open with current filter
+                const editingTicker = modal.dataset.editingTicker || selectedTicker;
+                await loadCostBasis(editingTicker);
+            } else {
+                // Normal behavior for new trades
+                await loadCostBasis();
+            }
+        } else {
+            alert(`Failed to ${editingTradeId ? 'update' : 'add'} BTO trade: ` + result.error);
+        }
+    } catch (error) {
+        console.error(`Error ${editingTradeId ? 'updating' : 'adding'} BTO trade:`, error);
+        alert(`Error ${editingTradeId ? 'updating' : 'adding'} BTO trade: ` + error.message);
+    }
+}
+
+// STC Modal Functions
+function openSTCModal() {
+    // Set today's date as default
+    const today = new Date();
+    const todayString = today.toISOString().split('T')[0];
+    
+    document.getElementById('stc-trade-date').value = todayString;
+    document.getElementById('stc-sale-price').value = '';
+    document.getElementById('stc-shares').value = '1';
+    document.getElementById('stc-underlying').value = '';
+    
+    // Show the modal
+    const modal = new bootstrap.Modal(document.getElementById('stcModal'));
+    modal.show();
+    
+    // Set up underlying autocomplete
+    setupSTCUnderlyingAutocomplete();
+}
+
+// Set up autocomplete for STC underlying field
+function setupSTCUnderlyingAutocomplete() {
+    const underlyingInput = document.getElementById('stc-underlying');
+    const suggestionsDiv = document.getElementById('stc-underlying-suggestions');
+    
+    if (!underlyingInput || !suggestionsDiv) return;
+    
+    // Remove any existing event listeners to prevent duplicates
+    underlyingInput.removeEventListener('input', handleSTCUnderlyingInput);
+    underlyingInput.removeEventListener('keydown', handleSTCUnderlyingKeydown);
+    
+    // Add new event listeners
+    underlyingInput.addEventListener('input', handleSTCUnderlyingInput);
+    underlyingInput.addEventListener('keydown', handleSTCUnderlyingKeydown);
+    
+    // Hide suggestions when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!underlyingInput.contains(e.target) && !suggestionsDiv.contains(e.target)) {
+            suggestionsDiv.style.display = 'none';
+        }
+    });
+    
+    async function handleSTCUnderlyingInput() {
+        const query = this.value.toLowerCase().trim();
+        
+        if (query.length < 1) {
+            suggestionsDiv.style.display = 'none';
+            return;
+        }
+        
+        try {
+            // Call the company search API
+            const response = await fetch(`/api/company-search?query=${encodeURIComponent(query)}`);
+            const data = await response.json();
+            
+            if (data.companies && data.companies.length > 0) {
+                suggestionsDiv.innerHTML = data.companies.slice(0, 10).map(company => 
+                    `<div class="dropdown-item" onclick="selectSTCUnderlying('${company.symbol}', '${company.name}')" style="cursor: pointer; padding: 8px 12px;">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>${company.symbol}</strong>
+                                <small class="text-muted d-block">${company.name}</small>
+                            </div>
+                        </div>
+                    </div>`
+                ).join('');
+                suggestionsDiv.style.display = 'block';
+                suggestionsDiv.style.position = 'absolute';
+                suggestionsDiv.style.top = '100%';
+                suggestionsDiv.style.left = '0';
+                suggestionsDiv.style.zIndex = '1000';
+                suggestionsDiv.style.maxHeight = '200px';
+                suggestionsDiv.style.overflowY = 'auto';
+            } else {
+                suggestionsDiv.style.display = 'none';
+            }
+        } catch (error) {
+            console.error('Error searching companies:', error);
+            suggestionsDiv.style.display = 'none';
+        }
+    }
+    
+    function handleSTCUnderlyingKeydown(e) {
+        const items = suggestionsDiv.querySelectorAll('.dropdown-item');
+        const currentIndex = Array.from(items).findIndex(item => item.classList.contains('active'));
+        
+        switch(e.key) {
+            case 'ArrowDown':
+                e.preventDefault();
+                if (currentIndex < items.length - 1) {
+                    items[currentIndex + 1]?.classList.add('active');
+                    items[currentIndex]?.classList.remove('active');
+                }
+                break;
+            case 'ArrowUp':
+                e.preventDefault();
+                if (currentIndex > 0) {
+                    items[currentIndex - 1]?.classList.add('active');
+                    items[currentIndex]?.classList.remove('active');
+                }
+                break;
+            case 'Enter':
+                e.preventDefault();
+                const activeItem = suggestionsDiv.querySelector('.dropdown-item.active');
+                if (activeItem) {
+                    activeItem.click();
+                }
+                break;
+            case 'Escape':
+                suggestionsDiv.style.display = 'none';
+                break;
+        }
+    }
+}
+
+// Select underlying from autocomplete
+function selectSTCUnderlying(symbol, name) {
+    const underlyingInput = document.getElementById('stc-underlying');
+    const suggestionsDiv = document.getElementById('stc-underlying-suggestions');
+    
+    underlyingInput.value = `${symbol} - ${name}`;
+    underlyingInput.dataset.symbol = symbol;
+    suggestionsDiv.style.display = 'none';
+}
+
+// Submit STC form
+async function submitSTCForm(action = 'addAndClose') {
+    const form = document.getElementById('stcForm');
+    const underlyingInput = document.getElementById('stc-underlying');
+    const modal = document.getElementById('stcModal');
+    const editingTradeId = modal.dataset.editingTradeId;
+    
+    // Get the symbol from the underlying field
+    const underlyingValue = underlyingInput.value;
+    const symbol = underlyingInput.dataset.symbol || underlyingValue.split(' - ')[0];
+    
+    const formData = {
+        ticker: symbol,
+        tradeDate: document.getElementById('stc-trade-date').value,
+        expirationDate: document.getElementById('stc-trade-date').value, // Use trade date as expiration for STC
+        strikePrice: parseFloat(document.getElementById('stc-sale-price').value),
+        premium: 0, // STC doesn't have premium
+        quantity: parseInt(document.getElementById('stc-shares').value),
+        currentPrice: 0, // STC doesn't need current price
+        tradeType: 'STC'
+    };
+    
+    try {
+        let response;
+        let successMessage;
+        
+        if (editingTradeId) {
+            // Update existing trade
+            response = await fetch(`/api/trades/${editingTradeId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(formData)
+            });
+            successMessage = 'STC trade updated successfully!';
+        } else {
+            // Create new trade
+            response = await fetch('/api/trades', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(formData)
+            });
+            successMessage = 'STC trade added successfully!';
+        }
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            // Check if this was an edit from cost basis table before resetting modal state
+            const wasFromCostBasis = modal.dataset.fromCostBasis === 'true';
+            
+            // Handle different actions
+            if (action === 'addAndClose' || wasFromCostBasis) {
+                // Close modal
+                const modalInstance = bootstrap.Modal.getInstance(modal);
+                modalInstance.hide();
+            } else if (action === 'addAnother') {
+                // Reset form for new entry
+                document.getElementById('stcForm').reset();
+                // Set today's date as default
+                const today = new Date().toISOString().split('T')[0];
+                document.getElementById('stc-trade-date').value = today;
+            }
+            
+            // Reset modal state
+            modal.dataset.editingTradeId = '';
+            modal.dataset.fromCostBasis = '';
+            modal.dataset.editingTicker = '';
+            document.getElementById('stcModalLabel').innerHTML = '<i class="fas fa-plus-circle me-2"></i>Add STC Trade';
+            
+            // Reload data
+            await loadTrades();
+            loadSummary();
+            
+            if (wasFromCostBasis) {
+                // Keep the cost basis table open with current filter
+                const editingTicker = modal.dataset.editingTicker || selectedTicker;
+                await loadCostBasis(editingTicker);
+            } else {
+                // Normal behavior for new trades
+                await loadCostBasis();
+            }
+        } else {
+            alert(`Failed to ${editingTradeId ? 'update' : 'add'} STC trade: ` + result.error);
+        }
+    } catch (error) {
+        console.error(`Error ${editingTradeId ? 'updating' : 'adding'} STC trade:`, error);
+        alert(`Error ${editingTradeId ? 'updating' : 'adding'} STC trade: ` + error.message);
+    }
 }

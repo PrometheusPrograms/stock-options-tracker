@@ -5,6 +5,36 @@ body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
+/* Dashboard layout containers */
+.dashboard-filter-container {
+    width: 300px;
+    float: left;
+    margin-right: 15px;
+}
+
+.dashboard-content-container {
+    width: calc(100% - 315px);
+    float: left;
+}
+
+/* Trade form layout containers */
+.trade-form-container {
+    width: 300px;
+    float: left;
+    margin-right: 15px;
+}
+
+.trades-content-container {
+    width: calc(100% - 315px);
+    float: left;
+}
+
+/* Cost basis layout container - match trades table width */
+.cost-basis-container {
+    width: calc(100% - 315px);
+    margin-left: 315px;
+}
+
 .card {
     box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
     border: 1px solid rgba(0, 0, 0, 0.125);
@@ -56,6 +86,207 @@ body {
 /* Shadow enhancements */
 .shadow-sm {
     box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075) !important;
+}
+
+/* Header Banner */
+.header-banner {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 1.5rem 0;
+    margin-bottom: 2rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.header-banner h1 {
+    color: white;
+    font-weight: 600;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.header-banner .btn {
+    border-color: rgba(255, 255, 255, 0.3);
+    color: white;
+}
+
+.header-banner .btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.5);
+    color: white;
+}
+
+/* Complimentary Color Scheme */
+:root {
+    --primary-color: #667eea;
+    --secondary-color: #764ba2;
+    --accent-color: #f093fb;
+    --success-color: #4facfe;
+    --info-color: #00d4aa;
+    --warning-color: #feca57;
+    --danger-color: #ff6b6b;
+    --light-color: #f8f9fa;
+    --dark-color: #2c3e50;
+}
+
+/* Update card colors */
+.card.bg-primary {
+    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)) !important;
+}
+
+.card.bg-success {
+    background: linear-gradient(135deg, var(--success-color), var(--info-color)) !important;
+}
+
+.card.bg-info {
+    background: linear-gradient(135deg, var(--info-color), var(--accent-color)) !important;
+}
+
+/* Update button colors */
+.btn-primary {
+    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+    border: none;
+}
+
+.btn-primary:hover {
+    background: linear-gradient(135deg, var(--secondary-color), var(--primary-color));
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.btn-outline-primary {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.btn-outline-primary:hover {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+/* Update card headers */
+.card-header.bg-primary {
+    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)) !important;
+}
+
+.card-header.bg-success {
+    background: linear-gradient(135deg, var(--success-color), var(--info-color)) !important;
+}
+
+.card-header.bg-light {
+    background: linear-gradient(135deg, #f8f9fa, #e9ecef) !important;
+}
+
+/* BTO Modal Dropdown Styling */
+#roct-call-underlying-suggestions {
+    border: 1px solid #dee2e6;
+    border-radius: 0.375rem;
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+    background-color: white;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+#roct-call-underlying-suggestions .dropdown-item {
+    border-bottom: 1px solid #f8f9fa;
+    transition: background-color 0.15s ease-in-out;
+}
+
+#roct-call-underlying-suggestions .dropdown-item:hover {
+    background-color: #f8f9fa;
+}
+
+#roct-put-underlying-suggestions {
+    border: 1px solid #dee2e6;
+    border-radius: 0.375rem;
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+    background-color: white;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+#roct-put-underlying-suggestions .dropdown-item {
+    border-bottom: 1px solid #f8f9fa;
+    transition: background-color 0.15s ease-in-out;
+}
+
+#roct-put-underlying-suggestions .dropdown-item:hover {
+    background-color: #f8f9fa;
+}
+
+/* STC Modal Dropdown Styling */
+#stc-underlying-suggestions {
+    border: 1px solid #dee2e6;
+    border-radius: 0.375rem;
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+    background-color: white;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+#stc-underlying-suggestions .dropdown-item {
+    border-bottom: 1px solid #f8f9fa;
+    transition: background-color 0.15s ease-in-out;
+}
+
+#stc-underlying-suggestions .dropdown-item:hover {
+    background-color: #f8f9fa;
+}
+
+#bto-underlying-suggestions .dropdown-item {
+    border-bottom: 1px solid #f8f9fa;
+    transition: background-color 0.15s ease-in-out;
+}
+
+#bto-underlying-suggestions .dropdown-item:hover,
+#bto-underlying-suggestions .dropdown-item.active {
+    background-color: #e9ecef;
+}
+
+#bto-underlying-suggestions .dropdown-item:last-child {
+    border-bottom: none;
+}
+
+.editable-cell:focus {
+    border-color: var(--primary-color);
+    background-color: rgba(102, 126, 234, 0.1);
+    box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+    outline: none;
+}
+
+.editable-cell:hover {
+    border-color: rgba(102, 126, 234, 0.3);
+    background-color: rgba(102, 126, 234, 0.05);
+}
+
+/* Symbol cards styling */
+.symbol-card {
+    transition: all 0.3s ease;
+    border: 2px solid transparent;
+}
+
+.symbol-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+    border-color: var(--primary-color);
+}
+
+.symbol-card .card-title {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
 }
 
 /* Chart container styling */
@@ -219,8 +450,9 @@ h1 {
 }
 
 /* Cost basis table styling */
+/* Disabled hover effect for trades table */
 .table tbody tr:hover {
-    background-color: rgba(0, 0, 0, 0.075);
+    background-color: transparent;
 }
 
 /* Alert styling */
@@ -270,6 +502,11 @@ h1 {
 }
 
 /* Cost basis table specific styling */
+#cost-basis-summary .table {
+    border: 10px solid #dee2e6;
+    border-radius: 0.5rem;
+}
+
 #cost-basis-summary .table th {
     border-top: none;
     font-weight: 600;
@@ -325,4 +562,20 @@ h1 {
         border: 1px solid #000 !important;
         box-shadow: none !important;
     }
+}
+
+/* Trades Table Styling */
+#trades-table-main tr td:first-child {
+    background-color: transparent !important;
+    text-align: center;
+    white-space: normal;
+    word-wrap: break-word;
+    vertical-align: middle;
+}
+
+#trades-table-main tr:first-child td {
+    white-space: normal;
+    word-wrap: break-word;
+    text-align: center;
+    vertical-align: middle;
 }
