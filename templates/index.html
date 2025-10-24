@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Options Tracker</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- Header -->
+        <div class="row mb-3">
+            <div class="col-12">
+                <h1 class="text-center mb-0">
+                    <i class="fas fa-chart-line text-primary me-2"></i>
+                    Stock Options Tracker
+                    <button class="btn btn-outline-secondary btn-sm ms-3" onclick="toggleCommissionSettings()" title="Commission Settings">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                </h1>
+            </div>
+        </div>
+
+        <!-- Commission Settings Modal -->
+        <div id="commission-modal" class="modal fade" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Commission Settings</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label for="commission-input" class="form-label">Commission per Trade ($)</label>
+                            <input type="number" class="form-control" id="commission-input" step="0.00001" min="0" max="999.99999">
+                            <div class="form-text">Enter commission as a dollar value with up to 5 decimal places</div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="saveCommission()">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dashboard and Filters Row -->
+        <div class="row mb-3">
+            <!-- Dashboard Cards -->
+            <div class="col-md-8">
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="card bg-primary text-white shadow-sm">
+                            <div class="card-body text-center">
+                                <div class="d-flex align-items-center justify-content-center mb-2">
+                                    <i class="fas fa-chart-bar fa-2x me-2"></i>
+                                    <h6 class="card-title mb-0">Trade Statistics</h6>
+                                </div>
+                                <div class="row text-center">
+                                    <div class="col-4">
+                                        <h6 class="mb-1">Total</h6>
+                                        <p class="card-text h5 mb-0" id="total-trades">0</p>
+                                    </div>
+                                    <div class="col-4">
+                                        <h6 class="mb-1">Open</h6>
+                                        <p class="card-text h5 mb-0" id="open-trades">0</p>
+                                    </div>
+                                    <div class="col-4">
+                                        <h6 class="mb-1">Closed</h6>
+                                        <p class="card-text h5 mb-0" id="closed-trades">0</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card bg-success text-white shadow-sm">
+                            <div class="card-body text-center">
+                                <div class="d-flex align-items-center justify-content-center mb-2">
+                                    <i class="fas fa-trophy fa-2x me-2"></i>
+                                    <h6 class="card-title mb-0">Performance</h6>
+                                </div>
+                                <div class="row text-center">
+                                    <div class="col-4">
+                                        <h6 class="mb-1">Win %</h6>
+                                        <p class="card-text h5 mb-0" id="winning-percentage">0%</p>
+                                    </div>
+                                    <div class="col-4">
+                                        <h6 class="mb-1">Wins</h6>
+                                        <p class="card-text h5 mb-0" id="wins">0</p>
+                                    </div>
+                                    <div class="col-4">
+                                        <h6 class="mb-1">Losses</h6>
+                                        <p class="card-text h5 mb-0" id="losses">0</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card bg-info text-white shadow-sm">
+                            <div class="card-body text-center">
+                                <div class="d-flex align-items-center justify-content-center mb-2">
+                                    <i class="fas fa-dollar-sign fa-2x me-2"></i>
+                                    <h6 class="card-title mb-0">Financial</h6>
+                                </div>
+                                <div class="row text-center">
+                                    <div class="col-4">
+                                        <h6 class="mb-1">Net Credit</h6>
+                                        <p class="card-text h5 mb-0" id="total-net-credit">$0.00</p>
+                                    </div>
+                                    <div class="col-4">
+                                        <h6 class="mb-1">Days Left</h6>
+                                        <p class="card-text h5 mb-0" id="days-remaining">0</p>
+                                    </div>
+                                    <div class="col-4">
+                                        <h6 class="mb-1">Days Done</h6>
+                                        <p class="card-text h5 mb-0" id="days-done">0</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Dashboard Filter -->
+            <div class="col-md-4">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-light">
+                        <h6 class="card-title mb-0">
+                            <i class="fas fa-filter text-primary me-2"></i>
+                            Dashboard Filter
+                        </h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row mb-3">
+                            <div class="col-6">
+                                <label for="start-date" class="form-label form-label-sm">Start Date</label>
+                                <input type="date" class="form-control form-control-sm" id="start-date">
+                            </div>
+                            <div class="col-6">
+                                <label for="end-date" class="form-label form-label-sm">End Date</label>
+                                <input type="date" class="form-control form-control-sm" id="end-date">
+                            </div>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col-6">
+                                <button class="btn btn-sm btn-outline-primary w-100" onclick="setFilter('week')">
+                                    <i class="fas fa-calendar-week me-1"></i>This Week
+                                </button>
+                            </div>
+                            <div class="col-6">
+                                <button class="btn btn-sm btn-outline-primary w-100" onclick="setFilter('month')">
+                                    <i class="fas fa-calendar-alt me-1"></i>This Month
+                                </button>
+                            </div>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col-6">
+                                <button class="btn btn-sm btn-outline-primary w-100" onclick="setFilter('quarter')">
+                                    <i class="fas fa-calendar me-1"></i>This Quarter
+                                </button>
+                            </div>
+                            <div class="col-6">
+                                <button class="btn btn-sm btn-outline-primary w-100" onclick="setFilter('year')">
+                                    <i class="fas fa-calendar-check me-1"></i>This Year
+                                </button>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-6">
+                                <button class="btn btn-sm btn-primary w-100" onclick="applyFilter()">
+                                    <i class="fas fa-search me-1"></i>Filter
+                                </button>
+                            </div>
+                            <div class="col-6">
+                                <button class="btn btn-sm btn-secondary w-100" onclick="clearFilter()">
+                                    <i class="fas fa-times me-1"></i>Clear
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chart Row -->
+        <div class="row mb-3">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-body">
+                        <h6 class="card-title">
+                            <i class="fas fa-chart-area text-primary me-2"></i>
+                            Daily Premium Over Time
+                        </h6>
+                        <div class="chart-container" style="position: relative; height: 300px;">
+                            <canvas id="premiumChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content Row -->
+        <div class="row">
+            <!-- New Trade Form -->
+            <div class="col-md-4">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">
+                            <i class="fas fa-plus-circle me-2"></i>
+                            Add New Trade
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="trade-form">
+                            <div class="mb-3">
+                                <label for="ticker" class="form-label">Stock Ticker</label>
+                                <input type="text" class="form-control" id="ticker" placeholder="e.g., AAPL" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="trade-type" class="form-label">Trade Type</label>
+                                <select class="form-select" id="trade-type" required>
+                                    <option value="BTO">BTO</option>
+                                    <option value="STC">STC</option>
+                                    <option value="ROCT CALL">ROCT CALL</option>
+                                    <option value="ROCT PUT">ROCT PUT</option>
+                                    <option value="ROP">ROP</option>
+                                    <option value="ROC">ROC</option>
+                                </select>
+                            </div>
+                            <div class="mb-3" id="strike-price-container">
+                                <label for="strike-price" class="form-label">Strike Price</label>
+                                <input type="number" class="form-control" id="strike-price" step="0.01" min="0">
+                            </div>
+                            <div class="mb-3" id="expiration-date-container">
+                                <label for="expiration-date" class="form-label">Expiration Date</label>
+                                <input type="date" class="form-control" id="expiration-date" required>
+                            </div>
+                            <div class="mb-3" id="quantity-container">
+                                <label for="quantity" class="form-label">Contracts</label>
+                                <input type="number" class="form-control" id="quantity" min="1" required>
+                            </div>
+                            <div class="mb-3" id="shares-container" style="display: none;">
+                                <label for="shares" class="form-label"># of Shares</label>
+                                <input type="number" class="form-control" id="shares" min="1">
+                            </div>
+                            <div class="mb-3" id="price-per-share-container" style="display: none;">
+                                <label for="price-per-share" class="form-label">Price per Share</label>
+                                <input type="number" class="form-control" id="price-per-share" step="0.01" min="0">
+                            </div>
+                            <div class="mb-3" id="premium-container">
+                                <label for="premium" class="form-label">Premium per Contract</label>
+                                <input type="number" class="form-control" id="premium" step="0.01" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="trade-date" class="form-label">Trade Date</label>
+                                <input type="date" class="form-control" id="trade-date" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="current-price" class="form-label">Current Price</label>
+                                <input type="number" class="form-control" id="current-price" step="0.01" min="0" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="days-to-expiration" class="form-label">Days to Expiration</label>
+                                <input type="number" class="form-control" id="days-to-expiration" readonly>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">Add Trade</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Trades Table -->
+            <div class="col-md-8">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="fas fa-table me-2"></i>
+                            Trades
+                        </h5>
+                        <div class="d-flex align-items-center">
+                            <input type="text" class="form-control form-control-sm" id="symbol-filter" placeholder="Type symbol..." style="width: 170px; margin-left: 100px;" autocomplete="off">
+                            <div id="symbol-suggestions" class="dropdown-menu" style="display: none;"></div>
+                            <button id="clear-symbol" class="btn btn-sm btn-outline-secondary ms-2" style="display: none;" onclick="clearSymbolFilter()">
+                                <i class="fas fa-times"></i>
+                            </button>
+                            <label for="status-filter" class="form-label ms-3 me-2">Status:</label>
+                            <select class="form-select form-select-sm" id="status-filter" style="width: 190px !important;">
+                                <option value="">All</option>
+                                <option value="open">Open</option>
+                                <option value="closed">Closed</option>
+                                <option value="assigned">Assigned</option>
+                                <option value="expired">Expired</option>
+                                <option value="roll">Roll</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-sm table-fixed" id="trades-table-main">
+                                <tbody id="trades-table"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cost Basis Section -->
+        <div class="row mt-3">
+            <div class="col-12">
+                <div id="cost-basis-summary">
+                    <p class="text-muted">Click on a stock symbol in the Trades table to view its cost basis summary.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Alert Container -->
+    <div id="alert-container" class="position-fixed top-0 end-0 p-3" style="z-index: 1050;"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
