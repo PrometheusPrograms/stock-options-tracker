@@ -761,6 +761,24 @@ def webhook_deploy():
     try:
         import subprocess
         import os
+        import hmac
+        import hashlib
+        
+        # Optional: Verify webhook secret for security
+        # webhook_secret = os.environ.get('WEBHOOK_SECRET', '')
+        # if webhook_secret:
+        #     signature = request.headers.get('X-Hub-Signature-256', '')
+        #     if not signature.startswith('sha256='):
+        #         return 'Invalid signature', 401
+        #     
+        #     expected_signature = 'sha256=' + hmac.new(
+        #         webhook_secret.encode(),
+        #         request.get_data(),
+        #         hashlib.sha256
+        #     ).hexdigest()
+        #     
+        #     if not hmac.compare_digest(signature, expected_signature):
+        #         return 'Signature mismatch', 401
         
         # Change to the project directory
         project_dir = '/home/PrometheusPrograms/stock-options-tracker'
