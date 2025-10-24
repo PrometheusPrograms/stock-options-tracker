@@ -92,3 +92,4 @@ Commission is applied per trade and affects:
 - All financial metrics
 
 Set commission using the gear icon in the header.
+# Webhook Test
