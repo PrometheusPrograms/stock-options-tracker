@@ -1,0 +1,54 @@
+name: Deploy to PythonAnywhere
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Deploy to PythonAnywhere
+      run: |
+        echo "🚀 Deploying Stock Options Tracker to PythonAnywhere..."
+        echo "Repository: https://github.com/PrometheusPrograms/stock-options-tracker"
+        echo ""
+        echo "📋 Manual Deployment Steps:"
+        echo "1. Go to PythonAnywhere → Files tab"
+        echo "2. Navigate to your project directory"
+        echo "3. Run: git pull"
+        echo "4. Go to Web tab → Reload"
+        echo ""
+        echo "🔧 Automated Deployment Options:"
+        echo ""
+        echo "Option 1: Scheduled Task (Free Tier)"
+        echo "- Set up a task to run every 5 minutes:"
+        echo "  cd /home/YOUR_USERNAME/stock-options-tracker && git pull"
+        echo ""
+        echo "Option 2: Always-on Task (Paid Tier)"
+        echo "- Set up continuous task:"
+        echo "  while true; do"
+        echo "    cd /home/YOUR_USERNAME/stock-options-tracker"
+        echo "    git pull"
+        echo "    sleep 60"
+        echo "  done"
+        echo ""
+        echo "Option 3: SSH Deployment (Advanced)"
+        echo "- Set up SSH keys in GitHub Secrets"
+        echo "- Uncomment the SSH command below"
+        echo ""
+        # Uncomment and configure this when you have SSH access:
+        # - name: Deploy via SSH
+        #   run: |
+        #     ssh ${{ secrets.PYTHONANYWHERE_USER }}@ssh.pythonanywhere.com 'cd stock-options-tracker && git pull'
+        
+    - name: Notify Deployment
+      run: |
+        echo "✅ Deployment workflow completed"
+        echo "Check your PythonAnywhere web app for updates"
+        echo "URL: https://YOUR_USERNAME.pythonanywhere.com"
