@@ -1,23 +1,44 @@
 #!/usr/bin/env python3
 """
 Setup script to initialize database with test data for PythonAnywhere deployment
+Only initializes if database is empty or doesn't exist
 """
 
 import sqlite3
 import os
 
 def setup_test_data():
-    """Initialize database with test data"""
+    """Initialize database with test data only if database is empty"""
     
     # Database file path
     db_path = 'trades.db'
     
-    # Remove existing database if it exists
+    # Check if database exists and has data
+    if os.path.exists(db_path):
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Check if trades table exists and has data
+        try:
+            cursor.execute("SELECT COUNT(*) FROM trades")
+            count = cursor.fetchone()[0]
+            conn.close()
+            
+            if count > 0:
+                print(f"⚠️  Database already contains {count} trades")
+                print("🛡️  Skipping test data setup to protect existing data")
+                print("💡 To force setup, delete trades.db first")
+                return False
+        except sqlite3.OperationalError:
+            # Table doesn't exist, safe to proceed
+            conn.close()
+            print("📊 No trades table found, proceeding with setup")
+    
+    # Create new database or initialize empty one
     if os.path.exists(db_path):
         os.remove(db_path)
-        print(f"Removed existing database: {db_path}")
+        print(f"🗑️  Removed existing empty database: {db_path}")
     
-    # Create new database
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
@@ -79,6 +100,7 @@ def setup_test_data():
     print("   - 3 Stock transactions (BTO/STC)")
     print("   - Various statuses: open, closed, expired, assigned")
     print("   - Multiple tickers: AAPL, TSLA, MSFT, GOOGL, NVDA, AMZN, META, NFLX")
+    return True
 
 if __name__ == '__main__':
     setup_test_data()
