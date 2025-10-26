@@ -7,26 +7,121 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=94">
+    <style>
+        .floating-nav {
+            position: fixed;
+            left: 20px;
+            top: calc(100vh / 3);
+            width: 50px;
+            background: #212529;
+            border-radius: 12px;
+            padding: 10px 8px;
+            z-index: 1000;
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+            cursor: move;
+            user-select: none;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(20px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        .drag-handle {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 5px 0;
+            color: #ffffff !important;
+            cursor: grab;
+            font-size: 24px;
+            opacity: 1 !important;
+            transition: all 0.2s ease;
+            margin-bottom: 5px;
+        }
+        
+        .drag-handle i {
+            color: #ffffff !important;
+            font-size: 18px !important;
+        }
+        
+        .drag-handle:hover {
+            background-color: rgba(13, 110, 253, 0.2);
+            transform: scale(1.1);
+        }
+        
+        .drag-handle:active {
+            cursor: grabbing;
+        }
+        
+        .nav-item {
+            width: 34px;
+            height: 34px;
+            margin: 5px 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.2s ease;
+            color: #ffffff;
+        }
+        
+        .nav-item:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: scale(1.1);
+        }
+        
+        .nav-item i {
+            font-size: 14px;
+        }
+        
+        .nav-item.active {
+            background: #0d6efd;
+            color: white;
+            box-shadow: 0 0 15px rgba(13, 110, 253, 0.8);
+            transform: scale(1.05);
+            border: 1px solid rgba(13, 110, 253, 0.5);
+        }
+    </style>
 </head>
 <body>
-    <div class="container-fluid">
+    <!-- Floating Navigation Bar -->
+    <div class="floating-nav" id="floatingNav">
+        <div class="drag-handle">
+            <i class="fas fa-ellipsis-h"></i>
+        </div>
+        <div class="nav-item" onclick="scrollToSection('dashboard')" title="Dashboard">
+            <i class="fas fa-tachometer-alt"></i>
+        </div>
+        <div class="nav-item" onclick="scrollToSection('trades')" title="Trades">
+            <i class="fas fa-chart-line"></i>
+        </div>
+        <div class="nav-item" onclick="scrollToSection('cost-basis')" title="Cost Basis">
+            <i class="fas fa-calculator"></i>
+        </div>
+    </div>
+
+    <div class="page-wrapper">
         <!-- Header Banner -->
-        <div class="header-banner">
-            <div class="container-fluid">
-                <div class="row align-items-center">
-                    <div class="col-12">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <h1 class="text-center mb-0 flex-grow-1">
-                                🔥🔥🔥🔥 Tracker
-                            </h1>
-                            <i class="fas fa-cog text-white" onclick="toggleCommissionSettings()" style="cursor: pointer; font-size: 2.25rem; margin-left: -70px;" title="Commission Settings"></i>
-                        </div>
+        <div class="header-banner-wrapper">
+            <div class="header-banner">
+            <div class="row align-items-center">
+                <div class="col-12">
+                    <div class="d-flex justify-content-center align-items-center position-relative" style="min-height: 100%;">
+                        <h1 class="text-center mb-0" style="line-height: 1;">
+                            🔥🔥🔥🔥 Tracker
+                        </h1>
+                        <i class="fas fa-cog text-white header-settings-icon position-absolute" onclick="toggleCommissionSettings()" title="Commission Settings" style="right: 20px; top: 50%; transform: translateY(-50%); cursor: pointer; font-size: 1.5rem;"></i>
                     </div>
                 </div>
             </div>
+            </div>
         </div>
-
+        
         <!-- Commission Settings Modal -->
         <div id="commission-modal" class="modal fade" tabindex="-1">
             <div class="modal-dialog">
@@ -38,8 +133,21 @@
                     <div class="modal-body">
                         <div class="mb-3">
                             <label for="commission-input" class="form-label">Commission per Trade ($)</label>
-                            <input type="number" class="form-control" id="commission-input" step="0.00001" min="0" max="999.99999">
+                            <input type="number" class="form-control" id="commission-input" name="commission" step="0.00001" min="0" max="999.99999">
                             <div class="form-text">Enter commission as a dollar value with up to 5 decimal places</div>
+                        </div>
+                        
+                        <hr>
+                        
+                        <h6 class="mb-3">Bankroll</h6>
+                        <div class="mb-3">
+                            <label for="bankroll-beginning-date" class="form-label">Beginning Date</label>
+                            <input type="date" class="form-control" id="bankroll-beginning-date" name="bankroll-beginning-date">
+                        </div>
+                        <div class="mb-3">
+                            <label for="bankroll-beginning-balance" class="form-label">Beginning Balance ($)</label>
+                            <input type="number" class="form-control" id="bankroll-beginning-balance" name="bankroll-beginning-balance" step="0.01" min="0">
+                            <div class="form-text">Enter the starting balance for your trading account</div>
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -50,121 +158,43 @@
             </div>
         </div>
 
-        <!-- Dashboard and Filter Row -->
-        <div class="row mb-5" style="margin-top: 25px;">
-            <!-- Dashboard Filter (Left Side) -->
-            <div class="dashboard-filter-container">
-                <div class="card shadow-sm h-100">
-                    <div class="card-header bg-light">
-                        <h6 class="card-title mb-0">
-                            <i class="fas fa-filter text-primary me-2"></i>
-                            Dashboard Filter
-                        </h6>
-                    </div>
-                    <div class="card-body d-flex flex-column">
-                        <div class="row mb-3">
-                            <div class="col-6">
-                                <label for="start-date" class="form-label form-label-sm">Start Date</label>
-                                <input type="date" class="form-control form-control-sm" id="start-date">
-                            </div>
-                            <div class="col-6">
-                                <label for="end-date" class="form-label form-label-sm">End Date</label>
-                                <input type="date" class="form-control form-control-sm" id="end-date">
-                            </div>
-                        </div>
-                        <div class="row mb-3">
-                            <div class="col-6">
-                                <button class="btn btn-sm btn-outline-primary w-100 mb-2" onclick="setFilter('week')">
-                                    <i class="fas fa-calendar-week me-1"></i>Week
-                                </button>
-                            </div>
-                            <div class="col-6">
-                                <button class="btn btn-sm btn-outline-primary w-100 mb-2" onclick="setFilter('month')">
-                                    <i class="fas fa-calendar-alt me-1"></i>Month
-                                </button>
-                            </div>
-                        </div>
-                        <div class="row mb-3">
-                            <div class="col-6">
-                                <button class="btn btn-sm btn-outline-primary w-100 mb-2" onclick="setFilter('quarter')">
-                                    <i class="fas fa-calendar me-1"></i>Quarter
-                                </button>
-                            </div>
-                            <div class="col-6">
-                                <button class="btn btn-sm btn-outline-primary w-100 mb-2" onclick="setFilter('year')">
-                                    <i class="fas fa-calendar-check me-1"></i>YTD
-                                </button>
-                            </div>
-                        </div>
-                        <div class="row mb-3">
-                            <div class="col-6">
-                                <button class="btn btn-sm btn-primary w-100 mb-2" onclick="applyFilter()">
-                                    <i class="fas fa-search me-1"></i>Filter
-                                </button>
-                            </div>
-                            <div class="col-6">
-                                <button class="btn btn-sm btn-secondary w-100" onclick="clearFilter()">
-                                    <i class="fas fa-times me-1"></i>Clear
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Dashboard Cards and Chart (Right Side) -->
-            <div class="dashboard-content-container">
-                <div class="row">
-                    <div class="col-md-4">
-                        <div class="card bg-primary text-white shadow-sm">
-                            <div class="card-body text-center">
-                                <div class="d-flex align-items-center justify-content-center mb-2">
-                                    <i class="fas fa-chart-bar fa-2x me-2"></i>
-                                    <h6 class="card-title mb-0">Trade Statistics</h6>
-                                </div>
-                                <div class="row text-center">
-                                    <div class="col-4">
-                                        <h6 class="mb-1">Total</h6>
-                                        <p class="card-text h5 mb-0" id="total-trades">0</p>
+        <!-- Dashboard Cards and Chart (Full Width) -->
+        <div class="row mb-5">
+            <div class="col-12">
+                <div class="card mb-3" id="dashboard">
+                    <div class="card-header bg-info text-white">
+                        <div class="d-flex align-items-center justify-content-between">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-chevron-down section-toggle-icon" id="dashboardToggleIcon" data-bs-toggle="collapse" data-bs-target="#dashboardCollapse" aria-expanded="true" aria-controls="dashboardCollapse"></i>
+                                <h5 class="mb-0 dashboard-title">
+                                    <i class="fas fa-tachometer-alt me-2"></i>
+                                    Dashboard
+                                </h5>
+                                <div class="d-flex align-items-center dashboard-controls">
+                                    <div class="d-flex align-items-center me-2">
+                                        <label for="dashboard-start-date" class="form-label form-label-sm text-white me-1 mb-0">Start</label>
+                                        <input type="date" class="form-control form-control-sm dashboard-date-input" id="dashboard-start-date">
                                     </div>
-                                    <div class="col-4">
-                                        <h6 class="mb-1">Open</h6>
-                                        <p class="card-text h5 mb-0" id="open-trades">0</p>
+                                    <div class="d-flex align-items-center me-2">
+                                        <label for="dashboard-end-date" class="form-label form-label-sm text-white me-1 mb-0">End</label>
+                                        <input type="date" class="form-control form-control-sm dashboard-date-input" id="dashboard-end-date">
                                     </div>
-                                    <div class="col-4">
-                                        <h6 class="mb-1">Closed</h6>
-                                        <p class="card-text h5 mb-0" id="closed-trades">0</p>
-                                    </div>
+                                    <button class="btn btn-sm btn-outline-light me-1" onclick="setDashboardPeriod('week')">1W</button>
+                                    <button class="btn btn-sm btn-outline-light me-1" onclick="setDashboardPeriod('month')">1M</button>
+                                    <button class="btn btn-sm btn-outline-light me-1" onclick="setDashboardPeriod('year')">1Y</button>
+                                    <button class="btn btn-sm btn-outline-light me-1" onclick="setDashboardPeriod('ytd')">YTD</button>
+                                    <button class="btn btn-sm btn-outline-light" onclick="clearDashboardFilters()">Clear</button>
                                 </div>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-4">
-                        <div class="card bg-success text-white shadow-sm">
-                            <div class="card-body text-center">
-                                <div class="d-flex align-items-center justify-content-center mb-2">
-                                    <i class="fas fa-trophy fa-2x me-2"></i>
-                                    <h6 class="card-title mb-0">Performance</h6>
-                                </div>
-                                <div class="row text-center">
-                                    <div class="col-4">
-                                        <h6 class="mb-1">Win %</h6>
-                                        <p class="card-text h5 mb-0" id="winning-percentage">0%</p>
-                                    </div>
-                                    <div class="col-4">
-                                        <h6 class="mb-1">Wins</h6>
-                                        <p class="card-text h5 mb-0" id="wins">0</p>
-                                    </div>
-                                    <div class="col-4">
-                                        <h6 class="mb-1">Losses</h6>
-                                        <p class="card-text h5 mb-0" id="losses">0</p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-4">
-                        <div class="card bg-info text-white shadow-sm">
+                <div class="collapse show" id="dashboardCollapse">
+                    <div class="card-body">
+                        <div class="dashboard-content-container">
+                <!-- First Row -->
+                <div class="row mt-3">
+                    <div class="col-md-6">
+                        <div class="card bg-info text-white shadow-sm mb-3">
                             <div class="card-body text-center">
                                 <div class="d-flex align-items-center justify-content-center mb-2">
                                     <i class="fas fa-dollar-sign fa-2x me-2"></i>
@@ -187,9 +217,113 @@
                             </div>
                         </div>
                     </div>
+                    <div class="col-md-6">
+                        <div class="card bg-success text-white shadow-sm">
+                            <div class="card-body text-center">
+                                <div class="d-flex align-items-center justify-content-center mb-2">
+                                    <i class="fas fa-star fa-2x me-2"></i>
+                                    <h6 class="card-title mb-0">Top Symbols</h6>
+                                </div>
+                                <div id="top-symbols-list" class="text-center">
+                                    <div class="text-center text-muted">
+                                        <small>Loading...</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 
-                <!-- Chart directly under dashboard cards -->
+                
+                <!-- Chart Row - Doughnut Chart and Daily Premium Chart -->
+                <div class="row mt-3">
+                    <div class="col-6">
+                        <div class="card">
+                            <div class="card-body d-flex flex-column">
+                                <div class="d-flex align-items-center justify-content-center mb-3">
+                                    <i class="fas fa-chart-pie fa-2x text-primary me-2"></i>
+                                    <h6 class="card-title mb-0 text-primary">Trade Statistics</h6>
+                                </div>
+                                <div class="d-flex flex-grow-1 chart-container">
+                                    <div class="d-flex flex-column justify-content-center me-3 legend-container">
+                                        <div class="d-flex align-items-center mb-2">
+                                            <div class="me-2 legend-item" style="background-color: #28a745;"></div>
+                                            <div>
+                                                <div class="fw-bold legend-text">Open</div>
+                                                <small class="text-muted legend-subtext" id="legend-open-count">0 (0%)</small>
+                                            </div>
+                                        </div>
+                                        <div class="d-flex align-items-center mb-2">
+                                            <div class="me-2 legend-item" style="background-color: #ffc107;"></div>
+                                            <div>
+                                                <div class="fw-bold legend-text">Completed</div>
+                                                <small class="text-muted legend-subtext" id="legend-completed-count">0 (0%)</small>
+                                            </div>
+                                        </div>
+                                        <div class="d-flex align-items-center mb-2" style="padding-left: 20px;">
+                                            <div class="me-2 legend-item" style="background-color: #17a2b8;"></div>
+                                            <div>
+                                                <div class="fw-bold legend-text">Wins</div>
+                                                <small class="text-muted legend-subtext" id="legend-wins-count">0 (0%)</small>
+                                            </div>
+                                        </div>
+                                        <div class="d-flex align-items-center" style="padding-left: 20px;">
+                                            <div class="me-2 legend-item" style="background-color: #dc3545;"></div>
+                                            <div>
+                                                <div class="fw-bold legend-text">Losses</div>
+                                                <small class="text-muted legend-subtext" id="legend-losses-count">0 (0%)</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="position-relative flex-grow-1 d-flex justify-content-center align-items-center">
+                                        <div id="sunburst-chart" class="sunburst-chart"></div>
+                                        <div class="position-absolute top-50 start-50 translate-middle text-center">
+                                            <div class="h4 mb-0 text-primary" id="total-trades-center">0</div>
+                                            <small class="text-muted">Total Trades</small>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="card">
+                            <div class="card-body d-flex flex-column">
+                                <div class="d-flex align-items-center justify-content-center mb-3">
+                                    <i class="fas fa-wallet fa-2x text-success me-2"></i>
+                                    <h6 class="card-title mb-0 text-success">Bankroll Allocation</h6>
+                                </div>
+                                <div class="d-flex flex-grow-1 flex-column justify-content-center">
+                                    <div class="d-flex chart-container justify-content-center align-items-center mb-3">
+                                        <div id="bankroll-chart" class="sunburst-chart"></div>
+                                        <div class="ms-3 d-flex flex-column justify-content-center">
+                                            <div class="d-flex align-items-center mb-2">
+                                                <div class="me-2" style="width: 12px; height: 12px; background-color: #dc3545; border-radius: 50%;"></div>
+                                                <div>
+                                                    <div class="fw-bold">Used</div>
+                                                    <small class="text-muted" id="bankroll-in-use">$0</small>
+                                                </div>
+                                            </div>
+                                            <div class="d-flex align-items-center mb-2">
+                                                <div class="me-2" style="width: 12px; height: 12px; background-color: #28a745; border-radius: 50%;"></div>
+                                                <div>
+                                                    <div class="fw-bold">Available</div>
+                                                    <small class="text-muted" id="bankroll-available">$0</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="text-center">
+                                        <div class="text-muted small mb-1">Total Bankroll</div>
+                                        <div class="h4 mb-0 fw-bold" id="bankroll-total-display">$0</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Premium Chart Row -->
                 <div class="row mt-3">
                     <div class="col-12">
                         <div class="card">
@@ -198,7 +332,7 @@
                                     <i class="fas fa-chart-area text-primary me-2"></i>
                                     Daily Premium Over Time
                                 </h6>
-                                <div class="chart-container" style="position: relative; height: 300px;">
+                                <div class="chart-container">
                                     <canvas id="premiumChart"></canvas>
                                 </div>
                             </div>
@@ -208,140 +342,185 @@
             </div>
         </div>
 
-        <!-- Trade Type Buttons and Trades Table Row -->
-        <div class="row mb-2">
-            <!-- Trade Type Buttons (Left Side) -->
-            <div class="trade-form-container">
-                <div class="card shadow-sm">
-                    <div class="card-header bg-primary text-white">
-                        <h5 class="mb-0">
-                            <i class="fas fa-plus-circle me-2"></i>
-                            Add New Trade
-                        </h5>
+        <!-- Trades Section -->
+        <div class="row mb-5">
+            <div class="col-12">
+                <div class="card mb-3" id="trades">
+                    <div class="card-header bg-success text-white">
+                        <div class="d-flex align-items-center justify-content-between">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-chevron-down section-toggle-icon" id="tradesToggleIcon" data-bs-toggle="collapse" data-bs-target="#tradesCollapse" aria-expanded="true" aria-controls="tradesCollapse"></i>
+                                <h5 class="mb-0 trades-title">
+                                    <i class="fas fa-chart-line me-2"></i>
+                                    Trades
+                                </h5>
+                                <div class="d-flex align-items-center dashboard-controls"></div>
+                            </div>
+                        </div>
                     </div>
+                <div class="collapse show" id="tradesCollapse">
                     <div class="card-body">
-                        <div class="row g-2">
-                            <div class="col-6">
-                                <button class="btn btn-outline-primary w-100 mb-2" onclick="openBTOModal()">
-                                    BTO
-                                </button>
+                        <div class="dashboard-content-container">
+                            <div class="row">
+                                <div class="col-md-3">
+                                    <div class="card shadow-sm border-0">
+                                        <div class="card-header bg-primary text-white">
+                                            <h5 class="mb-0">
+                                                <i class="fas fa-plus-circle me-2"></i>
+                                                Add New Trade
+                                            </h5>
+                                        </div>
+                                        <div class="card-body">
+                                            <div class="row g-2">
+                                                <div class="col-6">
+                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="openBTOModal()">
+                                                        BTO
+                                                    </button>
+                                                </div>
+                                                <div class="col-6">
+                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="addTradeType('BTC')">
+                                                        BTC
+                                                    </button>
+                                                </div>
+                                                <div class="col-6">
+                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="openROCTCallModal()">
+                                                        ROC
+                                                    </button>
+                                                </div>
+                                                <div class="col-6">
+                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="openROCTPutModal()">
+                                                        ROP
+                                                    </button>
+                                                </div>
+                                                <div class="col-6">
+                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="openROCTCallModal()">
+                                                        ROCT CALL
+                                                    </button>
+                                                </div>
+                                                <div class="col-6">
+                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="openROCTPutModal()">
+                                                        ROCT PUT
+                                                    </button>
+                                                </div>
+                                                <div class="col-6">
+                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="openSTCModal()">
+                                                        STC
+                                                    </button>
+                                                </div>
+                                                <div class="col-6">
+                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="addTradeType('STO')">
+                                                        STO
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-9">
+                                    <div class="card shadow-sm border-0">
+                                        <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                                            <h5 class="mb-0">
+                                                <i class="fas fa-table me-2"></i>
+                                                Trades
+                                            </h5>
+                                            <div class="d-flex align-items-center gap-2">
+                                                <input type="text" class="form-control form-control-sm filter-input" id="symbol-filter" placeholder="Type symbol..." autocomplete="off">
+                                                <div id="symbol-suggestions" class="dropdown-menu filter-suggestions"></div>
+                                                <button id="clear-symbol" class="btn btn-sm btn-outline-light clear-button" onclick="clearSymbolFilter()">
+                                                    <i class="fas fa-times"></i>
+                                                </button>
+                                                <button id="jump-to-cost-basis" class="btn btn-sm btn-outline-light" onclick="jumpToCostBasis()" title="Jump to Cost Basis">
+                                                    <i class="fas fa-arrow-down"></i>
+                                                </button>
+                                                <button class="btn btn-sm btn-outline-light" onclick="scrollToTop()" title="Jump to Dashboard">
+                                                    <i class="fas fa-level-up-alt"></i>
+                                                </button>
+                                                <label for="status-filter" class="form-label me-2 mb-0">Status:</label>
+                                                <select class="form-select form-select-sm status-filter" id="status-filter">
+                                                    <option value="">All</option>
+                                                    <option value="open">Open</option>
+                                                    <option value="closed">Closed</option>
+                                                    <option value="assigned">Assigned</option>
+                                                    <option value="expired">Expired</option>
+                                                    <option value="roll">Roll</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="card-body">
+                                            <div class="table-responsive">
+                                                <table class="table table-sm table-fixed" id="trades-table-main">
+                                                    <tbody id="trades-table"></tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
-                            <div class="col-6">
-                                <button class="btn btn-outline-primary w-100 mb-2" onclick="addTradeType('BTC')">
-                                    BTC
-                                </button>
-                            </div>
-                            <div class="col-6">
-                                <button class="btn btn-outline-primary w-100 mb-2" onclick="addTradeType('ROC')">
-                                    ROC
-                                </button>
-                            </div>
-                            <div class="col-6">
-                                <button class="btn btn-outline-primary w-100 mb-2" onclick="addTradeType('ROP')">
-                                    ROP
-                                </button>
-                            </div>
-                            <div class="col-6">
-                                <button class="btn btn-outline-primary w-100 mb-2" onclick="openROCTCallModal()">
-                                    ROCT CALL
-                                </button>
-                            </div>
-                            <div class="col-6">
-                                <button class="btn btn-outline-primary w-100 mb-2" onclick="openROCTPutModal()">
-                                    ROCT PUT
-                                </button>
-                            </div>
-                        <div class="col-6">
-                            <button class="btn btn-outline-primary w-100 mb-2" onclick="openSTCModal()">
-                                STC
-                            </button>
-                        </div>
-                        <div class="col-6">
-                            <button class="btn btn-outline-primary w-100 mb-2" onclick="addTradeType('STO')">
-                                STO
-                            </button>
-                        </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Trades Table (Right Side) -->
-            <div class="trades-content-container">
-                <div class="card shadow-sm">
-                    <div class="card-header bg-success text-white d-flex justify-content-between align-items-center" style="position: relative;">
-                        <h5 class="mb-0">
-                            <i class="fas fa-table me-2"></i>
-                            Trades
-                        </h5>
-                        <div class="d-flex align-items-center" style="position: absolute; left: 200px;">
-                            <input type="text" class="form-control form-control-sm" id="symbol-filter" placeholder="Type symbol..." style="width: 220px;" autocomplete="off">
-                            <div id="symbol-suggestions" class="dropdown-menu" style="display: none; width: 370px;"></div>
-                            <button id="clear-symbol" class="btn btn-sm btn-outline-light ms-2" style="display: none;" onclick="clearSymbolFilter()">
-                                <i class="fas fa-times"></i>
-                            </button>
-                        </div>
-                        <div class="d-flex align-items-center justify-content-end">
-                            <label for="status-filter" class="form-label me-2">Status:</label>
-                            <select class="form-select form-select-sm" id="status-filter" style="width: 190px !important;">
-                                <option value="">All</option>
-                                <option value="open">Open</option>
-                                <option value="closed">Closed</option>
-                                <option value="assigned">Assigned</option>
-                                <option value="expired">Expired</option>
-                                <option value="roll">Roll</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="card-body">
-                        <div class="table-responsive">
-                            <table class="table table-sm table-fixed" id="trades-table-main">
-                                <tbody id="trades-table"></tbody>
-                            </table>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Cost Basis Table Section -->
-        <div class="row mt-1">
-            <div class="cost-basis-container">
-                <div class="card shadow-sm">
-                    <div class="card-header bg-info text-white d-flex justify-content-between align-items-center" style="position: relative;">
-                        <h5 class="mb-0">
-                            <i class="fas fa-calculator me-2"></i>
-                            Cost Basis
-                        </h5>
-                        <div class="d-flex align-items-center" style="position: absolute; left: 200px;">
-                            <input type="text" class="form-control form-control-sm" id="cost-basis-symbol-filter" placeholder="Type symbol..." style="width: 220px;" autocomplete="off">
-                            <div id="cost-basis-symbol-suggestions" class="dropdown-menu" style="display: none;"></div>
-                            <button id="clear-cost-basis-symbol" class="btn btn-sm btn-outline-light ms-2" style="display: none;" onclick="clearCostBasisSymbolFilter()">
-                                <i class="fas fa-times"></i>
-                            </button>
-                        </div>
-                        <div class="d-flex align-items-center justify-content-end">
-                            <label for="cost-basis-status-filter" class="form-label me-2 text-white">Status:</label>
-                            <select class="form-select form-select-sm" id="cost-basis-status-filter" style="width: 190px !important;">
-                                <option value="">All</option>
-                                <option value="open">Open</option>
-                                <option value="closed">Closed</option>
-                                <option value="assigned">Assigned</option>
-                                <option value="expired">Expired</option>
-                                <option value="roll">Roll</option>
-                            </select>
+        <!-- Cost Basis Section -->
+        <div class="container-fluid px-2">
+            <div class="row mb-5">
+                <div class="col-12">
+                    <div class="card mb-3" id="cost-basis">
+                    <div class="card-header bg-primary text-white">
+                        <div class="d-flex align-items-center justify-content-between">
+                            <div class="d-flex align-items-center">
+                                <i class="fas fa-chevron-down section-toggle-icon" id="costBasisToggleIcon" data-bs-toggle="collapse" data-bs-target="#costBasisCollapse" aria-expanded="true" aria-controls="costBasisCollapse"></i>
+                                <h5 class="mb-0 cost-basis-title">
+                                    <i class="fas fa-calculator me-2"></i>
+                                    Cost Basis
+                                </h5>
+                                <div class="d-flex align-items-center dashboard-controls"></div>
+                            </div>
                         </div>
                     </div>
+                <div class="collapse show" id="costBasisCollapse">
                     <div class="card-body">
-                        <div id="cost-basis-table-container">
-                            <div class="text-center text-muted">
-                                <i class="fas fa-info-circle me-2"></i>
-                                Click on a stock symbol above to view its cost basis
+                        <div class="dashboard-content-container">
+                            <div class="row">
+                                <!-- Cost Basis Table (Full width like dashboard) -->
+                                <div class="col-12">
+                                    <div class="card shadow-sm border-0">
+                                        <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                                            <h5 class="mb-0">
+                                                <i class="fas fa-table me-2"></i>
+                                                Cost Basis Table
+                                            </h5>
+                                            <div class="d-flex align-items-center gap-2">
+                                                <input type="text" class="form-control form-control-sm" id="cost-basis-symbol-filter" placeholder="Type symbol..." style="width: 220px;" autocomplete="off">
+                                                <div id="cost-basis-symbol-suggestions" class="dropdown-menu" style="display: none;"></div>
+                                                <button id="clear-cost-basis-symbol" class="btn btn-sm btn-outline-light" style="display: none;" onclick="clearCostBasisSymbolFilter()">
+                                                    <i class="fas fa-times"></i>
+                                                </button>
+                                                <button id="jump-to-trades" class="btn btn-sm btn-outline-light" onclick="jumpToTradesTop()" title="Jump to Trades">
+                                                    <i class="fas fa-arrow-up"></i>
+                                                </button>
+                                                <button class="btn btn-sm btn-outline-light" onclick="scrollToTop()" title="Jump to Dashboard">
+                                                    <i class="fas fa-level-up-alt"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="card-body">
+                                            <div id="cost-basis-table-container">
+                                                <div class="text-center text-muted">
+                                                    <i class="fas fa-info-circle me-2"></i>
+                                                    Click on a stock symbol above to view its cost basis
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
+        </div>
         </div>
     </div>
 
@@ -359,13 +538,19 @@
                 <div class="modal-body">
                     <form id="btoForm">
                         <div class="mb-3">
+                            <label for="bto-account" class="form-label">Account</label>
+                            <select class="form-select" id="bto-account" name="accountId" required>
+                                <option value="">Loading accounts...</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
                             <label for="bto-trade-date" class="form-label">Trade Date</label>
-                            <input type="date" class="form-control" id="bto-trade-date" required>
+                            <input type="text" class="form-control" id="bto-trade-date" name="tradeDate" placeholder="DD-MMM-YY" data-display-format="DD-MMM-YY" data-edit-format="MM/DD/YY" onfocus="handleDateInputFocus(this)" onblur="handleDateInputBlur(this)" required>
                         </div>
                         <div class="mb-3">
                             <label for="bto-underlying" class="form-label">Underlying</label>
                             <div style="position: relative;">
-                                <input type="text" class="form-control" id="bto-underlying" placeholder="Type ticker or company name..." autocomplete="off" required>
+                                <input type="text" class="form-control" id="bto-underlying" name="underlying" placeholder="Type ticker or company name..." autocomplete="off" required>
                                 <div id="bto-underlying-suggestions" class="dropdown-menu" style="display: none;"></div>
                             </div>
                         </div>
@@ -373,25 +558,36 @@
                             <label for="bto-purchase-price" class="form-label">Purchase Price</label>
                             <div class="input-group">
                                 <span class="input-group-text">$</span>
-                                <input type="number" class="form-control" id="bto-purchase-price" step="0.01" placeholder="0.00" required>
+                                <input type="number" class="form-control" id="bto-purchase-price" name="purchasePrice" step="0.01" placeholder="0.00" required>
                             </div>
                         </div>
                         <div class="mb-3">
                             <label for="bto-shares" class="form-label">Number of Shares</label>
-                            <input type="number" class="form-control" id="bto-shares" min="1" placeholder="1" required>
+                            <input type="number" class="form-control" id="bto-shares" name="shares" min="1" placeholder="1" required>
                         </div>
                     </form>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-success" onclick="submitBTOForm('addAnother')">
-                        <i class="fas fa-plus me-2"></i>
-                        Add Another
-                    </button>
-                    <button type="button" class="btn btn-primary" onclick="submitBTOForm('addAndClose')">
-                        <i class="fas fa-save me-2"></i>
-                        Add and Close
-                    </button>
+                <div class="modal-footer d-flex flex-column">
+                    <div class="d-flex w-100 mb-2" id="bto-add-buttons">
+                        <button type="button" class="btn btn-success flex-fill me-2" onclick="submitBTOForm('addAnother')">
+                            <i class="fas fa-plus me-2"></i>
+                            Add Another
+                        </button>
+                        <button type="button" class="btn btn-primary flex-fill" onclick="submitBTOForm('addAndClose')">
+                            <i class="fas fa-save me-2"></i>
+                            Add and Close
+                        </button>
+                    </div>
+                    <div class="d-flex justify-content-center w-100" id="bto-add-cancel">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    </div>
+                    <div class="d-flex w-100 mb-2" id="bto-edit-buttons" style="display: none;">
+                        <button type="button" class="btn btn-primary flex-fill me-2" onclick="submitBTOForm('save')">
+                            <i class="fas fa-save me-2"></i>
+                            Save
+                        </button>
+                        <button type="button" class="btn btn-secondary flex-fill" data-bs-dismiss="modal">Cancel</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -411,13 +607,19 @@
                 <div class="modal-body">
                     <form id="stcForm">
                         <div class="mb-3">
+                            <label for="stc-account" class="form-label">Account</label>
+                            <select class="form-select" id="stc-account" name="accountId" required>
+                                <option value="">Loading accounts...</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
                             <label for="stc-trade-date" class="form-label">Trade Date</label>
-                            <input type="date" class="form-control" id="stc-trade-date" required>
+                            <input type="text" class="form-control" id="stc-trade-date" name="tradeDate" placeholder="DD-MMM-YY" data-display-format="DD-MMM-YY" data-edit-format="MM/DD/YY" onfocus="handleDateInputFocus(this)" onblur="handleDateInputBlur(this)" required>
                         </div>
                         <div class="mb-3">
                             <label for="stc-underlying" class="form-label">Underlying</label>
                             <div style="position: relative;">
-                                <input type="text" class="form-control" id="stc-underlying" placeholder="Type ticker or company name..." autocomplete="off" required>
+                                <input type="text" class="form-control" id="stc-underlying" name="underlying" placeholder="Type ticker or company name..." autocomplete="off" required>
                                 <div id="stc-underlying-suggestions" class="dropdown-menu" style="display: none;"></div>
                             </div>
                         </div>
@@ -425,25 +627,36 @@
                             <label for="stc-sale-price" class="form-label">Sale Price</label>
                             <div class="input-group">
                                 <span class="input-group-text">$</span>
-                                <input type="number" class="form-control" id="stc-sale-price" step="0.01" placeholder="0.00" required>
+                                <input type="number" class="form-control" id="stc-sale-price" name="salePrice" step="0.01" placeholder="0.00" required>
                             </div>
                         </div>
                         <div class="mb-3">
                             <label for="stc-shares" class="form-label">Number of Shares</label>
-                            <input type="number" class="form-control" id="stc-shares" min="1" placeholder="1" required>
+                            <input type="number" class="form-control" id="stc-shares" name="shares" min="1" placeholder="1" required>
                         </div>
                     </form>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-success" onclick="submitSTCForm('addAnother')">
-                        <i class="fas fa-plus me-2"></i>
-                        Add Another
-                    </button>
-                    <button type="button" class="btn btn-primary" onclick="submitSTCForm('addAndClose')">
-                        <i class="fas fa-save me-2"></i>
-                        Add and Close
-                    </button>
+                <div class="modal-footer d-flex flex-column">
+                    <div class="d-flex w-100 mb-2" id="stc-add-buttons">
+                        <button type="button" class="btn btn-success flex-fill me-2" onclick="submitSTCForm('addAnother')">
+                            <i class="fas fa-plus me-2"></i>
+                            Add Another
+                        </button>
+                        <button type="button" class="btn btn-primary flex-fill" onclick="submitSTCForm('addAndClose')">
+                            <i class="fas fa-save me-2"></i>
+                            Add and Close
+                        </button>
+                    </div>
+                    <div class="d-flex justify-content-center w-100" id="stc-add-cancel">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    </div>
+                    <div class="d-flex w-100 mb-2" id="stc-edit-buttons" style="display: none;">
+                        <button type="button" class="btn btn-primary flex-fill me-2" onclick="submitSTCForm('save')">
+                            <i class="fas fa-save me-2"></i>
+                            Save
+                        </button>
+                        <button type="button" class="btn btn-secondary flex-fill" data-bs-dismiss="modal">Cancel</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -463,13 +676,19 @@
                 <div class="modal-body">
                     <form id="roctPutForm">
                         <div class="mb-3">
+                            <label for="roct-put-account" class="form-label">Account</label>
+                            <select class="form-select" id="roct-put-account" name="accountId" required>
+                                <option value="">Loading accounts...</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
                             <label for="roct-put-trade-date" class="form-label">Trade Date</label>
-                            <input type="date" class="form-control" id="roct-put-trade-date" required>
+                            <input type="text" class="form-control" id="roct-put-trade-date" name="tradeDate" placeholder="DD-MMM-YY" data-display-format="DD-MMM-YY" data-edit-format="MM/DD/YY" onfocus="handleDateInputFocus(this)" onblur="handleDateInputBlur(this)" required>
                         </div>
                         <div class="mb-3">
                             <label for="roct-put-underlying" class="form-label">Underlying</label>
                             <div style="position: relative;">
-                                <input type="text" class="form-control" id="roct-put-underlying" placeholder="Type ticker or company name..." autocomplete="off" required>
+                                <input type="text" class="form-control" id="roct-put-underlying" name="underlying" placeholder="Type ticker or company name..." autocomplete="off" required>
                                 <div id="roct-put-underlying-suggestions" class="dropdown-menu" style="display: none;"></div>
                             </div>
                         </div>
@@ -477,43 +696,68 @@
                             <label for="roct-put-price" class="form-label">Price</label>
                             <div class="input-group">
                                 <span class="input-group-text">$</span>
-                                <input type="number" class="form-control" id="roct-put-price" step="0.01" placeholder="0.00" required>
+                                <input type="number" class="form-control" id="roct-put-price" name="price" step="0.01" placeholder="0.00" required>
                             </div>
                         </div>
                         <div class="mb-3">
                             <label for="roct-put-expiration-date" class="form-label">Expiration Date</label>
-                            <input type="date" class="form-control" id="roct-put-expiration-date" required>
+                            <input type="text" class="form-control" id="roct-put-expiration-date" name="expirationDate" placeholder="DD-MMM-YY" data-display-format="DD-MMM-YY" data-edit-format="MM/DD/YY" onfocus="handleDateInputFocus(this)" onblur="handleDateInputBlur(this)" required>
                         </div>
                         <div class="mb-3">
                             <label for="roct-put-dte" class="form-label">DTE</label>
-                            <input type="number" class="form-control" id="roct-put-dte" readonly>
+                            <input type="number" class="form-control" id="roct-put-dte" name="dte" readonly>
                         </div>
                         <div class="mb-3">
                             <label for="roct-put-strike-price" class="form-label">Strike Price</label>
                             <div class="input-group">
                                 <span class="input-group-text">$</span>
-                                <input type="number" class="form-control" id="roct-put-strike-price" step="0.01" placeholder="0.00" required>
+                                <input type="number" class="form-control" id="roct-put-strike-price" name="strikePrice" step="0.01" placeholder="0.00" required>
                             </div>
                         </div>
                         <div class="mb-3">
-                            <label for="roct-put-credit-debit" class="form-label">Credit/Debit</label>
+                            <label for="roct-put-credit-debit" class="form-label">Credit</label>
                             <div class="input-group">
                                 <span class="input-group-text">$</span>
-                                <input type="number" class="form-control" id="roct-put-credit-debit" step="0.01" placeholder="0.00" required>
+                                <input type="number" class="form-control" id="roct-put-credit-debit" name="creditDebit" step="0.01" placeholder="0.00" required>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="roct-put-quantity" class="form-label">Contracts</label>
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="roct-put-quantity" name="num_of_contracts" min="1" placeholder="Number of contracts" required>
                             </div>
                         </div>
                     </form>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-success" onclick="submitROCTPutForm('addAnother')">
-                        <i class="fas fa-plus me-2"></i>
-                        Add Another
-                    </button>
-                    <button type="button" class="btn btn-primary" onclick="submitROCTPutForm('addAndClose')">
-                        <i class="fas fa-save me-2"></i>
-                        Add and Close
-                    </button>
+                <div class="modal-footer d-flex flex-column">
+                    <!-- Add Mode Buttons -->
+                    <div class="d-flex w-100 mb-2" id="roct-put-add-buttons">
+                        <button type="button" class="btn btn-success flex-fill me-2" onclick="submitROCTPutForm('addAnother')">
+                            <i class="fas fa-plus me-2"></i>
+                            Add Another
+                        </button>
+                        <button type="button" class="btn btn-primary flex-fill" onclick="submitROCTPutForm('addAndClose')">
+                            <i class="fas fa-save me-2"></i>
+                            Add and Close
+                        </button>
+                    </div>
+                    <div class="d-flex justify-content-center w-100 mb-2" id="roct-put-add-cancel">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                            <i class="fas fa-times me-2"></i>
+                            Cancel
+                        </button>
+                    </div>
+                    <!-- Edit Mode Buttons -->
+                    <div class="d-flex w-100 mb-2" id="roct-put-edit-buttons" style="display: none !important;">
+                        <button type="button" class="btn btn-primary flex-fill me-2" onclick="submitROCTPutForm('save')">
+                            <i class="fas fa-save me-2"></i>
+                            Save
+                        </button>
+                        <button type="button" class="btn btn-secondary flex-fill" data-bs-dismiss="modal">
+                            <i class="fas fa-times me-2"></i>
+                            Cancel
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -533,8 +777,14 @@
                 <div class="modal-body">
                     <form id="roctCallForm">
                         <div class="mb-3">
+                            <label for="roct-call-account" class="form-label">Account</label>
+                            <select class="form-select" id="roct-call-account" name="accountId" required>
+                                <option value="">Loading accounts...</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
                             <label for="roct-call-trade-date" class="form-label">Trade Date</label>
-                            <input type="date" class="form-control" id="roct-call-trade-date" required>
+                            <input type="text" class="form-control" id="roct-call-trade-date" name="tradeDate" placeholder="DD-MMM-YY" data-display-format="DD-MMM-YY" data-edit-format="MM/DD/YY" onfocus="handleDateInputFocus(this)" onblur="handleDateInputBlur(this)" required>
                         </div>
                         <div class="mb-3">
                             <label for="roct-call-underlying" class="form-label">Underlying</label>
@@ -552,7 +802,7 @@
                         </div>
                         <div class="mb-3">
                             <label for="roct-call-expiration-date" class="form-label">Expiration Date</label>
-                            <input type="date" class="form-control" id="roct-call-expiration-date" required>
+                            <input type="text" class="form-control" id="roct-call-expiration-date" name="expirationDate" placeholder="DD-MMM-YY" data-display-format="DD-MMM-YY" data-edit-format="MM/DD/YY" onfocus="handleDateInputFocus(this)" onblur="handleDateInputBlur(this)" required>
                         </div>
                         <div class="mb-3">
                             <label for="roct-call-dte" class="form-label">DTE</label>
@@ -566,7 +816,7 @@
                             </div>
                         </div>
                         <div class="mb-3">
-                            <label for="roct-call-credit-debit" class="form-label">Credit/Debit</label>
+                            <label for="roct-call-credit-debit" class="form-label">Credit</label>
                             <div class="input-group">
                                 <span class="input-group-text">$</span>
                                 <input type="number" class="form-control" id="roct-call-credit-debit" step="0.01" placeholder="0.00" required>
@@ -582,16 +832,34 @@
                         </div>
                     </form>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-success" onclick="submitROCTCallForm('addAnother')">
-                        <i class="fas fa-plus me-2"></i>
-                        Add Another
-                    </button>
-                    <button type="button" class="btn btn-primary" onclick="submitROCTCallForm('addAndClose')">
-                        <i class="fas fa-save me-2"></i>
-                        Add and Close
-                    </button>
+                <div class="modal-footer d-flex flex-column">
+                    <div class="d-flex w-100 mb-2" id="roct-call-add-buttons">
+                        <button type="button" class="btn btn-success flex-fill me-2" onclick="submitROCTCallForm('addAnother')">
+                            <i class="fas fa-plus me-2"></i>
+                            Add Another
+                        </button>
+                        <button type="button" class="btn btn-primary flex-fill" onclick="submitROCTCallForm('addAndClose')">
+                            <i class="fas fa-save me-2"></i>
+                            Add and Close
+                        </button>
+                    </div>
+                    <div class="d-flex justify-content-center w-100 mb-2" id="roct-call-add-cancel">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                            <i class="fas fa-times me-2"></i>
+                            Cancel
+                        </button>
+                    </div>
+                    <!-- Edit Mode Buttons -->
+                    <div class="d-flex w-100 mb-2" id="roct-call-edit-buttons" style="display: none !important;">
+                        <button type="button" class="btn btn-primary flex-fill me-2" onclick="submitROCTCallForm('save')">
+                            <i class="fas fa-save me-2"></i>
+                            Save
+                        </button>
+                        <button type="button" class="btn btn-secondary flex-fill" data-bs-dismiss="modal">
+                            <i class="fas fa-times me-2"></i>
+                            Cancel
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -600,6 +868,169 @@
     <!-- Alert Container -->
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=275"></script>
+    
+    <script>
+        // Global variable to track current section
+        let currentSection = 'dashboard';
+        let isManualNavigation = false;
+        
+        // Floating navigation scroll function
+        function scrollToSection(sectionId) {
+            const element = document.getElementById(sectionId);
+            if (element) {
+                isManualNavigation = true;
+                element.scrollIntoView({ 
+                    behavior: 'smooth',
+                    block: 'start'
+                });
+            }
+            
+            // Update global currentSection variable
+            const sections = ['dashboard', 'trades', 'cost-basis'];
+            const sectionIndex = sections.indexOf(sectionId);
+            
+            // Update active nav item immediately
+            document.querySelectorAll('.nav-item').forEach((item, index) => {
+                item.classList.remove('active');
+                if (index === sectionIndex) {
+                    item.classList.add('active');
+                }
+            });
+            
+            // Update global variable
+            currentSection = sectionId;
+            
+            // Reset flag after a delay to allow smooth scroll to complete
+            setTimeout(() => {
+                isManualNavigation = false;
+            }, 1000);
+        }
+        
+        // Debug function to check section widths
+        function logSectionWidths() {
+            const dashboard = document.getElementById('dashboard');
+            const trades = document.getElementById('trades');
+            const costBasis = document.getElementById('cost-basis');
+            
+            console.log('Dashboard width:', dashboard ? dashboard.offsetWidth : 'N/A');
+            console.log('Trades width:', trades ? trades.offsetWidth : 'N/A');
+            console.log('Cost Basis width:', costBasis ? costBasis.offsetWidth : 'N/A');
+        }
+        
+        // Log widths when DOM is loaded
+        window.addEventListener('load', function() {
+            setTimeout(logSectionWidths, 1000);
+            
+            // Make floating nav draggable
+            makeFloatingNavDraggable();
+        });
+        
+        // Make floating nav draggable
+        function makeFloatingNavDraggable() {
+            const nav = document.getElementById('floatingNav');
+            let isDragging = false;
+            let currentX;
+            let currentY;
+            let initialX;
+            let initialY;
+            let xOffset = 0;
+            let yOffset = 0;
+            
+            nav.addEventListener('mousedown', dragStart);
+            document.addEventListener('mousemove', drag);
+            document.addEventListener('mouseup', dragEnd);
+            
+            function dragStart(e) {
+                // Don't drag if clicking on nav items (but allow dragging from handle)
+                if (e.target.closest('.nav-item')) {
+                    return;
+                }
+                
+                // Allow dragging from handle or nav background
+                if (e.target.closest('.drag-handle') || e.target === nav || (nav.contains(e.target) && !e.target.closest('.nav-item'))) {
+                    initialX = e.clientX - xOffset;
+                    initialY = e.clientY - yOffset;
+                    isDragging = true;
+                }
+            }
+            
+            function drag(e) {
+                if (isDragging) {
+                    e.preventDefault();
+                    currentX = e.clientX - initialX;
+                    currentY = e.clientY - initialY;
+                    
+                    xOffset = currentX;
+                    yOffset = currentY;
+                    
+                    setTranslate(currentX, currentY, nav);
+                }
+            }
+            
+            function dragEnd(e) {
+                initialX = currentX;
+                initialY = currentY;
+                isDragging = false;
+            }
+            
+            function setTranslate(xPos, yPos, el) {
+                el.style.left = xPos + 'px';
+                el.style.top = yPos + 'px';
+            }
+        }
+        
+        // Update active nav item based on scroll position
+        let lastScrollY = 0;
+        
+        window.addEventListener('scroll', function() {
+            // Don't override manual navigation until it completes
+            if (isManualNavigation) {
+                return;
+            }
+            
+            const sections = ['dashboard', 'trades', 'cost-basis'];
+            const navItems = document.querySelectorAll('.nav-item');
+            
+            const scrollPosition = window.scrollY;
+            const scrollDirection = scrollPosition > lastScrollY ? 'down' : 'up';
+            lastScrollY = scrollPosition;
+            
+            let foundSection = '';
+            const viewportCenter = scrollPosition + window.innerHeight / 2;
+            
+            // Simple approach: check each section from bottom to top
+            for (let i = sections.length - 1; i >= 0; i--) {
+                const sectionId = sections[i];
+                const element = document.getElementById(sectionId);
+                
+                if (element) {
+                    const rect = element.getBoundingClientRect();
+                    const sectionTop = rect.top + scrollPosition;
+                    const sectionBottom = sectionTop + element.offsetHeight;
+                    
+                    // If viewport center is within this section's bounds
+                    if (viewportCenter >= sectionTop && viewportCenter < sectionBottom) {
+                        foundSection = sectionId;
+                        break;
+                    }
+                }
+            }
+            
+            // Update currentSection
+            if (foundSection) {
+                currentSection = foundSection;
+            }
+            
+            // Update active nav item
+            navItems.forEach((item, index) => {
+                item.classList.remove('active');
+                if (sections[index] === currentSection) {
+                    item.classList.add('active');
+                }
+            });
+        });
+    </script>
 </body>
 </html>
+
