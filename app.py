@@ -1332,6 +1332,14 @@ def webhook_deploy():
         
         if result.returncode == 0:
             print(f"Deployment successful: {result.stdout}")
+            
+            # Trigger reload by touching the WSGI file or restarting the task
+            # For PythonAnywhere, touching the WSGI file triggers a reload
+            wsgi_file = '/var/www/stockoptionstracker_pythonanywhere_com_wsgi.py'
+            if os.path.exists(wsgi_file):
+                os.utime(wsgi_file, None)
+                print("Reloaded WSGI application")
+            
             return 'Deployment successful', 200
         else:
             print(f"Deployment failed: {result.stderr}")
