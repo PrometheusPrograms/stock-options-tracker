@@ -1741,7 +1741,7 @@ def webhook_deploy():
             project_dir = current_dir
         else:
             # For PythonAnywhere
-            project_dir = '/home/greenmangroup/stock-options-tracker'
+            project_dir = '/home/greenmangroup/cursor_tracker/stock-options-tracker/stock-options-tracker'
         
         print(f"Deploying from: {project_dir}")
         
