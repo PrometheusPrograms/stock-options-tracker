@@ -5,6 +5,43 @@ body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
+/* ========= Modal Button Visibility ========= */
+#btoForm.add-mode #bto-add-buttons,
+#btoForm.add-mode #bto-add-cancel {
+    display: flex !important;
+}
+
+#btoForm.add-mode #bto-edit-buttons {
+    display: none !important;
+}
+
+#btoForm.edit-mode #bto-edit-buttons {
+    display: flex !important;
+}
+
+#btoForm.edit-mode #bto-add-buttons,
+#btoForm.edit-mode #bto-add-cancel {
+    display: none !important;
+}
+
+#stcForm.add-mode #stc-add-buttons,
+#stcForm.add-mode #stc-add-cancel {
+    display: flex !important;
+}
+
+#stcForm.add-mode #stc-edit-buttons {
+    display: none !important;
+}
+
+#stcForm.edit-mode #stc-edit-buttons {
+    display: flex !important;
+}
+
+#stcForm.edit-mode #stc-add-buttons,
+#stcForm.edit-mode #stc-add-cancel {
+    display: none !important;
+}
+
 /* ========= Global Layout ========= */
 .page-wrapper {
     padding-left: 2rem;
@@ -17,19 +54,19 @@ body {
 /* ========= Header Banner ========= */
 .header-banner {
     position: relative;
-    background-color: #003366; /* example color */
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
-    padding: 1rem 0; /* vertical padding only */
+    padding: 2rem 0; /* Increased by 10px */
     border-radius: 8px 8px 0 0; /* rounded top only when sticky */
-    margin-bottom: 0; /* no margin */
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    margin-bottom: 0; /* No margin - spacing controlled by section mt-5 */
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
 .header-banner-wrapper {
     position: sticky;
     top: 0;
     z-index: 999;
-    padding-bottom: 2rem;
+    padding-bottom: 2.25rem; /* 25% reduction from 3rem */
     background-color: #ffffff;
     width: calc(100% + 20px);
     margin-left: -10px;
@@ -47,6 +84,15 @@ body {
 #trades,
 #cost-basis {
     border: 1px solid black !important;
+}
+
+/* Ensure no border on body or page wrapper */
+body {
+    border: none !important;
+}
+
+.page-wrapper {
+    border: none !important;
 }
 
 /* ========= Bootstrap Adjustments ========= */
@@ -445,14 +491,6 @@ body {
     box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075) !important;
 }
 
-/* Header Banner */
-.header-banner {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    padding: 1.5rem 0;
-    margin-bottom: 2rem;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-}
 
 .header-banner h1 {
     color: white;

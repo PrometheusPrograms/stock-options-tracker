@@ -17,29 +17,101 @@ function formatCurrency(amount) {
     return amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 }
 
+// ============================================================================
+// STANDARDIZED DATE UTILITIES
+// ============================================================================
+
+/**
+ * Convert date from database format (YYYY-MM-DD) to DD-MMM-YY format
+ */
 function formatDate(dateString) {
     if (!dateString) return '';
-    // Parse date string directly without timezone conversion
-    const parts = dateString.split(/[-T]/);
-    if (parts.length >= 3) {
-        const year = parseInt(parts[0]);
-        const month = parseInt(parts[1]) - 1; // JavaScript months are 0-indexed
-        const day = parseInt(parts[2]);
-        const date = new Date(year, month, day);
-        
-        const dayStr = date.getDate().toString().padStart(2, '0');
-        const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-        const monthStr = monthNames[date.getMonth()];
-        const yearStr = date.getFullYear().toString().slice(-2);
-        return `${dayStr}-${monthStr}-${yearStr}`;
+    
+    try {
+        // Parse date string directly without timezone conversion
+        const parts = dateString.split(/[-T]/);
+        if (parts.length >= 3) {
+            const year = parseInt(parts[0]);
+            const month = parseInt(parts[1]) - 1; // JavaScript months are 0-indexed
+            const day = parseInt(parts[2]);
+            const date = new Date(year, month, day);
+            
+            const dayStr = date.getDate().toString().padStart(2, '0');
+            const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+            const monthStr = monthNames[date.getMonth()];
+            const yearStr = date.getFullYear().toString().slice(-2);
+            return `${dayStr}-${monthStr}-${yearStr}`;
+        }
+    } catch (e) {
+        console.error('Error formatting date:', e);
     }
-    // Fallback for unexpected format
-    const date = new Date(dateString);
-    const day = date.getDate().toString().padStart(2, '0');
-    const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-    const month = monthNames[date.getMonth()];
-    const year = date.getFullYear().toString().slice(-2);
-    return `${day}-${month}-${year}`;
+    
+    return dateString;
+}
+
+/**
+ * Convert date from database format (YYYY-MM-DD) to display format using browser locale
+ */
+function formatDateLocale(dateString) {
+    if (!dateString) return '';
+    
+    try {
+        // Parse date string directly without timezone conversion
+        const parts = dateString.split(/[-T]/);
+        if (parts.length >= 3) {
+            const year = parseInt(parts[0]);
+            const month = parseInt(parts[1]) - 1; // JavaScript months are 0-indexed
+            const day = parseInt(parts[2]);
+            const date = new Date(year, month, day);
+            
+            // Use browser's locale for date formatting
+            const options = { year: '2-digit', month: 'short', day: '2-digit' };
+            return date.toLocaleDateString(undefined, options);
+        }
+    } catch (e) {
+        console.error('Error formatting date:', e);
+    }
+    
+    return dateString;
+}
+
+/**
+ * Convert date from display format back to database format (YYYY-MM-DD)
+ */
+function parseDisplayDate(displayDate) {
+    if (!displayDate) return '';
+    
+    try {
+        // Primary: Try DD-MMM-YY format (e.g., "26-OCT-25")
+        const dateParts = displayDate.split(/[-\s,]/);
+        if (dateParts.length >= 3) {
+            const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
+                               'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+            const month = dateParts[1].toLowerCase();
+            let monthIndex = monthNames.indexOf(month);
+            if (monthIndex >= 12) monthIndex -= 12; // Handle full month names
+            if (monthIndex >= 0) {
+                const day = String(parseInt(dateParts[0])).padStart(2, '0');
+                const year = '20' + dateParts[2].slice(-2); // Assume 20XX
+                const monthNum = String(monthIndex + 1).padStart(2, '0');
+                return `${year}-${monthNum}-${day}`;
+            }
+        }
+        
+        // Fallback: Try parsing as Date object (for locale-aware formats)
+        const date = new Date(displayDate);
+        if (!isNaN(date.getTime())) {
+            // Valid date, format as YYYY-MM-DD
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+    } catch (e) {
+        console.error('Error parsing display date:', e);
+    }
+    
+    return displayDate;
 }
 
 async function getCompanyName(ticker) {
@@ -78,46 +150,28 @@ async function submitTradeForm(formType, action = 'addAndClose') {
         data.currentPrice = data.price || data.currentPrice;
         data.tradeType = formType.toUpperCase();
         
-        // Convert dates from DD-MMM-YY to YYYY-MM-DD format
+        // Convert dates from display format to YYYY-MM-DD format
         if (data.tradeDate) {
-            try {
-                const dateParts = data.tradeDate.split('-');
-                if (dateParts.length === 3) {
-                    const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-                    const monthIndex = monthNames.indexOf(dateParts[1].toUpperCase());
-                    if (monthIndex !== -1) {
-                        const year = 2000 + parseInt(dateParts[2]);
-                        const month = (monthIndex + 1).toString().padStart(2, '0');
-                        const day = dateParts[0].padStart(2, '0');
-                        data.tradeDate = `${year}-${month}-${day}`;
-                    }
-                }
-            } catch (e) {
-                console.error('Error parsing tradeDate:', e);
-            }
+            data.tradeDate = parseDisplayDate(data.tradeDate);
         }
         
         if (data.expirationDate) {
-            try {
-                const dateParts = data.expirationDate.split('-');
-                if (dateParts.length === 3) {
-                    const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-                    const monthIndex = monthNames.indexOf(dateParts[1].toUpperCase());
-                    if (monthIndex !== -1) {
-                        const year = 2000 + parseInt(dateParts[2]);
-                        const month = (monthIndex + 1).toString().padStart(2, '0');
-                        const day = dateParts[0].padStart(2, '0');
-                        data.expirationDate = `${year}-${month}-${day}`;
-                    }
-                }
-            } catch (e) {
-                console.error('Error parsing expirationDate:', e);
-            }
+            data.expirationDate = parseDisplayDate(data.expirationDate);
         }
-    } else if (formType === 'STC') {
-        data.tradeType = 'STC';
-    } else if (formType === 'BTO') {
-        data.tradeType = 'BTO';
+    } else if (formType === 'bto' || formType === 'stc') {
+        // Map BTO/STC fields to backend expected format
+        data.ticker = data.underlying || data.ticker;
+        data.premium = data.purchasePrice || data.salePrice || data.premium;
+        data.currentPrice = data.purchasePrice || data.salePrice || data.currentPrice;
+        data.num_of_contracts = data.shares || data.num_of_contracts;
+        
+        // Convert date from display format to YYYY-MM-DD format
+        if (data.tradeDate) {
+            data.tradeDate = parseDisplayDate(data.tradeDate);
+        }
+        
+        data.expirationDate = data.tradeDate || data.expirationDate;
+        data.tradeType = formType.toUpperCase();
     } else {
         data.tradeType = formType;
     }
@@ -451,8 +505,47 @@ function setupDTECalculation(tradeDateId, expirationDateId, dteId) {
         }
     }
     
+    // Auto-set expiration date to 8 days from trade date when trade date changes
+    function updateExpirationDate() {
+        const tradeDate = tradeDateField.value;
+        
+        // Only auto-update if expiration date is empty or if in add mode (not edit mode)
+        const form = tradeDateField.closest('form');
+        const isEditMode = form && form.hasAttribute('data-editing-trade-id');
+        
+        if (tradeDate && !isEditMode) {
+            try {
+                // Parse the trade date (DD-MMM-YY format)
+                const tradeDateParsed = parseDateInput(tradeDate);
+                if (tradeDateParsed) {
+                    const tradeDateObj = new Date(tradeDateParsed);
+                    
+                    // Add 8 days
+                    const expirationDateObj = new Date(tradeDateObj);
+                    expirationDateObj.setDate(tradeDateObj.getDate() + 8);
+                    
+                    // Format as DD-MMM-YY
+                    const expDateFormatted = formatDate(expirationDateObj.toISOString().split('T')[0]);
+                    
+                    // Only update if expiration field is empty
+                    if (!expirationDateField.value) {
+                        expirationDateField.value = expDateFormatted;
+                    }
+                    
+                    // Recalculate DTE
+                    calculateDTE();
+                }
+            } catch (error) {
+                console.error('Error auto-setting expiration date:', error);
+            }
+        }
+    }
+    
     // Add event listeners
-    tradeDateField.addEventListener('change', calculateDTE);
+    tradeDateField.addEventListener('change', function() {
+        updateExpirationDate();
+        calculateDTE();
+    });
     expirationDateField.addEventListener('change', calculateDTE);
     
     // Calculate initial DTE if both fields have values
@@ -873,6 +966,7 @@ function updateBankrollChart(totalBankroll, availableBankroll, usedBankroll, bre
     const width = 450;
     const height = 450;
     const radius = Math.min(width, height) / 2;
+    const innerRadius = radius * 0.4;
     
     // Create SVG
     const svg = d3.select(container)
@@ -883,83 +977,41 @@ function updateBankrollChart(totalBankroll, availableBankroll, usedBankroll, bre
     const g = svg.append("g")
         .attr("transform", `translate(${width/2},${height/2})`);
     
-    // Calculate unused bankroll (total minus used)
-    const unusedBankroll = totalBankroll - usedBankroll;
+    // Simple pie chart data - just show the total available bankroll
+    const pie = d3.pie()
+        .value(d => d.value)
+        .sort(null);
     
-    // Create children for "Used" segment - if we have breakdown data
-    let usedChildren = [{ name: "Used", value: usedBankroll }];
+    // Simple data - just the total bankroll
+    const data = [
+        { name: "Total Bankroll", value: totalBankroll }
+    ];
     
-    // If breakdown data is available, create hierarchical structure for "Used"
-    if (breakdown && Object.keys(breakdown).length > 0) {
-        const breakdownChildren = Object.keys(breakdown).map(tradeType => ({
-            name: tradeType,
-            value: Math.abs(breakdown[tradeType].margin_capital)
-        }));
-        
-        if (breakdownChildren.length > 0) {
-            usedChildren = [{
-                name: "Used",
-                children: breakdownChildren
-            }];
-        }
-    }
+    const arcs = pie(data);
     
-    // Create data for bankroll with hierarchical segments
-    const data = {
-        name: "Bankroll",
-        children: [
-            ...usedChildren,
-            { name: "Available", value: availableBankroll },
-            { name: "Unused", value: unusedBankroll }
-        ]
-    };
-    
-    // Create partition layout - adjust for hierarchical display
-    const partition = d3.partition()
-        .size([2 * Math.PI, radius])
-        .padding(0.05); // Add padding between segments
-    
-    // Create hierarchy
-    const root = d3.hierarchy(data)
-        .sum(d => d.value);
-    
-    partition(root);
-    
-    // Dynamic color scale based on breakdown
-    const colors = {
-        "Used": "#dc3545",
-        "Available": "#28a745",
-        "Unused": "#6c757d",
-        "AAPL ROCT PUT": "#ff6384",
-        "RIVN ROCT PUT": "#ff9f40",
-        "TSLA ROCT CALL": "#ffcd56",
-        "MSFT ROCT PUT": "#4bc0c0",
-        "NVDA ROCT PUT": "#9966ff",
-        "META ROCT PUT": "#ff6384"
-    };
-    
-    const color = d => colors[d.data.name] || "#6c757d";
-    
-    // Create arcs
+    // Create arc paths
     const arc = d3.arc()
-        .startAngle(d => d.x0)
-        .endAngle(d => d.x1)
-        .innerRadius(d => d.y0)
-        .outerRadius(d => d.y1);
+        .innerRadius(innerRadius)
+        .outerRadius(radius);
     
-    // Add arcs to chart
-    const paths = g.selectAll("path")
-        .data(root.descendants())
+    // Add the donut segment
+    g.selectAll("path")
+        .data(arcs)
         .enter()
         .append("path")
         .attr("d", arc)
-        .style("fill", d => d.depth === 0 ? "#6c757d" : color(d))
+        .style("fill", "#28a745")
         .style("stroke", "#fff")
-        .style("stroke-width", d => d.depth === 0 ? 0 : 1.5)
-        .style("opacity", d => d.depth === 1 ? 1 : 0.9)
-        .style("cursor", "pointer")
-        .attr("class", d => `bankroll-segment depth-${d.depth}`)
-        .attr("title", d => `${d.data.name}: $${formatCurrency(d.value)}`);
+        .style("stroke-width", 2);
+    
+    // Add text in the center showing the total amount
+    g.append("text")
+        .attr("text-anchor", "middle")
+        .attr("dy", "0.35em")
+        .attr("class", "h5")
+        .style("fill", "#333")
+        .style("font-weight", "bold")
+        .text(`$${formatCurrency(totalBankroll)}`);
     
     // Update legend values
     document.getElementById('bankroll-available').textContent = `$${formatCurrency(availableBankroll)}`;
@@ -1124,6 +1176,17 @@ function parseDateInput(inputValue) {
             }
         }
         
+        // Handle MM/DD format (assume current year)
+        if (inputValue.includes('/') && inputValue.length <= 5) {
+            const parts = inputValue.split('/');
+            if (parts.length === 2) {
+                const currentYear = new Date().getFullYear();
+                const month = parts[0].padStart(2, '0');
+                const day = parts[1].padStart(2, '0');
+                return `${currentYear}-${month}-${day}`;
+            }
+        }
+        
         // Handle YYYY-MM-DD format (already correct)
         if (inputValue.includes('-') && inputValue.length === 10) {
             return inputValue;
@@ -1178,43 +1241,39 @@ async function updateTradeDate(tradeId, field, inputValue) {
 }
 
 function handleDateInputFocus(inputElement) {
-    // Convert DD-MMM-YY to MM/DD/YY for editing
-    const currentValue = inputElement.value;
-    if (currentValue && currentValue.includes('-') && currentValue.length === 8) {
-        // Parse DD-MMM-YY format
-        const parts = currentValue.split('-');
-        if (parts.length === 3) {
-            const day = parts[0];
-            const month = parts[1];
-            const year = parts[2];
-            
-            // Convert month name to number
-            const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 
-                              'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-            const monthNum = monthNames.indexOf(month.toUpperCase());
-            if (monthNum !== -1) {
-                const monthStr = (monthNum + 1).toString().padStart(2, '0');
-                inputElement.value = `${monthStr}/${day}/${year}`;
-                inputElement.placeholder = 'MM/DD/YY';
-            }
-        }
+    // Store the original value before clearing
+    if (!inputElement.dataset.originalValue) {
+        inputElement.dataset.originalValue = inputElement.value;
     }
-    // Select all text for easy editing
-    inputElement.select();
+    
+    // Clear the input
+    inputElement.value = '';
+    inputElement.placeholder = 'MM/DD';
 }
 
 function handleDateInputBlur(inputElement) {
-    // Convert MM/DD/YY back to DD-MMM-YY for display
-    const currentValue = inputElement.value;
-    if (currentValue && currentValue.includes('/') && currentValue.length === 8) {
-        // Parse MM/DD/YY format
+    const currentValue = inputElement.value.trim();
+    
+    // If empty, restore the original value
+    if (!currentValue) {
+        inputElement.value = inputElement.dataset.originalValue || '';
+        inputElement.placeholder = 'DD-MMM-YY';
+        delete inputElement.dataset.originalValue;
+        return;
+    }
+    
+    // Clear the original value flag since we have a new value
+    delete inputElement.dataset.originalValue;
+    
+    // Parse MM/DD format (assume current year)
+    if (currentValue.includes('/')) {
         const parts = currentValue.split('/');
-        if (parts.length === 3) {
-            const month = parts[0];
-            const day = parts[1];
-            const year = parts[2];
+        if (parts.length === 2) {
+            const month = parts[0].padStart(2, '0');
+            const day = parts[1].padStart(2, '0');
+            const year = new Date().getFullYear().toString().slice(-2);
             
-            // Convert month number to name
+            // Convert to DD-MMM-YY for display
             const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 
                               'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
             const monthIndex = parseInt(month) - 1;
@@ -1222,19 +1281,31 @@ function handleDateInputBlur(inputElement) {
                 const monthName = monthNames[monthIndex];
                 inputElement.value = `${day}-${monthName}-${year}`;
                 inputElement.placeholder = 'DD-MMM-YY';
+                return;
+            }
+        } else if (parts.length === 3) {
+            // Handle MM/DD/YY format
+            const month = parts[0];
+            const day = parts[1];
+            const year = parts[2];
+            
+            const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 
+                              'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+            const monthIndex = parseInt(month) - 1;
+            if (monthIndex >= 0 && monthIndex < 12) {
+                const monthName = monthNames[monthIndex];
+                inputElement.value = `${day}-${monthName}-${year}`;
+                inputElement.placeholder = 'DD-MMM-YY';
+                return;
             }
         }
-    } else if (!currentValue) {
-        // If empty, set to today's date in DD-MMM-YY format
-        const today = new Date();
-        const day = today.getDate().toString().padStart(2, '0');
-        const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 
-                          'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-        const month = monthNames[today.getMonth()];
-        const year = today.getFullYear().toString().slice(-2);
-        inputElement.value = `${day}-${month}-${year}`;
-        inputElement.placeholder = 'DD-MMM-YY';
     }
+    
+    // If value couldn't be parsed, restore original
+    if (currentValue !== inputElement.dataset.originalValue) {
+        inputElement.value = inputElement.dataset.originalValue || '';
+    }
+    inputElement.placeholder = 'DD-MMM-YY';
 }
 
 function getTodayInDDMMMYY() {
@@ -1411,7 +1482,9 @@ function updateTradesTable() {
                     const today = new Date();
                     const expirationDate = new Date(trade.expiration_date);
                     const isExpired = trade.status === 'open' && today > expirationDate;
-                    cellContent = `<div style="text-align: center; white-space: normal; word-wrap: break-word; vertical-align: top;"><strong>${isExpired ? '<i class="fas fa-exclamation-triangle text-danger me-1" title="Expired"></i>' : ''}<span class="clickable-symbol" onclick="filterBySymbol('${trade.ticker}')" style="cursor: pointer; color: #007bff; text-decoration: underline;">${trade.ticker}</span> ${tradeType}</strong></div>`;
+                    // Use type_name from trade_types table if available, otherwise use trade.ticker + tradeType
+                    const displayType = trade.type_name ? `${trade.ticker} ${trade.type_name}` : `${trade.ticker} ${tradeType}`;
+                    cellContent = `<div style="text-align: center; white-space: normal; word-wrap: break-word; vertical-align: top;"><strong>${isExpired ? '<i class="fas fa-exclamation-triangle text-danger me-1" title="Expired"></i>' : ''}<span class="clickable-symbol" onclick="filterBySymbol('${trade.ticker}')" style="cursor: pointer; color: #007bff; text-decoration: underline;">${displayType}</span></strong></div>`;
                     break;
                 case 1: // Trade Date (moved to second row) - Custom date input
                     const tradeDateDisplay = formatDate(trade.trade_date || trade.created_at);
@@ -1624,13 +1697,13 @@ function updateCostBasisTable(costBasisData) {
                     <table class="table table-sm table-striped">
                         <thead class="table-dark">
                             <tr>
-                                <th>Trade Description</th>
-                                <th class="text-end">Trade Date</th>
-                                <th class="text-end">Shares</th>
-                                <th class="text-end">Cost</th>
-                                <th class="text-end">Amount</th>
-                                <th class="text-end">Basis</th>
-                                <th class="text-end">Basis/Share</th>
+                                <th class="text-center align-middle" style="width: 8%;">Trade Date</th>
+                                <th class="text-start align-middle" style="width: 25%;">Trade Description</th>
+                                <th class="text-end align-middle">Shares</th>
+                                <th class="text-end align-middle">Cost</th>
+                                <th class="text-end align-middle">Amount</th>
+                                <th class="text-end align-middle">Basis</th>
+                                <th class="text-end align-middle">Basis/Share</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1638,19 +1711,79 @@ function updateCostBasisTable(costBasisData) {
         
         // Add each trade as a row
         trades.forEach(trade => {
-            // Check if this is an assigned trade
-            const isAssigned = trade.trade_description && trade.trade_description.toUpperCase().includes('ASSIGNED');
-            const rowStyle = isAssigned ? 'style="background-color: #fff3cd;"' : '';
+            // Format numbers with parentheses for negative values
+            const formatNumber = (value, isCurrency = false) => {
+                if (value === null || value === undefined) return '';
+                if (value === 0) return '0'; // Special case for zero values
+                const formatted = value.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                if (value < 0) {
+                    return `($${formatted.replace('-', '')})`;
+                }
+                return `$${formatted}`;
+            };
+            
+            const formatShares = (value) => {
+                if (value === null || value === undefined) return '0';
+                if (value === 0) return '0'; // Special case for zero values
+                const formatted = value.toLocaleString();
+                if (value < 0) {
+                    return `(${formatted.replace('-', '')})`;
+                }
+                return formatted;
+            };
+            
+            // Determine if value is zero for styling
+            const isSharesZero = trade.shares === 0 || trade.shares === null || trade.shares === undefined;
+            const isCostZero = trade.cost_per_share === 0 || trade.cost_per_share === null || trade.cost_per_share === undefined;
+            const isAmountZero = trade.amount === 0 || trade.amount === null || trade.amount === undefined;
+            const isBasisZero = trade.running_basis === 0 || trade.running_basis === null || trade.running_basis === undefined;
+            const isBasisPerShareZero = trade.running_basis_per_share === 0 || trade.running_basis_per_share === null || trade.running_basis_per_share === undefined;
+            
+            const sharesClass = trade.shares < 0 ? 'text-danger' : '';
+            const runningBasisClass = trade.running_basis < 0 ? 'text-danger' : '';
+            const runningBasisPerShareClass = trade.running_basis_per_share < 0 ? 'text-danger' : '';
+            const costClass = trade.cost_per_share < 0 ? 'text-danger' : '';
+            const amountClass = trade.amount < 0 ? 'text-danger' : '';
+            
+            // Apply color coding based on status and trade type (from backup)
+            const tradeType = trade.trade_description || '';
+            const status = trade.status || 'open';
+            let bgColor = '';
+            
+            // Check if this is an expired or assigned trade from the description
+            const isAssignedDescription = tradeType.toUpperCase().includes('ASSIGNED');
+            const isExpired = status === 'expired' || (tradeType.toUpperCase().includes('EXPIRED') && !isAssignedDescription);
+            const isAssigned = status === 'assigned' && !isAssignedDescription;  // Only highlight if it's from trade status, not description
+            const isPut = tradeType.toLowerCase().includes('put') || tradeType.toLowerCase().includes('bought');
+            const isCall = tradeType.toLowerCase().includes('call') || tradeType.toLowerCase().includes('sold');
+            
+            // Color code for roll, expired, and assigned trades (from backup)
+            // Don't color code entries with "ASSIGNED" in the description (those are the cost basis entries we created)
+            if (!isAssignedDescription) {
+                if (status === 'roll' || tradeType.toUpperCase().includes('ROLL')) {
+                    bgColor = 'background-color: #FFF2CC;';
+                } else if (isExpired && isPut) {
+                    bgColor = 'background-color: #C6E0B4;';
+                } else if (isAssigned && isPut) {
+                    bgColor = 'background-color: #A9D08F;';
+                } else if (isAssigned && isCall) {
+                    bgColor = 'background-color: #9BC2E6;';
+                } else if (isExpired && isCall) {
+                    bgColor = 'background-color: #DEEAF7;';
+                }
+            }
+            
+            const rowStyle = bgColor ? `style="${bgColor}"` : '';
             
             html += `
                 <tr ${rowStyle}>
-                    <td ${isAssigned ? 'style="font-weight: bold; color: #856404;"' : ''}>${trade.trade_description || ''}</td>
-                    <td class="text-end">${formatDate(trade.trade_date)}</td>
-                    <td class="text-end ${trade.shares < 0 ? 'text-danger' : ''}">${trade.shares < 0 ? `(${Math.abs(trade.shares).toLocaleString()})` : trade.shares.toLocaleString()}</td>
-                    <td class="text-end">${trade.cost_per_share ? `$${trade.cost_per_share.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : ''}</td>
-                    <td class="text-end ${trade.amount < 0 ? 'text-danger' : ''}">${trade.amount < 0 ? `($${Math.abs(trade.amount).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${trade.amount.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</td>
-                    <td class="text-end ${trade.running_basis < 0 ? 'text-danger' : ''}">${trade.running_basis < 0 ? `($${Math.abs(trade.running_basis).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${trade.running_basis.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</td>
-                    <td class="text-end ${trade.running_basis_per_share < 0 ? 'text-danger' : ''}">${trade.running_basis_per_share < 0 ? `($${Math.abs(trade.running_basis_per_share).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${trade.running_basis_per_share.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</td>
+                    <td class="text-center align-middle">${formatDate(trade.trade_date)}</td>
+                    <td class="text-start align-middle" style="width: 25%; word-wrap: break-word; overflow-wrap: break-word;">${trade.trade_description || ''}</td>
+                    <td class="text-end align-middle ${sharesClass}" style="${isSharesZero ? 'color: transparent;' : ''}">${formatShares(trade.shares || 0)}</td>
+                    <td class="text-end align-middle ${costClass}" style="${isCostZero ? 'color: transparent;' : ''}">${formatNumber(trade.cost_per_share || 0)}</td>
+                    <td class="text-end align-middle ${amountClass}" style="${isAmountZero ? 'color: transparent;' : ''}">${formatNumber(trade.amount || 0)}</td>
+                    <td class="text-end align-middle ${runningBasisClass}">${formatNumber(trade.running_basis)}</td>
+                    <td class="text-end align-middle ${runningBasisPerShareClass}">${formatNumber(trade.running_basis_per_share)}</td>
                 </tr>
             `;
         });
@@ -1975,7 +2108,9 @@ async function updateTradeStatus(tradeId, newStatus) {
         if (result.success) {
             await loadTrades();
             loadSummary();
-            await loadCostBasis();
+            // Reload cost basis with the selected ticker if one is set
+            const selectedTicker = window.symbolFilter || document.getElementById('symbol-filter')?.value || '';
+            await loadCostBasis(selectedTicker);
         } else {
             alert('Failed to update trade status: ' + result.error);
         }
@@ -2513,6 +2648,9 @@ function openBTOModal(tradeData = null) {
         // Show edit buttons, hide add buttons and cancel
         form.classList.remove('add-mode');
         form.classList.add('edit-mode');
+        document.getElementById('bto-edit-buttons').style.cssText = 'display: flex !important;';
+        document.getElementById('bto-add-buttons').style.cssText = 'display: none !important;';
+        document.getElementById('bto-add-cancel').style.cssText = 'display: none !important;';
     } else {
         console.log('Creating new BTO trade');
         
@@ -2526,6 +2664,9 @@ function openBTOModal(tradeData = null) {
         // Show add buttons, hide edit buttons
         form.classList.remove('edit-mode');
         form.classList.add('add-mode');
+        document.getElementById('bto-edit-buttons').style.cssText = 'display: none !important;';
+        document.getElementById('bto-add-buttons').style.cssText = 'display: flex !important;';
+        document.getElementById('bto-add-cancel').style.cssText = 'display: flex !important;';
     }
     
     // Setup autocomplete
@@ -2572,6 +2713,9 @@ function openSTCModal(tradeData = null) {
         // Show edit buttons, hide add buttons
         form.classList.remove('add-mode');
         form.classList.add('edit-mode');
+        document.getElementById('stc-edit-buttons').style.cssText = 'display: flex !important;';
+        document.getElementById('stc-add-buttons').style.cssText = 'display: none !important;';
+        document.getElementById('stc-add-cancel').style.cssText = 'display: none !important;';
     } else {
         console.log('Creating new STC trade');
         
@@ -2585,6 +2729,9 @@ function openSTCModal(tradeData = null) {
         // Show add buttons, hide edit buttons
         form.classList.remove('edit-mode');
         form.classList.add('add-mode');
+        document.getElementById('stc-edit-buttons').style.cssText = 'display: none !important;';
+        document.getElementById('stc-add-buttons').style.cssText = 'display: flex !important;';
+        document.getElementById('stc-add-cancel').style.cssText = 'display: flex !important;';
     }
     
     // Setup autocomplete
@@ -3137,3 +3284,4 @@ function logDetailedSectionInfo() {
 window.addEventListener('load', function() {
     setTimeout(logDetailedSectionInfo, 1000);
 });
+

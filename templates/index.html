@@ -9,7 +9,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=94">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=115">
     <style>
         .floating-nav {
             position: fixed;
@@ -108,17 +108,11 @@
     <div class="page-wrapper">
         <!-- Header Banner -->
         <div class="header-banner-wrapper">
-            <div class="header-banner">
-            <div class="row align-items-center">
-                <div class="col-12">
-                    <div class="d-flex justify-content-center align-items-center position-relative" style="min-height: 100%;">
-                        <h1 class="text-center mb-0" style="line-height: 1;">
-                            🔥🔥🔥🔥 Tracker
-                        </h1>
-                        <i class="fas fa-cog text-white header-settings-icon position-absolute" onclick="toggleCommissionSettings()" title="Commission Settings" style="right: 20px; top: 50%; transform: translateY(-50%); cursor: pointer; font-size: 1.5rem;"></i>
-                    </div>
-                </div>
-            </div>
+            <div class="header-banner d-flex justify-content-center align-items-center position-relative">
+                <h1 class="text-center mb-0">
+                    🔥🔥🔥🔥 Tracker
+                </h1>
+                <i class="fas fa-cog text-white header-settings-icon position-absolute" onclick="toggleCommissionSettings()" title="Commission Settings" style="right: 20px; top: 50%; transform: translateY(-50%); cursor: pointer; font-size: 2.25rem;"></i>
             </div>
         </div>
         
@@ -159,30 +153,31 @@
         </div>
 
         <!-- Dashboard Cards and Chart (Full Width) -->
-        <div class="row mb-5">
-            <div class="col-12">
-                <div class="card mb-3" id="dashboard">
+        <div class="container-fluid px-0">
+            <div class="row mb-5">
+                <div class="col-12">
+                    <div class="card" id="dashboard" style="width: 100%;">
                     <div class="card-header bg-info text-white">
                         <div class="d-flex align-items-center justify-content-between">
                             <div class="d-flex align-items-center">
                                 <i class="fas fa-chevron-down section-toggle-icon" id="dashboardToggleIcon" data-bs-toggle="collapse" data-bs-target="#dashboardCollapse" aria-expanded="true" aria-controls="dashboardCollapse"></i>
-                                <h5 class="mb-0 dashboard-title">
+                                <h5 class="mb-0 dashboard-title" style="font-size: 1.875rem; font-weight: bold;">
                                     <i class="fas fa-tachometer-alt me-2"></i>
                                     Dashboard
                                 </h5>
-                                <div class="d-flex align-items-center dashboard-controls">
-                                    <div class="d-flex align-items-center me-2">
+                                <div class="d-flex align-items-center dashboard-controls" style="gap: 2px;">
+                                    <div class="d-flex align-items-center">
                                         <label for="dashboard-start-date" class="form-label form-label-sm text-white me-1 mb-0">Start</label>
                                         <input type="date" class="form-control form-control-sm dashboard-date-input" id="dashboard-start-date">
                                     </div>
-                                    <div class="d-flex align-items-center me-2">
+                                    <div class="d-flex align-items-center">
                                         <label for="dashboard-end-date" class="form-label form-label-sm text-white me-1 mb-0">End</label>
                                         <input type="date" class="form-control form-control-sm dashboard-date-input" id="dashboard-end-date">
                                     </div>
-                                    <button class="btn btn-sm btn-outline-light me-1" onclick="setDashboardPeriod('week')">1W</button>
-                                    <button class="btn btn-sm btn-outline-light me-1" onclick="setDashboardPeriod('month')">1M</button>
-                                    <button class="btn btn-sm btn-outline-light me-1" onclick="setDashboardPeriod('year')">1Y</button>
-                                    <button class="btn btn-sm btn-outline-light me-1" onclick="setDashboardPeriod('ytd')">YTD</button>
+                                    <button class="btn btn-sm btn-outline-light" onclick="setDashboardPeriod('week')">1W</button>
+                                    <button class="btn btn-sm btn-outline-light" onclick="setDashboardPeriod('month')">1M</button>
+                                    <button class="btn btn-sm btn-outline-light" onclick="setDashboardPeriod('year')">1Y</button>
+                                    <button class="btn btn-sm btn-outline-light" onclick="setDashboardPeriod('ytd')">YTD</button>
                                     <button class="btn btn-sm btn-outline-light" onclick="clearDashboardFilters()">Clear</button>
                                 </div>
                             </div>
@@ -339,22 +334,53 @@
                         </div>
                     </div>
                 </div>
+                        </div>
+                    </div>
+                </div>
+                </div>
             </div>
+        </div>
         </div>
 
         <!-- Trades Section -->
-        <div class="row mb-5">
-            <div class="col-12">
-                <div class="card mb-3" id="trades">
+        <div class="container-fluid px-0">
+            <div class="row mb-5" style="margin-top: 2.25rem;">
+                <div class="col-12">
+                    <div class="card" id="trades" style="width: 100%;">
                     <div class="card-header bg-success text-white">
                         <div class="d-flex align-items-center justify-content-between">
                             <div class="d-flex align-items-center">
                                 <i class="fas fa-chevron-down section-toggle-icon" id="tradesToggleIcon" data-bs-toggle="collapse" data-bs-target="#tradesCollapse" aria-expanded="true" aria-controls="tradesCollapse"></i>
-                                <h5 class="mb-0 trades-title">
+                                <h5 class="mb-0 trades-title" style="font-size: 1.875rem; font-weight: bold;">
                                     <i class="fas fa-chart-line me-2"></i>
                                     Trades
                                 </h5>
-                                <div class="d-flex align-items-center dashboard-controls"></div>
+                                <div class="d-flex align-items-center ms-3" style="gap: 2px;">
+                                    <input type="text" class="form-control form-control-sm" id="symbol-filter" placeholder="Type symbol..." autocomplete="off" style="width: 180px;">
+                                    <div id="symbol-suggestions" class="dropdown-menu filter-suggestions"></div>
+                                    <button id="clear-symbol" class="btn btn-sm btn-outline-light clear-button" onclick="clearSymbolFilter()" style="display: none;">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                    <div class="d-flex align-items-center" style="gap: 1px;">
+                                        <button id="jump-to-cost-basis" class="btn btn-sm btn-outline-light" onclick="jumpToCostBasis()" title="Jump to Cost Basis">
+                                            <i class="fas fa-arrow-down"></i>
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-light" onclick="scrollToTop()" title="Jump to Dashboard">
+                                            <i class="fas fa-level-up-alt"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="d-flex align-items-center" style="gap: 1px;">
+                                <label for="status-filter" class="form-label mb-0 me-1">Status:</label>
+                                <select class="form-select form-select-sm status-filter" id="status-filter" style="width: 120px;">
+                                    <option value="">All</option>
+                                    <option value="open">Open</option>
+                                    <option value="closed">Closed</option>
+                                    <option value="assigned">Assigned</option>
+                                    <option value="expired">Expired</option>
+                                    <option value="roll">Roll</option>
+                                </select>
                             </div>
                         </div>
                     </div>
@@ -362,120 +388,86 @@
                     <div class="card-body">
                         <div class="dashboard-content-container">
                             <div class="row">
-                                <div class="col-md-3">
+                                <div class="col-md-1">
                                     <div class="card shadow-sm border-0">
                                         <div class="card-header bg-primary text-white">
-                                            <h5 class="mb-0">
-                                                <i class="fas fa-plus-circle me-2"></i>
-                                                Add New Trade
-                                            </h5>
+                                            <h6 class="mb-0" style="font-size: 0.75rem;">
+                                                <i class="fas fa-plus-circle me-1"></i>
+                                                Add Trade
+                                            </h6>
                                         </div>
-                                        <div class="card-body">
-                                            <div class="row g-2">
-                                                <div class="col-6">
-                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="openBTOModal()">
-                                                        BTO
-                                                    </button>
-                                                </div>
-                                                <div class="col-6">
-                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="addTradeType('BTC')">
-                                                        BTC
-                                                    </button>
-                                                </div>
-                                                <div class="col-6">
-                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="openROCTCallModal()">
-                                                        ROC
-                                                    </button>
-                                                </div>
-                                                <div class="col-6">
-                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="openROCTPutModal()">
-                                                        ROP
-                                                    </button>
-                                                </div>
-                                                <div class="col-6">
-                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="openROCTCallModal()">
-                                                        ROCT CALL
-                                                    </button>
-                                                </div>
-                                                <div class="col-6">
-                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="openROCTPutModal()">
-                                                        ROCT PUT
-                                                    </button>
-                                                </div>
-                                                <div class="col-6">
-                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="openSTCModal()">
-                                                        STC
-                                                    </button>
-                                                </div>
-                                                <div class="col-6">
-                                                    <button class="btn btn-outline-primary w-100 mb-2" onclick="addTradeType('STO')">
-                                                        STO
-                                                    </button>
-                                                </div>
+                                        <div class="card-body p-1">
+                                            <div class="d-grid gap-1">
+                                                <button class="btn btn-outline-primary btn-sm" onclick="openBTOModal()">
+                                                    BTO
+                                                </button>
+                                                <button class="btn btn-outline-primary btn-sm" onclick="addTradeType('BTC')">
+                                                    BTC
+                                                </button>
+                                                <button class="btn btn-outline-primary btn-sm" onclick="openROCTCallModal()">
+                                                    ROC
+                                                </button>
+                                                <button class="btn btn-outline-primary btn-sm" onclick="openROCTPutModal()">
+                                                    ROP
+                                                </button>
+                                                <button class="btn btn-outline-primary btn-sm" onclick="openROCTCallModal()">
+                                                    ROCT CALL
+                                                </button>
+                                                <button class="btn btn-outline-primary btn-sm" onclick="openROCTPutModal()">
+                                                    ROCT PUT
+                                                </button>
+                                                <button class="btn btn-outline-primary btn-sm" onclick="openSTCModal()">
+                                                    STC
+                                                </button>
+                                                <button class="btn btn-outline-primary btn-sm" onclick="addTradeType('STO')">
+                                                    STO
+                                                </button>
                                             </div>
                                         </div>
                                     </div>
                                 </div>
-                                <div class="col-md-9">
-                                    <div class="card shadow-sm border-0">
-                                        <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
-                                            <h5 class="mb-0">
-                                                <i class="fas fa-table me-2"></i>
-                                                Trades
-                                            </h5>
-                                            <div class="d-flex align-items-center gap-2">
-                                                <input type="text" class="form-control form-control-sm filter-input" id="symbol-filter" placeholder="Type symbol..." autocomplete="off">
-                                                <div id="symbol-suggestions" class="dropdown-menu filter-suggestions"></div>
-                                                <button id="clear-symbol" class="btn btn-sm btn-outline-light clear-button" onclick="clearSymbolFilter()">
-                                                    <i class="fas fa-times"></i>
-                                                </button>
-                                                <button id="jump-to-cost-basis" class="btn btn-sm btn-outline-light" onclick="jumpToCostBasis()" title="Jump to Cost Basis">
-                                                    <i class="fas fa-arrow-down"></i>
-                                                </button>
-                                                <button class="btn btn-sm btn-outline-light" onclick="scrollToTop()" title="Jump to Dashboard">
-                                                    <i class="fas fa-level-up-alt"></i>
-                                                </button>
-                                                <label for="status-filter" class="form-label me-2 mb-0">Status:</label>
-                                                <select class="form-select form-select-sm status-filter" id="status-filter">
-                                                    <option value="">All</option>
-                                                    <option value="open">Open</option>
-                                                    <option value="closed">Closed</option>
-                                                    <option value="assigned">Assigned</option>
-                                                    <option value="expired">Expired</option>
-                                                    <option value="roll">Roll</option>
-                                                </select>
-                                            </div>
-                                        </div>
-                                        <div class="card-body">
-                                            <div class="table-responsive">
-                                                <table class="table table-sm table-fixed" id="trades-table-main">
-                                                    <tbody id="trades-table"></tbody>
-                                                </table>
-                                            </div>
-                                        </div>
+                                <div class="col-md-11">
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-fixed" id="trades-table-main">
+                                            <tbody id="trades-table"></tbody>
+                                        </table>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
+                </div>
             </div>
+        </div>
         </div>
 
         <!-- Cost Basis Section -->
-        <div class="container-fluid px-2">
-            <div class="row mb-5">
+        <div class="container-fluid px-0">
+            <div class="row mb-5" style="margin-top: 2.25rem;">
                 <div class="col-12">
-                    <div class="card mb-3" id="cost-basis">
-                    <div class="card-header bg-primary text-white">
+                    <div class="card" id="cost-basis" style="width: 100%;">
+                    <div class="card-header bg-success text-white">
                         <div class="d-flex align-items-center justify-content-between">
                             <div class="d-flex align-items-center">
                                 <i class="fas fa-chevron-down section-toggle-icon" id="costBasisToggleIcon" data-bs-toggle="collapse" data-bs-target="#costBasisCollapse" aria-expanded="true" aria-controls="costBasisCollapse"></i>
-                                <h5 class="mb-0 cost-basis-title">
+                                <h5 class="mb-0 cost-basis-title" style="font-size: 1.875rem; font-weight: bold;">
                                     <i class="fas fa-calculator me-2"></i>
                                     Cost Basis
                                 </h5>
-                                <div class="d-flex align-items-center dashboard-controls"></div>
+                                <div class="d-flex align-items-center ms-3" style="gap: 2px;">
+                                    <input type="text" class="form-control form-control-sm" id="cost-basis-symbol-filter" placeholder="Type symbol..." style="width: 220px;" autocomplete="off">
+                                    <div id="cost-basis-symbol-suggestions" class="dropdown-menu" style="display: none;"></div>
+                                    <button id="clear-cost-basis-symbol" class="btn btn-sm btn-outline-light" style="display: none;" onclick="clearCostBasisSymbolFilter()">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                    <button id="jump-to-trades" class="btn btn-sm btn-outline-light" onclick="jumpToTradesTop()" title="Jump to Trades">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-light" onclick="scrollToTop()" title="Jump to Dashboard">
+                                        <i class="fas fa-level-up-alt"></i>
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -485,33 +477,10 @@
                             <div class="row">
                                 <!-- Cost Basis Table (Full width like dashboard) -->
                                 <div class="col-12">
-                                    <div class="card shadow-sm border-0">
-                                        <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
-                                            <h5 class="mb-0">
-                                                <i class="fas fa-table me-2"></i>
-                                                Cost Basis Table
-                                            </h5>
-                                            <div class="d-flex align-items-center gap-2">
-                                                <input type="text" class="form-control form-control-sm" id="cost-basis-symbol-filter" placeholder="Type symbol..." style="width: 220px;" autocomplete="off">
-                                                <div id="cost-basis-symbol-suggestions" class="dropdown-menu" style="display: none;"></div>
-                                                <button id="clear-cost-basis-symbol" class="btn btn-sm btn-outline-light" style="display: none;" onclick="clearCostBasisSymbolFilter()">
-                                                    <i class="fas fa-times"></i>
-                                                </button>
-                                                <button id="jump-to-trades" class="btn btn-sm btn-outline-light" onclick="jumpToTradesTop()" title="Jump to Trades">
-                                                    <i class="fas fa-arrow-up"></i>
-                                                </button>
-                                                <button class="btn btn-sm btn-outline-light" onclick="scrollToTop()" title="Jump to Dashboard">
-                                                    <i class="fas fa-level-up-alt"></i>
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <div class="card-body">
-                                            <div id="cost-basis-table-container">
-                                                <div class="text-center text-muted">
-                                                    <i class="fas fa-info-circle me-2"></i>
-                                                    Click on a stock symbol above to view its cost basis
-                                                </div>
-                                            </div>
+                                    <div id="cost-basis-table-container">
+                                        <div class="text-center text-muted">
+                                            <i class="fas fa-info-circle me-2"></i>
+                                            Click on a stock symbol above to view its cost basis
                                         </div>
                                     </div>
                                 </div>
@@ -519,10 +488,10 @@
                         </div>
                     </div>
                 </div>
+                </div>
             </div>
         </div>
         </div>
-    </div>
 
     <!-- BTO Form Modal -->
     <div class="modal fade" id="btoModal" tabindex="-1" aria-labelledby="btoModalLabel" aria-hidden="true">
@@ -569,19 +538,22 @@
                 </div>
                 <div class="modal-footer d-flex flex-column">
                     <div class="d-flex w-100 mb-2" id="bto-add-buttons">
-                        <button type="button" class="btn btn-success flex-fill me-2" onclick="submitBTOForm('addAnother')">
-                            <i class="fas fa-plus me-2"></i>
-                            Add Another
-                        </button>
-                        <button type="button" class="btn btn-primary flex-fill" onclick="submitBTOForm('addAndClose')">
+                        <button type="button" class="btn btn-primary flex-fill me-2" onclick="submitBTOForm('addAndClose')">
                             <i class="fas fa-save me-2"></i>
                             Add and Close
                         </button>
+                        <button type="button" class="btn btn-success flex-fill" onclick="submitBTOForm('addAnother')">
+                            <i class="fas fa-plus me-2"></i>
+                            Add Another
+                        </button>
                     </div>
-                    <div class="d-flex justify-content-center w-100" id="bto-add-cancel">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <div class="d-flex justify-content-center w-100 mb-2" id="bto-add-cancel">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                            <i class="fas fa-times me-2"></i>
+                            Cancel
+                        </button>
                     </div>
-                    <div class="d-flex w-100 mb-2" id="bto-edit-buttons" style="display: none;">
+                    <div class="d-flex w-100 mb-2" id="bto-edit-buttons" style="display: none !important;">
                         <button type="button" class="btn btn-primary flex-fill me-2" onclick="submitBTOForm('save')">
                             <i class="fas fa-save me-2"></i>
                             Save
@@ -638,19 +610,22 @@
                 </div>
                 <div class="modal-footer d-flex flex-column">
                     <div class="d-flex w-100 mb-2" id="stc-add-buttons">
-                        <button type="button" class="btn btn-success flex-fill me-2" onclick="submitSTCForm('addAnother')">
-                            <i class="fas fa-plus me-2"></i>
-                            Add Another
-                        </button>
-                        <button type="button" class="btn btn-primary flex-fill" onclick="submitSTCForm('addAndClose')">
+                        <button type="button" class="btn btn-primary flex-fill me-2" onclick="submitSTCForm('addAndClose')">
                             <i class="fas fa-save me-2"></i>
                             Add and Close
                         </button>
+                        <button type="button" class="btn btn-success flex-fill" onclick="submitSTCForm('addAnother')">
+                            <i class="fas fa-plus me-2"></i>
+                            Add Another
+                        </button>
                     </div>
-                    <div class="d-flex justify-content-center w-100" id="stc-add-cancel">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <div class="d-flex justify-content-center w-100 mb-2" id="stc-add-cancel">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                            <i class="fas fa-times me-2"></i>
+                            Cancel
+                        </button>
                     </div>
-                    <div class="d-flex w-100 mb-2" id="stc-edit-buttons" style="display: none;">
+                    <div class="d-flex w-100 mb-2" id="stc-edit-buttons" style="display: none !important;">
                         <button type="button" class="btn btn-primary flex-fill me-2" onclick="submitSTCForm('save')">
                             <i class="fas fa-save me-2"></i>
                             Save
@@ -732,13 +707,13 @@
                 <div class="modal-footer d-flex flex-column">
                     <!-- Add Mode Buttons -->
                     <div class="d-flex w-100 mb-2" id="roct-put-add-buttons">
-                        <button type="button" class="btn btn-success flex-fill me-2" onclick="submitROCTPutForm('addAnother')">
-                            <i class="fas fa-plus me-2"></i>
-                            Add Another
-                        </button>
-                        <button type="button" class="btn btn-primary flex-fill" onclick="submitROCTPutForm('addAndClose')">
+                        <button type="button" class="btn btn-primary flex-fill me-2" onclick="submitROCTPutForm('addAndClose')">
                             <i class="fas fa-save me-2"></i>
                             Add and Close
+                        </button>
+                        <button type="button" class="btn btn-success flex-fill" onclick="submitROCTPutForm('addAnother')">
+                            <i class="fas fa-plus me-2"></i>
+                            Add Another
                         </button>
                     </div>
                     <div class="d-flex justify-content-center w-100 mb-2" id="roct-put-add-cancel">
@@ -834,13 +809,13 @@
                 </div>
                 <div class="modal-footer d-flex flex-column">
                     <div class="d-flex w-100 mb-2" id="roct-call-add-buttons">
-                        <button type="button" class="btn btn-success flex-fill me-2" onclick="submitROCTCallForm('addAnother')">
-                            <i class="fas fa-plus me-2"></i>
-                            Add Another
-                        </button>
-                        <button type="button" class="btn btn-primary flex-fill" onclick="submitROCTCallForm('addAndClose')">
+                        <button type="button" class="btn btn-primary flex-fill me-2" onclick="submitROCTCallForm('addAndClose')">
                             <i class="fas fa-save me-2"></i>
                             Add and Close
+                        </button>
+                        <button type="button" class="btn btn-success flex-fill" onclick="submitROCTCallForm('addAnother')">
+                            <i class="fas fa-plus me-2"></i>
+                            Add Another
                         </button>
                     </div>
                     <div class="d-flex justify-content-center w-100 mb-2" id="roct-call-add-cancel">
@@ -868,7 +843,7 @@
     <!-- Alert Container -->
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}?v=275"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=316"></script>
     
     <script>
         // Global variable to track current section
@@ -880,9 +855,17 @@
             const element = document.getElementById(sectionId);
             if (element) {
                 isManualNavigation = true;
-                element.scrollIntoView({ 
-                    behavior: 'smooth',
-                    block: 'start'
+                
+                // Dynamically calculate the sticky banner wrapper height
+                const bannerWrapper = document.querySelector('.header-banner-wrapper');
+                const bannerHeight = bannerWrapper ? bannerWrapper.offsetHeight : 150;
+                
+                const elementPosition = element.getBoundingClientRect().top + window.pageYOffset;
+                const offsetPosition = elementPosition - bannerHeight;
+                
+                window.scrollTo({
+                    top: offsetPosition,
+                    behavior: 'smooth'
                 });
             }
             
