@@ -1483,7 +1483,6 @@ def get_cost_basis():
             ''')
         
         cost_basis_entries = cursor.fetchall()
-        conn.close()
         
         # Convert to list of dicts for processing
         entries = [dict(entry) for entry in cost_basis_entries]
@@ -1580,6 +1579,7 @@ def get_cost_basis():
                 'trades': mapped_trades
             })
         
+        conn.close()
         return jsonify(result)
     except Exception as e:
         print(f'Error fetching cost basis: {e}')
