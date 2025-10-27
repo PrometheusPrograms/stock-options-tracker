@@ -1733,8 +1733,17 @@ def webhook_deploy():
         #     if not hmac.compare_digest(signature, expected_signature):
         #         return 'Signature mismatch', 401
         
-        # Change to the project directory
-        project_dir = '/home/greenmangroup/stock-options-tracker'
+        # Get current working directory (detect if on PythonAnywhere or local)
+        current_dir = os.getcwd()
+        
+        # For local development
+        if 'pythonanywhere' not in current_dir.lower():
+            project_dir = current_dir
+        else:
+            # For PythonAnywhere
+            project_dir = '/home/greenmangroup/stock-options-tracker'
+        
+        print(f"Deploying from: {project_dir}")
         
         # Pull latest changes from GitHub
         result = subprocess.run(['git', 'pull'], 
@@ -1743,23 +1752,30 @@ def webhook_deploy():
                               text=True)
         
         if result.returncode == 0:
-            print(f"Deployment successful: {result.stdout}")
+            print(f"Git pull successful: {result.stdout}")
             
-            # Trigger reload by touching the WSGI file or restarting the task
-            # For PythonAnywhere, touching the WSGI file triggers a reload
+            # Reload WSGI application (for PythonAnywhere)
             wsgi_file = '/var/www/stockoptionstracker_pythonanywhere_com_wsgi.py'
             if os.path.exists(wsgi_file):
                 os.utime(wsgi_file, None)
-                print("Reloaded WSGI application")
+                print("✓ Reloaded WSGI application")
             
-            return 'Deployment successful', 200
+            # Also try alternative WSGI path
+            alt_wsgi = '/var/www/greenmangroup_pythonanywhere_com_wsgi.py'
+            if os.path.exists(alt_wsgi):
+                os.utime(alt_wsgi, None)
+                print("✓ Reloaded alternative WSGI application")
+            
+            return jsonify({'success': True, 'message': 'Deployment successful', 'output': result.stdout}), 200
         else:
-            print(f"Deployment failed: {result.stderr}")
-            return f'Deployment failed: {result.stderr}', 500
+            print(f"Git pull failed: {result.stderr}")
+            return jsonify({'success': False, 'error': result.stderr}), 500
             
     except Exception as e:
+        import traceback
         print(f"Webhook deployment error: {e}")
-        return f'Deployment error: {str(e)}', 500
+        print(traceback.format_exc())
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/recalculate-cost-basis', methods=['POST'])
 def recalculate_cost_basis():
