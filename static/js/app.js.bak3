@@ -3137,6 +3137,149 @@ async function submitROCTPutForm(action = 'addAndClose') {
 }
 
 // Debug function to log section widths with detailed info
+function logDetailedSectionInfo() {
+    const dashboard = document.getElementById('dashboard');
+    const trades = document.getElementById('trades');
+    const costBasis = document.getElementById('cost-basis');
+
+    console.log('=== SECTION WIDTH COMPARISON ===');
+    if (dashboard) {
+        const dashStyle = window.getComputedStyle(dashboard);
+        console.log('Dashboard:', {
+            width: dashboard.offsetWidth,
+            paddingLeft: dashStyle.paddingLeft,
+            paddingRight: dashStyle.paddingRight,
+            marginLeft: dashStyle.marginLeft,
+            marginRight: dashStyle.marginRight,
+            boxSizing: dashStyle.boxSizing
+        });
+    }
+    if (trades) {
+        const tradesStyle = window.getComputedStyle(trades);
+        console.log('Trades:', {
+            width: trades.offsetWidth,
+            paddingLeft: tradesStyle.paddingLeft,
+            paddingRight: tradesStyle.paddingRight,
+            marginLeft: tradesStyle.marginLeft,
+            marginRight: tradesStyle.marginRight,
+            boxSizing: tradesStyle.boxSizing
+        });
+        
+        // Check child elements
+        const tradesCardBody = trades.querySelector('.card-body');
+        const tradesContentContainer = trades.querySelector('.dashboard-content-container');
+        if (tradesCardBody) {
+            const bodyStyle = window.getComputedStyle(tradesCardBody);
+            console.log('Trades .card-body:', {
+                width: tradesCardBody.offsetWidth,
+                paddingLeft: bodyStyle.paddingLeft,
+                paddingRight: bodyStyle.paddingRight
+            });
+        }
+        if (tradesContentContainer) {
+            const contStyle = window.getComputedStyle(tradesContentContainer);
+            console.log('Trades .dashboard-content-container:', {
+                width: tradesContentContainer.offsetWidth,
+                paddingLeft: contStyle.paddingLeft,
+                paddingRight: contStyle.paddingRight
+            });
+        }
+    }
+    if (costBasis) {
+        const costStyle = window.getComputedStyle(costBasis);
+        console.log('Cost Basis:', {
+            width: costBasis.offsetWidth,
+            paddingLeft: costStyle.paddingLeft,
+            paddingRight: costStyle.paddingRight,
+            marginLeft: costStyle.marginLeft,
+            marginRight: costStyle.marginRight,
+            boxSizing: costStyle.boxSizing
+        });
+        
+        // Check child elements
+        const costCardBody = costBasis.querySelector('.card-body');
+        const costContentContainer = costBasis.querySelector('.dashboard-content-container');
+        if (costCardBody) {
+            const bodyStyle = window.getComputedStyle(costCardBody);
+            console.log('Cost Basis .card-body:', {
+                width: costCardBody.offsetWidth,
+                paddingLeft: bodyStyle.paddingLeft,
+                paddingRight: bodyStyle.paddingRight
+            });
+        }
+        if (costContentContainer) {
+            const contStyle = window.getComputedStyle(costContentContainer);
+            console.log('Cost Basis .dashboard-content-container:', {
+                width: costContentContainer.offsetWidth,
+                paddingLeft: contStyle.paddingLeft,
+                paddingRight: contStyle.paddingRight
+            });
+        }
+        
+        const costRow = costBasis.querySelector('.dashboard-content-container .row');
+        if (costRow) {
+            const rowStyle = window.getComputedStyle(costRow);
+            console.log('Cost Basis .row:', {
+                width: costRow.offsetWidth,
+                marginLeft: rowStyle.marginLeft,
+                marginRight: rowStyle.marginRight,
+                paddingLeft: rowStyle.paddingLeft,
+                paddingRight: rowStyle.paddingRight
+            });
+        }
+        
+        // Also check dashboard-content-container
+        if (costContentContainer) {
+            const contStyle = window.getComputedStyle(costContentContainer);
+            console.log('Cost Basis .dashboard-content-container:', {
+                width: costContentContainer.offsetWidth,
+                maxWidth: contStyle.maxWidth,
+                paddingLeft: contStyle.paddingLeft,
+                paddingRight: contStyle.paddingRight,
+                marginLeft: contStyle.marginLeft,
+                marginRight: contStyle.marginRight
+            });
+        }
+        
+        const costCol12 = costBasis.querySelector('.col-12');
+        if (costCol12) {
+            const colStyle = window.getComputedStyle(costCol12);
+            console.log('Cost Basis .col-12:', {
+                width: costCol12.offsetWidth,
+                paddingLeft: colStyle.paddingLeft,
+                paddingRight: colStyle.paddingRight
+            });
+        }
+        
+        // Check the parent .col-12 of the main card
+        const costBasisCard = costBasis;
+        const costBasisParent = costBasisCard.parentElement;
+        if (costBasisParent && costBasisParent.classList.contains('col-12')) {
+            const parentStyle = window.getComputedStyle(costBasisParent);
+            console.log('Cost Basis parent .col-12:', {
+                width: costBasisParent.offsetWidth,
+                paddingLeft: parentStyle.paddingLeft,
+                paddingRight: parentStyle.paddingRight
+            });
+        }
+    }
+    
+    // Also check trades parent
+    if (trades) {
+        const tradesCard = trades;
+        const tradesParent = tradesCard.parentElement;
+        if (tradesParent && tradesParent.classList.contains('col-12')) {
+            const parentStyle = window.getComputedStyle(tradesParent);
+            console.log('Trades parent .col-12:', {
+                width: tradesParent.offsetWidth,
+                paddingLeft: parentStyle.paddingLeft,
+                paddingRight: parentStyle.paddingRight
+            });
+        }
+    }
+    
+    console.log('================================');
+}
 
 window.addEventListener('load', function() {
     setTimeout(logDetailedSectionInfo, 1000);

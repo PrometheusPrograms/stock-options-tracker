@@ -1,135 +1,60 @@
-/* ============================================================================
-   STOCK OPTIONS TRACKER - CUSTOM STYLES
-   ============================================================================
-   
-   TABLE OF CONTENTS:
-   
-   1. CSS Variables (Base: colors, spacing, typography)
-   2. Global Styles (Body, typography, utilities)
-   3. Layout (Page wrapper, containers, responsive)
-   4. Header Banner (Sticky banner, settings icon)
-   5. Cards & Headers (Card components, compact variants)
-   6. Sections (Dashboard, trades, cost basis borders)
-   7. Modal Button Visibility (Form states)
-   8. Components (Buttons, forms, tables, modals)
-   9. Icons & Typography (Section titles, icons)
-   10. Dashboard Controls (Filter controls, date inputs)
-   11. Charts (Containers, legends, dimensions)
-   12. Trades Table (Table styling, editable cells)
-   13. Cost Basis (Summary table, filters)
-   14. Colors & Gradients (Background variants)
-   15. Responsive & Print (Media queries)
-   
-   ============================================================================
-*/
+/* Custom styles for Stock Options Tracker */
 
-/* ========= 1. CSS Variables ========= */
-:root {
-    /* Spacing Scale */
-    --space-xs: 0.25rem;    /* 4px */
-    --space-sm: 0.5rem;     /* 8px */
-    --space-md: 1rem;       /* 16px */
-    --space-lg: 1.5rem;     /* 24px */
-    --space-xl: 2rem;       /* 32px */
-    --space-xxl: 3rem;      /* 48px */
-    
-    /* Common spacing values found in app */
-    --space-title: 15px;
-    --space-header: 25px;
-    --space-controls: 35px;
-    
-    /* Colors */
-    --primary-color: #667eea;
-    --primary-color-alt: #007bff;
-    --primary-color-dark: #0056b3;
-    --secondary-color: #764ba2;
-    --accent-color: #f093fb;
-    --success-color: #28a745;
-    --success-color-dark: #1e7e34;
-    --info-color: #17a2b8;
-    --info-color-dark: #117a8b;
-    --warning-color: #ffc107;
-    --warning-color-dark: #e0a800;
-    --danger-color: #dc3545;
-    --light-color: #f8f9fa;
-    --light-color-alt: #e9ecef;
-    --dark-color: #212529;
-    --background-color: #f5f7fa;
-    
-    /* Typography */
-    --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-}
-
-/* ========= 2. Global Styles ========= */
 body {
-    background-color: var(--background-color);
-    font-family: var(--font-family);
+    background-color: #f5f7fa;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
-/* ========= Spacing Scale Classes ========= */
-/* Consistent spacing system - use these classes throughout */
-.space-xs { margin-left: var(--space-xs); }
-.space-sm { margin-left: var(--space-sm); }
-.space-md { margin-left: var(--space-md); }
-.space-lg { margin-left: var(--space-lg); }
-.space-xl { margin-left: var(--space-xl); }
-.space-xxl { margin-left: var(--space-xxl); }
-
-/* Common spacing values */
-.space-title { margin-left: var(--space-title); }
-.space-header { margin-left: var(--space-header); }
-.space-controls { margin-left: var(--space-controls); }
-
-/* ========= 7. Modal Button Visibility ========= */
+/* ========= Modal Button Visibility ========= */
 #btoForm.add-mode #bto-add-buttons,
 #btoForm.add-mode #bto-add-cancel {
-    display: flex;
+    display: flex !important;
 }
 
 #btoForm.add-mode #bto-edit-buttons {
-    display: none;
+    display: none !important;
 }
 
 #btoForm.edit-mode #bto-edit-buttons {
-    display: flex;
+    display: flex !important;
 }
 
 #btoForm.edit-mode #bto-add-buttons,
 #btoForm.edit-mode #bto-add-cancel {
-    display: none;
+    display: none !important;
 }
 
 #stcForm.add-mode #stc-add-buttons,
 #stcForm.add-mode #stc-add-cancel {
-    display: flex;
+    display: flex !important;
 }
 
 #stcForm.add-mode #stc-edit-buttons {
-    display: none;
+    display: none !important;
 }
 
 #stcForm.edit-mode #stc-edit-buttons {
-    display: flex;
+    display: flex !important;
 }
 
 #stcForm.edit-mode #stc-add-buttons,
 #stcForm.edit-mode #stc-add-cancel {
-    display: none;
+    display: none !important;
 }
 
-/* ========= 3. Layout ========= */
+/* ========= Global Layout ========= */
 .page-wrapper {
     padding-left: 2rem;
     padding-right: 2rem;
     margin: 0 auto;
     width: 100%;
-    background-color: white;
+    background-color: #ffffff;
 }
 
-/* ========= 4. Header Banner ========= */
+/* ========= Header Banner ========= */
 .header-banner {
     position: relative;
-    background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     padding: 2rem 0; /* Increased by 10px */
     border-radius: 8px 8px 0 0; /* rounded top only when sticky */
@@ -137,61 +62,37 @@ body {
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
-/* Compact header banner variant */
-.header-banner.compact {
-    padding: 1rem 0;
-}
-
 .header-banner-wrapper {
     position: sticky;
     top: 0;
     z-index: 999;
-    padding-bottom: 1.5rem; /* Adjusted for compact banner */
-    background-color: white;
+    padding-bottom: 2.25rem; /* 25% reduction from 3rem */
+    background-color: #ffffff;
     width: calc(100% + 20px);
     margin-left: -10px;
     margin-right: -10px;
 }
 
-/* ========= 5. Cards & Headers ========= */
+/* ========= Cards ========= */
 .card {
-    border-radius: 0.5rem;
-    border: 1px solid rgba(0, 0, 0, 0.125);
-    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
-    transition: box-shadow 0.15s ease-in-out;
-    animation: fadeIn 0.3s ease-in-out;
+    border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
 }
 
-.card:hover {
-    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
-}
-
-.card-header {
-    background-color: #fff;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.125);
-    border-radius: 0.5rem 0.5rem 0 0;
-    padding: 1.5rem 1rem;
-}
-
-/* Compact header variant for tighter layouts */
-.card-header.compact {
-    padding: 0.75rem 1rem;
-}
-
-/* ========= 6. Section Borders ========= */
+/* Add thin black border around main sections */
 #dashboard,
 #trades,
 #cost-basis {
-    border: 1px solid rgba(0, 0, 0, 0.1);
+    border: 1px solid black !important;
 }
 
 /* Ensure no border on body or page wrapper */
 body {
-    border: none;
+    border: none !important;
 }
 
 .page-wrapper {
-    border: none;
+    border: none !important;
 }
 
 /* ========= Bootstrap Adjustments ========= */
@@ -236,7 +137,7 @@ body {
 
 /* Middle align all elements in section headers */
 .card-header .d-flex {
-    align-items: center;
+    align-items: center !important;
 }
 
 .card-header .d-flex > * {
@@ -249,10 +150,13 @@ body {
     vertical-align: middle;
 }
 
-/* Specific alignment for dashboard controls - increased specificity */
-.dashboard-controls.d-flex,
+/* Specific alignment for dashboard controls */
+.dashboard-controls {
+    align-items: center !important;
+}
+
 .dashboard-controls .d-flex {
-    align-items: center;
+    align-items: center !important;
 }
 
 .dashboard-controls .form-control-sm,
@@ -262,45 +166,43 @@ body {
 }
 
 .dashboard-controls .form-label {
-    margin-bottom: 0;
+    margin-bottom: 0 !important;
     line-height: 1.5;
 }
 
-/* Remove all padding from dashboard header controls with specific selectors */
-.dashboard-controls .form-control,
-.dashboard-controls .btn,
-.dashboard-controls .form-label {
-    padding: 0;
-    margin: 0;
+/* Remove all padding from dashboard header controls */
+.dashboard-controls * {
+    padding: 0 !important;
+    margin: 0 !important;
 }
 
 .dashboard-controls .me-1,
 .dashboard-controls .me-2 {
-    margin-right: 0.25rem;
+    margin-right: 0.25rem !important;
 }
 
 .dashboard-controls .form-control-sm {
-    padding: 0.25rem 0.5rem;
+    padding: 0.25rem 0.5rem !important;
 }
 
 .dashboard-controls .btn-sm {
-    padding: 0.25rem 0.5rem;
+    padding: 0.25rem 0.5rem !important;
 }
 
 /* Section card component - reusable styles for all sections */
 .section-card .card-header {
-    display: flex;
-    align-items: center;
+    display: flex !important;
+    align-items: center !important;
     box-sizing: border-box;
 }
 
 .section-card .card-header .d-flex {
-    align-items: center;
+    align-items: center !important;
 }
 
 .section-card .card-header .d-flex > * {
-    vertical-align: middle;
-    align-self: center;
+    vertical-align: middle !important;
+    align-self: center !important;
 }
 
 .section-card .card-header .form-control,
@@ -308,30 +210,23 @@ body {
 .section-card .card-header .form-label,
 .section-card .card-header h5,
 .section-card .card-header i {
-    vertical-align: middle;
-    align-self: center;
+    vertical-align: middle !important;
+    align-self: center !important;
 }
 
-/* Header group with consistent spacing using gap */
-.header-group {
-    display: flex;
-    align-items: center;
-    gap: 1.5rem;
-}
-
-/* Legacy support for elements still using direct children */
+/* Move header content 25px to the right, but keep arrows in original position */
 .section-card .card-header .d-flex > div:not(:first-child),
 .section-card .card-header .d-flex > *:not(:first-child) {
-    margin-left: 0; /* gap handles spacing now */
-}
-
-.section-card .card-header .d-flex {
-    gap: 1.5rem;
+    margin-left: 25px !important;
 }
 
 /* Section titles - common styling */
 .section-title {
-    margin-left: 0;
+    margin-left: 15px;
+}
+
+.dashboard-controls {
+    margin-left: 35px;
 }
 
 .dashboard-date-input {
@@ -395,25 +290,21 @@ body {
     box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
 }
 
-/* Button States - using more specific selectors instead of !important */
-.form-container.add-mode .add-buttons,
-.modal-content .add-mode .add-buttons {
-    display: flex;
+/* Button States */
+.add-mode .add-buttons {
+    display: flex !important;
 }
 
-.form-container.add-mode .edit-buttons,
-.modal-content .add-mode .edit-buttons {
-    display: none;
+.add-mode .edit-buttons {
+    display: none !important;
 }
 
-.form-container.edit-mode .edit-buttons,
-.modal-content .edit-mode .edit-buttons {
-    display: flex;
+.edit-mode .add-buttons {
+    display: none !important;
 }
 
-.form-container.edit-mode .add-buttons,
-.modal-content .edit-mode .add-buttons {
-    display: none;
+.edit-mode .edit-buttons {
+    display: flex !important;
 }
 
 /* Table Components */
@@ -435,7 +326,7 @@ body {
 .table-fixed td:first-child:not(:empty) {
     text-align: left;
     font-weight: bold;
-    background-color: var(--light-color);
+    background-color: #f8f9fa;
 }
 
 /* Filter Components */
@@ -489,7 +380,66 @@ body {
     /* Removed float-based layout - now using Bootstrap grid */
 }
 
-/* Duplicate definitions removed - now defined at lines 121-138 */
+/* Card Styling */
+.card {
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    border: 1px solid rgba(0, 0, 0, 0.125);
+    border-radius: 0.5rem;
+    transition: box-shadow 0.15s ease-in-out;
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+.card:hover {
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+}
+
+.card-header {
+    background-color: #fff;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+    border-radius: 0.5rem 0.5rem 0 0 !important;
+    padding: 1.5rem 1rem;
+}
+
+.card-header.bg-primary {
+    background-color: #007bff !important;
+    border-bottom: none;
+}
+
+.card-header.bg-success {
+    background-color: #28a745 !important;
+    border-bottom: none;
+}
+
+.card-header.bg-info {
+    background-color: #17a2b8 !important;
+    border-bottom: none;
+}
+
+.card-header.bg-light {
+    background-color: #f8f9fa !important;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+}
+
+/* Gradient Backgrounds */
+.card.bg-primary {
+    background: linear-gradient(135deg, #007bff 0%, #0056b3 100%) !important;
+    border: none;
+}
+
+.card.bg-success {
+    background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%) !important;
+    border: none;
+}
+
+.card.bg-info {
+    background: linear-gradient(135deg, #17a2b8 0%, #117a8b 100%) !important;
+    border: none;
+}
+
+.card.bg-warning {
+    background: linear-gradient(135deg, #ffc107 0%, #e0a800 100%) !important;
+    border: none;
+}
 
 /* Shadow Enhancements */
 .shadow-sm {
@@ -527,31 +477,17 @@ body {
     --dark-color: #2c3e50;
 }
 
-/* Card background gradients - using CSS variables */
+/* Update card colors */
 .card.bg-primary {
     background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)) !important;
-    border: none;
 }
 
-.card.bg-success,
-.card-header.bg-success {
+.card.bg-success {
     background: linear-gradient(135deg, var(--success-color), var(--info-color)) !important;
-    border: none;
 }
 
-.card.bg-info,
-.card-header.bg-info {
+.card.bg-info {
     background: linear-gradient(135deg, var(--info-color), var(--accent-color)) !important;
-    border: none;
-}
-
-.card-header.bg-primary {
-    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)) !important;
-}
-
-.card-header.bg-light {
-    background: linear-gradient(135deg, var(--light-color), var(--light-color-alt)) !important;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.125);
 }
 
 /* Update button colors */
@@ -576,14 +512,31 @@ body {
     border-color: var(--primary-color);
 }
 
+/* Update card headers */
+.card-header.bg-primary {
+    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)) !important;
+}
+
+.card-header.bg-success {
+    background: linear-gradient(135deg, var(--success-color), var(--info-color)) !important;
+}
+
+.card-header.bg-info {
+    background: linear-gradient(135deg, var(--info-color), var(--accent-color)) !important;
+}
+
+.card-header.bg-light {
+    background: linear-gradient(135deg, #f8f9fa, #e9ecef) !important;
+}
+
 /* Dropdown Styling */
 .dropdown-item {
-    border-bottom: 1px solid var(--light-color);
+    border-bottom: 1px solid #f8f9fa;
     transition: background-color 0.15s ease-in-out;
 }
 
 .dropdown-item:hover {
-    background-color: var(--light-color);
+    background-color: #f8f9fa;
 }
 
 .dropdown-item:last-child {
@@ -649,7 +602,7 @@ body {
 }
 
 .form-control:focus {
-    border-color: var(--primary-color-alt);
+    border-color: #86b7fe;
     box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
 }
 
@@ -659,7 +612,7 @@ body {
 
 /* Header Styling */
 h1 {
-    color: var(--dark-color);
+    color: #343a40;
     font-weight: 600;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
@@ -667,7 +620,7 @@ h1 {
 /* Card Title Styling */
 .card-title {
     font-weight: 600;
-    color: var(--dark-color);
+    color: #495057;
 }
 
 .card-header .card-title {
@@ -677,13 +630,13 @@ h1 {
 /* Clickable Symbols */
 .clickable-symbol {
     cursor: pointer;
-    color: var(--primary-color-alt);
+    color: #007bff;
     text-decoration: underline;
     transition: color 0.15s ease-in-out;
 }
 
 .clickable-symbol:hover {
-    color: var(--primary-color-dark);
+    color: #0056b3;
     text-decoration: none;
 }
 
@@ -722,8 +675,8 @@ h1 {
 
 /* Active Filter Button Styling */
 .btn-outline-primary.active {
-    background-color: var(--primary-color-alt);
-    border-color: var(--primary-color-alt);
+    background-color: #007bff;
+    border-color: #007bff;
     color: white;
     box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
 }
@@ -749,7 +702,7 @@ h1 {
     border-top: none;
     font-weight: 600;
     font-size: 0.875rem;
-    background-color: var(--light-color);
+    background-color: #f8f9fa;
 }
 
 #cost-basis-summary .table td {
@@ -759,11 +712,11 @@ h1 {
 
 /* Number Styling */
 .text-danger {
-    color: var(--danger-color) !important;
+    color: #dc3545 !important;
 }
 
 .text-success {
-    color: var(--success-color) !important;
+    color: #28a745 !important;
 }
 
 /* Custom Scrollbar */
@@ -842,7 +795,7 @@ h1 {
     }
     
     .card {
-        border: 1px solid rgba(0, 0, 0, 0.1) !important;
+        border: 1px solid #000 !important;
         box-shadow: none !important;
     }
 }

@@ -1,0 +1,85 @@
+.chart-container {
+    position: relative;
+    height: 450px;
+}
+
+.sunburst-chart {
+    width: 450px;
+    height: 450px;
+}
+
+/* Make chart cards same height */
+/* Chart Styling */
+#premiumChart {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Cost Basis Table Styling */
+#cost-basis-summary .table {
+    border: 10px solid #dee2e6;
+    border-radius: 0.5rem;
+}
+
+#cost-basis-summary .table th {
+    border-top: none;
+    font-weight: 600;
+    font-size: 0.875rem;
+    background-color: var(--light-color);
+}
+
+#cost-basis-summary .table td {
+    font-size: 0.875rem;
+    padding: 0.5rem 0.75rem;
+}
+
+/* Number Styling */
+.text-danger {
+    color: var(--danger-color) !important;
+}
+
+.text-success {
+    color: var(--success-color) !important;
+}
+
+/* Custom Scrollbar */
+.table-responsive::-webkit-scrollbar {
+    height: 8px;
+}
+
+.table-responsive::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+.table-responsive::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 4px;
+}
+
+.table-responsive::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+}
+
+/* Trades Table Specific */
+#trades-table-main tr td:first-child {
+    background-color: transparent !important;
+    text-align: center;
+    white-space: normal;
+    word-wrap: break-word;
+    vertical-align: middle;
+}
+
+#trades-table-main tr:first-child td {
+    white-space: normal;
+    word-wrap: break-word;
+    text-align: center;
+    vertical-align: middle;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .container-fluid {
+        padding: 0.5rem;
+    }
+    

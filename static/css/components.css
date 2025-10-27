@@ -1,86 +1,4 @@
-/* ============================================================================
-   STOCK OPTIONS TRACKER - CUSTOM STYLES
-   ============================================================================
-   
-   TABLE OF CONTENTS:
-   
-   1. CSS Variables (Base: colors, spacing, typography)
-   2. Global Styles (Body, typography, utilities)
-   3. Layout (Page wrapper, containers, responsive)
-   4. Header Banner (Sticky banner, settings icon)
-   5. Cards & Headers (Card components, compact variants)
-   6. Sections (Dashboard, trades, cost basis borders)
-   7. Modal Button Visibility (Form states)
-   8. Components (Buttons, forms, tables, modals)
-   9. Icons & Typography (Section titles, icons)
-   10. Dashboard Controls (Filter controls, date inputs)
-   11. Charts (Containers, legends, dimensions)
-   12. Trades Table (Table styling, editable cells)
-   13. Cost Basis (Summary table, filters)
-   14. Colors & Gradients (Background variants)
-   15. Responsive & Print (Media queries)
-   
-   ============================================================================
-*/
-
-/* ========= 1. CSS Variables ========= */
-:root {
-    /* Spacing Scale */
-    --space-xs: 0.25rem;    /* 4px */
-    --space-sm: 0.5rem;     /* 8px */
-    --space-md: 1rem;       /* 16px */
-    --space-lg: 1.5rem;     /* 24px */
-    --space-xl: 2rem;       /* 32px */
-    --space-xxl: 3rem;      /* 48px */
-    
-    /* Common spacing values found in app */
-    --space-title: 15px;
-    --space-header: 25px;
-    --space-controls: 35px;
-    
-    /* Colors */
-    --primary-color: #667eea;
-    --primary-color-alt: #007bff;
-    --primary-color-dark: #0056b3;
-    --secondary-color: #764ba2;
-    --accent-color: #f093fb;
-    --success-color: #28a745;
-    --success-color-dark: #1e7e34;
-    --info-color: #17a2b8;
-    --info-color-dark: #117a8b;
-    --warning-color: #ffc107;
-    --warning-color-dark: #e0a800;
-    --danger-color: #dc3545;
-    --light-color: #f8f9fa;
-    --light-color-alt: #e9ecef;
-    --dark-color: #212529;
-    --background-color: #f5f7fa;
-    
-    /* Typography */
-    --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-}
-
-/* ========= 2. Global Styles ========= */
-body {
-    background-color: var(--background-color);
-    font-family: var(--font-family);
-}
-
-/* ========= Spacing Scale Classes ========= */
-/* Consistent spacing system - use these classes throughout */
-.space-xs { margin-left: var(--space-xs); }
-.space-sm { margin-left: var(--space-sm); }
-.space-md { margin-left: var(--space-md); }
-.space-lg { margin-left: var(--space-lg); }
-.space-xl { margin-left: var(--space-xl); }
-.space-xxl { margin-left: var(--space-xxl); }
-
-/* Common spacing values */
-.space-title { margin-left: var(--space-title); }
-.space-header { margin-left: var(--space-header); }
-.space-controls { margin-left: var(--space-controls); }
-
-/* ========= 7. Modal Button Visibility ========= */
+/* ========= Modal Button Visibility ========= */
 #btoForm.add-mode #bto-add-buttons,
 #btoForm.add-mode #bto-add-cancel {
     display: flex;
@@ -117,43 +35,7 @@ body {
     display: none;
 }
 
-/* ========= 3. Layout ========= */
-.page-wrapper {
-    padding-left: 2rem;
-    padding-right: 2rem;
-    margin: 0 auto;
-    width: 100%;
-    background-color: white;
-}
-
-/* ========= 4. Header Banner ========= */
-.header-banner {
-    position: relative;
-    background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
-    color: white;
-    padding: 2rem 0; /* Increased by 10px */
-    border-radius: 8px 8px 0 0; /* rounded top only when sticky */
-    margin-bottom: 0; /* No margin - spacing controlled by section mt-5 */
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-}
-
-/* Compact header banner variant */
-.header-banner.compact {
-    padding: 1rem 0;
-}
-
-.header-banner-wrapper {
-    position: sticky;
-    top: 0;
-    z-index: 999;
-    padding-bottom: 1.5rem; /* Adjusted for compact banner */
-    background-color: white;
-    width: calc(100% + 20px);
-    margin-left: -10px;
-    margin-right: -10px;
-}
-
-/* ========= 5. Cards & Headers ========= */
+/* ========= Cards ========= */
 .card {
     border-radius: 0.5rem;
     border: 1px solid rgba(0, 0, 0, 0.125);
@@ -178,7 +60,7 @@ body {
     padding: 0.75rem 1rem;
 }
 
-/* ========= 6. Section Borders ========= */
+/* Add subtle border around main sections */
 #dashboard,
 #trades,
 #cost-basis {
@@ -338,17 +220,6 @@ body {
     width: 140px;
 }
 
-.chart-container {
-    position: relative;
-    height: 450px;
-}
-
-.sunburst-chart {
-    width: 450px;
-    height: 450px;
-}
-
-/* Make chart cards same height */
 .row .col-6 .card {
     height: 100%;
 }
@@ -465,8 +336,8 @@ body {
 }
 
 /* Status Filter */
-.status-filter {
-    width: 150px !important;
+select.status-filter {
+    width: 150px;
 }
 
 /* Header Components */
@@ -515,19 +386,6 @@ body {
 }
 
 /* Color Scheme */
-:root {
-    --primary-color: #667eea;
-    --secondary-color: #764ba2;
-    --accent-color: #f093fb;
-    --success-color: #4facfe;
-    --info-color: #00d4aa;
-    --warning-color: #feca57;
-    --danger-color: #ff6b6b;
-    --light-color: #f8f9fa;
-    --dark-color: #2c3e50;
-}
-
-/* Card background gradients - using CSS variables */
 .card.bg-primary {
     background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)) !important;
     border: none;
@@ -733,80 +591,6 @@ h1 {
     padding: 1.5rem;
 }
 
-/* Chart Styling */
-#premiumChart {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-/* Cost Basis Table Styling */
-#cost-basis-summary .table {
-    border: 10px solid #dee2e6;
-    border-radius: 0.5rem;
-}
-
-#cost-basis-summary .table th {
-    border-top: none;
-    font-weight: 600;
-    font-size: 0.875rem;
-    background-color: var(--light-color);
-}
-
-#cost-basis-summary .table td {
-    font-size: 0.875rem;
-    padding: 0.5rem 0.75rem;
-}
-
-/* Number Styling */
-.text-danger {
-    color: var(--danger-color) !important;
-}
-
-.text-success {
-    color: var(--success-color) !important;
-}
-
-/* Custom Scrollbar */
-.table-responsive::-webkit-scrollbar {
-    height: 8px;
-}
-
-.table-responsive::-webkit-scrollbar-track {
-    background: #f1f1f1;
-    border-radius: 4px;
-}
-
-.table-responsive::-webkit-scrollbar-thumb {
-    background: #c1c1c1;
-    border-radius: 4px;
-}
-
-.table-responsive::-webkit-scrollbar-thumb:hover {
-    background: #a8a8a8;
-}
-
-/* Trades Table Specific */
-#trades-table-main tr td:first-child {
-    background-color: transparent !important;
-    text-align: center;
-    white-space: normal;
-    word-wrap: break-word;
-    vertical-align: middle;
-}
-
-#trades-table-main tr:first-child td {
-    white-space: normal;
-    word-wrap: break-word;
-    text-align: center;
-    vertical-align: middle;
-}
-
-/* Responsive Design */
-@media (max-width: 768px) {
-    .container-fluid {
-        padding: 0.5rem;
-    }
-    
     .card {
         margin-bottom: 1rem;
     }

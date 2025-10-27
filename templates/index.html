@@ -9,7 +9,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=122">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=137">
     <style>
         .floating-nav {
             position: fixed;
@@ -108,7 +108,7 @@
     <div class="page-wrapper">
         <!-- Header Banner -->
         <div class="header-banner-wrapper">
-            <div class="header-banner d-flex justify-content-center align-items-center position-relative">
+            <div class="header-banner d-flex justify-content-center align-items-center position-relative compact">
                 <h1 class="text-center mb-0">
                     🔥🔥🔥🔥 Tracker
                 </h1>
@@ -156,12 +156,12 @@
         <div class="container-fluid px-0">
             <div class="row mb-5">
                 <div class="col-12">
-                    <div class="card" id="dashboard" style="width: 100%;">
-                    <div class="card-header bg-info text-white">
+                    <div class="card section-card" id="dashboard" style="width: 100%;">
+                    <div class="card-header bg-info text-white compact">
                         <div class="d-flex align-items-center justify-content-between">
                             <div class="d-flex align-items-center">
                                 <i class="fas fa-chevron-down section-toggle-icon" id="dashboardToggleIcon" data-bs-toggle="collapse" data-bs-target="#dashboardCollapse" aria-expanded="true" aria-controls="dashboardCollapse"></i>
-                                <h5 class="mb-0 dashboard-title" style="font-size: 1.875rem; font-weight: bold;">
+                                <h5 class="mb-0 section-title" style="font-size: 1.875rem; font-weight: bold;">
                                     <i class="fas fa-tachometer-alt me-2"></i>
                                     Dashboard
                                 </h5>
@@ -346,12 +346,12 @@
         <div class="container-fluid px-0">
             <div class="row mb-5" style="margin-top: 2.25rem;">
                 <div class="col-12">
-                    <div class="card" id="trades" style="width: 100%;">
-                    <div class="card-header bg-success text-white">
+                    <div class="card section-card" id="trades" style="width: 100%;">
+                    <div class="card-header bg-success text-white compact">
                         <div class="d-flex align-items-center justify-content-between">
                             <div class="d-flex align-items-center">
                                 <i class="fas fa-chevron-down section-toggle-icon" id="tradesToggleIcon" data-bs-toggle="collapse" data-bs-target="#tradesCollapse" aria-expanded="true" aria-controls="tradesCollapse"></i>
-                                <h5 class="mb-0 trades-title" style="font-size: 1.875rem; font-weight: bold;">
+                                <h5 class="mb-0 section-title" style="font-size: 1.875rem; font-weight: bold;">
                                     <i class="fas fa-chart-line me-2"></i>
                                     Trades
                                 </h5>
@@ -446,12 +446,12 @@
         <div class="container-fluid px-0">
             <div class="row mb-5" style="margin-top: 2.25rem;">
                 <div class="col-12">
-                    <div class="card" id="cost-basis" style="width: 100%;">
-                    <div class="card-header bg-success text-white">
+                    <div class="card section-card" id="cost-basis" style="width: 100%;">
+                    <div class="card-header bg-success text-white compact">
                         <div class="d-flex align-items-center justify-content-between">
                             <div class="d-flex align-items-center">
                                 <i class="fas fa-chevron-down section-toggle-icon" id="costBasisToggleIcon" data-bs-toggle="collapse" data-bs-target="#costBasisCollapse" aria-expanded="true" aria-controls="costBasisCollapse"></i>
-                                <h5 class="mb-0 cost-basis-title" style="font-size: 1.875rem; font-weight: bold;">
+                                <h5 class="mb-0 section-title" style="font-size: 1.875rem; font-weight: bold;">
                                     <i class="fas fa-calculator me-2"></i>
                                     Cost Basis
                                 </h5>
@@ -843,7 +843,7 @@
     <!-- Alert Container -->
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}?v=316"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=319"></script>
     
     <script>
         // Global variable to track current section

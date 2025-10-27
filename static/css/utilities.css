@@ -1,0 +1,53 @@
+    /* Spacing Scale */
+    --space-xs: 0.25rem;    /* 4px */
+    --space-sm: 0.5rem;     /* 8px */
+    --space-md: 1rem;       /* 16px */
+    --space-lg: 1.5rem;     /* 24px */
+    --space-xl: 2rem;       /* 32px */
+    --space-xxl: 3rem;      /* 48px */
+    
+    /* Common spacing values found in app */
+    --space-title: 15px;
+    --space-header: 25px;
+    --space-controls: 35px;
+    
+    /* Colors */
+    --primary-color: #667eea;
+    --primary-color-alt: #007bff;
+    --primary-color-dark: #0056b3;
+    --secondary-color: #764ba2;
+    --accent-color: #f093fb;
+    --success-color: #28a745;
+    --success-color-dark: #1e7e34;
+    --info-color: #17a2b8;
+    --info-color-dark: #117a8b;
+    --warning-color: #ffc107;
+    --warning-color-dark: #e0a800;
+    --danger-color: #dc3545;
+    --light-color: #f8f9fa;
+    --light-color-alt: #e9ecef;
+    --dark-color: #212529;
+    --background-color: #f5f7fa;
+    
+    /* Typography */
+    --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+body {
+    background-color: var(--background-color);
+    font-family: var(--font-family);
+}
+
+/* ========= Spacing Scale Classes ========= */
+/* Consistent spacing system - use these classes throughout */
+.space-xs { margin-left: var(--space-xs); }
+.space-sm { margin-left: var(--space-sm); }
+.space-md { margin-left: var(--space-md); }
+.space-lg { margin-left: var(--space-lg); }
+.space-xl { margin-left: var(--space-xl); }
+.space-xxl { margin-left: var(--space-xxl); }
+
+/* Common spacing values */
+.space-title { margin-left: var(--space-title); }
+.space-header { margin-left: var(--space-header); }
+.space-controls { margin-left: var(--space-controls); }

@@ -1,0 +1,17 @@
+/* Custom styles for Stock Options Tracker */
+
+/* ========= CSS Variables ========= */
+:root {
+:root {
+    --primary-color: #667eea;
+    --secondary-color: #764ba2;
+    --accent-color: #f093fb;
+    --success-color: #4facfe;
+    --info-color: #00d4aa;
+    --warning-color: #feca57;
+    --danger-color: #ff6b6b;
+    --light-color: #f8f9fa;
+    --dark-color: #2c3e50;
+}
+
+/* Card background gradients - using CSS variables */

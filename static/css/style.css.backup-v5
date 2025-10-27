@@ -1,29 +1,6 @@
-/* ============================================================================
-   STOCK OPTIONS TRACKER - CUSTOM STYLES
-   ============================================================================
-   
-   TABLE OF CONTENTS:
-   
-   1. CSS Variables (Base: colors, spacing, typography)
-   2. Global Styles (Body, typography, utilities)
-   3. Layout (Page wrapper, containers, responsive)
-   4. Header Banner (Sticky banner, settings icon)
-   5. Cards & Headers (Card components, compact variants)
-   6. Sections (Dashboard, trades, cost basis borders)
-   7. Modal Button Visibility (Form states)
-   8. Components (Buttons, forms, tables, modals)
-   9. Icons & Typography (Section titles, icons)
-   10. Dashboard Controls (Filter controls, date inputs)
-   11. Charts (Containers, legends, dimensions)
-   12. Trades Table (Table styling, editable cells)
-   13. Cost Basis (Summary table, filters)
-   14. Colors & Gradients (Background variants)
-   15. Responsive & Print (Media queries)
-   
-   ============================================================================
-*/
+/* Custom styles for Stock Options Tracker */
 
-/* ========= 1. CSS Variables ========= */
+/* ========= CSS Variables ========= */
 :root {
     /* Spacing Scale */
     --space-xs: 0.25rem;    /* 4px */
@@ -60,7 +37,6 @@
     --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
-/* ========= 2. Global Styles ========= */
 body {
     background-color: var(--background-color);
     font-family: var(--font-family);
@@ -80,7 +56,7 @@ body {
 .space-header { margin-left: var(--space-header); }
 .space-controls { margin-left: var(--space-controls); }
 
-/* ========= 7. Modal Button Visibility ========= */
+/* ========= Modal Button Visibility ========= */
 #btoForm.add-mode #bto-add-buttons,
 #btoForm.add-mode #bto-add-cancel {
     display: flex;
@@ -117,7 +93,7 @@ body {
     display: none;
 }
 
-/* ========= 3. Layout ========= */
+/* ========= Global Layout ========= */
 .page-wrapper {
     padding-left: 2rem;
     padding-right: 2rem;
@@ -126,7 +102,7 @@ body {
     background-color: white;
 }
 
-/* ========= 4. Header Banner ========= */
+/* ========= Header Banner ========= */
 .header-banner {
     position: relative;
     background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
@@ -153,7 +129,7 @@ body {
     margin-right: -10px;
 }
 
-/* ========= 5. Cards & Headers ========= */
+/* ========= Cards ========= */
 .card {
     border-radius: 0.5rem;
     border: 1px solid rgba(0, 0, 0, 0.125);
@@ -178,7 +154,7 @@ body {
     padding: 0.75rem 1rem;
 }
 
-/* ========= 6. Section Borders ========= */
+/* Add subtle border around main sections */
 #dashboard,
 #trades,
 #cost-basis {
