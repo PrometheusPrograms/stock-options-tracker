@@ -293,6 +293,11 @@ body {
     height: 450px;
 }
 
+/* Make chart cards same height */
+.row .col-6 .card {
+    height: 100%;
+}
+
 .legend-item {
     width: 12px;
     height: 12px;
