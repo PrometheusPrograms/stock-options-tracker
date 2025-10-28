@@ -787,6 +787,7 @@ h1 {
     left: 0;
     background-color: white;
     z-index: 10;
+    box-shadow: 2px 0 5px rgba(0,0,0,0.1);
 }
 
 #trades-table-main thead th:first-child {
@@ -796,7 +797,6 @@ h1 {
 
 /* Compact padding for all cells */
 #trades-table-main tr td:first-child {
-    background-color: transparent !important;
     text-align: center;
     white-space: normal;
     word-wrap: break-word;
