@@ -2116,7 +2116,11 @@ def import_excel():
                             continue
                         col = col_num(ref)
                         if col >= 5:  # read only from column E onward
-                            row_cells[col] = cell_value(c)
+                            val = cell_value(c)
+                            row_cells[col] = val
+                            # Check if this is ASSIGNED or EXPIRED
+                            if idx <= 60 and col <= 20 and ("ASSIGNED" in str(val).upper() or "EXPIRED" in str(val).upper()):
+                                print(f"Found ASSIGNED/EXPIRED at row {idx}, col {col}: '{val}'", flush=True)
                     if row_cells:
                         rows[idx] = row_cells
                 
@@ -2186,11 +2190,24 @@ def import_excel():
                 
                 print(f"Collected {len(rows)} rows from Excel", flush=True)
             
+            # Debug: Check row 1
+            if 1 in rows:
+                print(f"Row 1 has columns: {sorted(list(rows[1].keys()))[:15]}", flush=True)
+                for col in sorted(rows[1].keys())[:10]:
+                    print(f"  Row 1, col {col} (letter={chr(64+col)}): '{rows[1][col]}'", flush=True)
+            
+            # Check what's in row 56 (one above row 57)
+            if 56 in rows:
+                print(f"Row 56 sample:", flush=True)
+                for col in sorted(rows[56].keys())[:10]:
+                    print(f"  Row 56, col {col}: '{rows[56][col]}'", flush=True)
+            
             # Debug: Check row 57
             if 57 in rows:
-                print(f"Row 57 has {len(rows[57])} columns: {sorted(list(rows[57].keys()))[:10]}", flush=True)
-                for col in sorted(rows[57].keys())[:10]:
-                    print(f"  Row 57, col {col}: '{rows[57][col]}'", flush=True)
+                print(f"Row 57 has {len(rows[57])} columns", flush=True)
+                print(f"Row 57 column indices: {sorted(list(rows[57].keys()))}", flush=True)
+                for col in sorted(rows[57].keys())[:20]:
+                    print(f"  Row 57, col {col} (letter={chr(64+col)}): '{rows[57][col]}'", flush=True)
             
 
             # Define fixed row mappings (Excel row -> database field)

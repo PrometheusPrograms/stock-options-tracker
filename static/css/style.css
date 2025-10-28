@@ -780,6 +780,21 @@ h1 {
     font-size: 0.875rem; /* Smaller font */
 }
 
+/* Make first column sticky */
+#trades-table-main thead th:first-child,
+#trades-table-main tbody td:first-child {
+    position: sticky;
+    left: 0;
+    background-color: white;
+    z-index: 10;
+}
+
+#trades-table-main thead th:first-child {
+    z-index: 20; /* Higher z-index for header */
+    background-color: var(--light-color);
+}
+
+/* Compact padding for all cells */
 #trades-table-main tr td:first-child {
     background-color: transparent !important;
     text-align: center;
@@ -804,6 +819,19 @@ h1 {
 #trades-table-main .form-control {
     padding: 0.25rem 0.5rem;
     font-size: 0.875rem;
+}
+
+/* Compact table container */
+#trades .table-responsive {
+    overflow-x: auto;
+}
+
+/* Compact header styling */
+#trades-table-main thead th {
+    padding: 0.375rem 0.5rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    white-space: nowrap;
 }
 
 /* Responsive Design */
