@@ -2184,24 +2184,26 @@ def webhook_deploy():
         
         print(f"Deploying from: {project_dir}")
         
-        # Reset to discard any local changes (especially to trades.db)
-        print("Resetting local changes...")
-        reset_result = subprocess.run(['git', 'reset', '--hard', 'HEAD'], 
+        # Fetch latest changes
+        print("Fetching latest code...")
+        fetch_result = subprocess.run(['git', 'fetch', 'origin'], 
                                      cwd=project_dir, 
                                      capture_output=True, 
                                      text=True)
-        if reset_result.returncode == 0:
-            print("✓ Reset local changes")
         
-        # Pull latest changes from GitHub
-        print("Pulling latest code...")
-        result = subprocess.run(['git', 'pull', 'origin', 'main'], 
-                              cwd=project_dir, 
-                              capture_output=True, 
-                              text=True)
+        if fetch_result.returncode == 0:
+            print("✓ Fetched latest code")
+        
+        # Reset to origin/main to overwrite local changes
+        print("Resetting to origin/main...")
+        result = subprocess.run(['git', 'reset', '--hard', 'origin/main'], 
+                               cwd=project_dir, 
+                               capture_output=True, 
+                               text=True)
         
         if result.returncode == 0:
-            print(f"Git pull successful: {result.stdout}")
+            print(f"✓ Reset to origin/main: {result.stdout}")
+            print(f"Deployment successful: {result.stdout}")
             
             # Reload WSGI application (for PythonAnywhere)
             wsgi_file = '/var/www/stockoptionstracker_pythonanywhere_com_wsgi.py'
@@ -2260,7 +2262,7 @@ def webhook_deploy():
             message = f"Deployment successful. {'; '.join(messages)}"
             return jsonify({'success': True, 'message': message, 'output': result.stdout}), 200
         else:
-            print(f"Git pull failed: {result.stderr}")
+            print(f"Git reset failed: {result.stderr}")
             return jsonify({'success': False, 'error': result.stderr}), 500
             
     except Exception as e:
