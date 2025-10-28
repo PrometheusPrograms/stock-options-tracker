@@ -778,6 +778,7 @@ h1 {
 /* Trades Table Specific - Compact Layout */
 #trades-table-main {
     font-size: 0.875rem; /* Smaller font */
+    min-width: 800px; /* Force horizontal scrolling */
 }
 
 /* Make first column sticky */
@@ -785,14 +786,14 @@ h1 {
 #trades-table-main tbody td:first-child {
     position: sticky;
     left: 0;
-    background-color: white;
+    background-color: white !important;
     z-index: 10;
     box-shadow: 2px 0 5px rgba(0,0,0,0.1);
 }
 
 #trades-table-main thead th:first-child {
     z-index: 20; /* Higher z-index for header */
-    background-color: var(--light-color);
+    background-color: var(--light-color) !important;
 }
 
 /* Compact padding for all cells */
