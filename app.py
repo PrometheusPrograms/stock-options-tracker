@@ -226,7 +226,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             account_id INTEGER NOT NULL,
             transaction_date TEXT NOT NULL,
-            transaction_type TEXT NOT NULL CHECK(transaction_type IN ('DEPOSIT', 'WITHDRAWAL', 'PREMIUM_CREDIT', 'PREMIUM_DEBIT', 'BUY', 'SELL')),
+            transaction_type TEXT NOT NULL CHECK(transaction_type IN ('DEPOSIT', 'WITHDRAWAL', 'PREMIUM_CREDIT', 'PREMIUM_DEBIT', 'OPTIONS', 'ASSIGNMENT', 'BUY', 'SELL')),
             amount NUMERIC(12,2) NOT NULL,
             description TEXT,
             trade_id INTEGER,
@@ -242,14 +242,14 @@ def init_db():
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cash_flows'")
     if cursor.fetchone():
         try:
-            # Try to insert a test BUY record to check if the constraint allows it
+            # Try to insert a test OPTIONS record to check if the constraint allows it
             cursor.execute('''
                 INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount)
-                VALUES (?, '2000-01-01', 'BUY', 0.01)
+                VALUES (?, '2000-01-02', 'OPTIONS', 0.01)
             ''', (1,))
-            cursor.execute('DELETE FROM cash_flows WHERE transaction_type = "BUY" AND transaction_date = "2000-01-01"')
+            cursor.execute('DELETE FROM cash_flows WHERE transaction_type = "OPTIONS" AND transaction_date = "2000-01-02"')
         except:
-            # If BUY is not allowed, the table has the old constraint, so recreate it
+            # If OPTIONS is not allowed, the table has the old constraint, so recreate it
             print("Recreating cash_flows table with updated CHECK constraint...")
             # Save existing data
             cursor.execute('SELECT * FROM cash_flows')
@@ -262,7 +262,7 @@ def init_db():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     account_id INTEGER NOT NULL,
                     transaction_date TEXT NOT NULL,
-                    transaction_type TEXT NOT NULL CHECK(transaction_type IN ('DEPOSIT', 'WITHDRAWAL', 'PREMIUM_CREDIT', 'PREMIUM_DEBIT', 'BUY', 'SELL')),
+                    transaction_type TEXT NOT NULL CHECK(transaction_type IN ('DEPOSIT', 'WITHDRAWAL', 'PREMIUM_CREDIT', 'PREMIUM_DEBIT', 'OPTIONS', 'ASSIGNMENT', 'BUY', 'SELL')),
                     amount NUMERIC(12,2) NOT NULL,
                     description TEXT,
                     trade_id INTEGER,
@@ -937,15 +937,31 @@ def add_trade():
             # Create cost basis entry for options trades (ROCT PUT, ROCT CALL, etc.)
             create_options_cost_basis_entry(cursor, account_id, ticker_id, trade_id, trade_date, trade_type, num_of_contracts, premium, strike_price, expiration_date)
         
-        # Create cash flow entry for premium received (positive for credit trades)
-        # Includes ROCT PUT, ROCT CALL, ROC (Rule One Call), ROP (Rule One Put)
+        # Create cash flow entry for EVERY trade based on requires_contracts
         cash_flow_id = None
-        if 'ROCT' in trade_type or 'ROCT_PUT' in trade_type or 'ROCT_CALL' in trade_type or 'ROC' in trade_type.upper() or 'ROP' in trade_type.upper():
+        
+        # Check if this trade type requires contracts
+        cursor.execute('SELECT requires_contracts FROM trade_types WHERE type_name = ?', (trade_type,))
+        trade_type_row = cursor.fetchone()
+        requires_contracts = trade_type_row['requires_contracts'] if trade_type_row else 0
+        
+        if requires_contracts == 1:
+            # Options trade: create positive cash flow entry with transaction_type='OPTIONS'
             cursor.execute('''
                 INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (account_id, trade_date, 'PREMIUM_CREDIT', round(premium * num_of_contracts * 100, 2), 
+            ''', (account_id, trade_date, 'OPTIONS', round(premium * num_of_contracts * 100, 2), 
                   f"{trade_type} premium received", trade_id, ticker_id))
+            cash_flow_id = cursor.lastrowid
+        else:
+            # For BTO/STC or other trade types that don't require contracts, still create a cash flow entry
+            # Determine if it's a credit or debit based on trade type
+            transaction_type = 'BUY' if trade_type == 'BTO' else 'SELL'
+            cursor.execute('''
+                INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (account_id, trade_date, transaction_type, round(total_premium, 2), 
+                  f"{trade_type} {num_of_contracts} shares", trade_id, ticker_id))
             cash_flow_id = cursor.lastrowid
         
         # Update cost_basis entry to link to cash_flow if cash flow was created
@@ -1175,12 +1191,25 @@ def update_trade(trade_id):
             params.append(data['expiration_date'])
         
         if 'num_of_contracts' in data:
+            num_contracts = int(data['num_of_contracts'])
             updates.append('num_of_contracts = ?')
-            params.append(int(data['num_of_contracts']))
+            params.append(num_contracts)
+            # Recalculate total_premium when num_of_contracts changes
+            # Get current credit_debit to calculate new total
+            current_credit_debit = trade['credit_debit']
+            new_total_premium = current_credit_debit * num_contracts
+            updates.append('total_premium = ?')
+            params.append(new_total_premium)
         
         if 'premium' in data or 'creditDebit' in data:
+            credit_debit = float(data.get('premium') or data.get('creditDebit'))
             updates.append('credit_debit = ?')
-            params.append(float(data.get('premium') or data.get('creditDebit')))
+            params.append(credit_debit)
+            # Recalculate total_premium when credit_debit changes
+            current_num_contracts = trade['num_of_contracts']
+            new_total_premium = credit_debit * current_num_contracts
+            updates.append('total_premium = ?')
+            params.append(new_total_premium)
         
         if 'currentPrice' in data:
             updates.append('current_price = ?')
@@ -1238,7 +1267,7 @@ def update_trade_status(trade_id):
         if new_status == 'assigned' and old_status != 'assigned':
             create_assigned_cost_basis_entry(cursor, trade)
             
-            # Create cash flow entry for the assigned shares (buy)
+            # Create cash flow entry for the assignment
             # Convert Row to dict if needed
             trade_dict = dict(trade) if hasattr(trade, 'keys') and not isinstance(trade, dict) else trade
             account_id = trade_dict.get('account_id', 9)
@@ -1246,20 +1275,30 @@ def update_trade_status(trade_id):
             trade_date = trade_dict['trade_date']
             num_of_contracts = trade_dict['num_of_contracts']
             strike_price = trade_dict['strike_price']
-            
-            # Calculate total amount (negative for cash out)
-            shares = num_of_contracts * 100
-            total_amount = -(strike_price * shares)  # Negative because we're buying
+            trade_type = trade_dict['trade_type']
             
             # Get ticker symbol for description
             cursor.execute('SELECT ticker FROM tickers WHERE id = ?', (ticker_id,))
             ticker = cursor.fetchone()['ticker']
             
+            # Calculate total amount based on trade type:
+            # - PUTs (ROCT PUT, ROP): negative (we're being assigned to buy, money goes out)
+            # - CALLs (ROCT CALL, ROC): positive (we're being assigned to sell, money comes in)
+            shares = num_of_contracts * 100
+            if 'PUT' in trade_type or 'ROP' in trade_type:
+                # PUT assignment: negative amount (buying shares)
+                total_amount = -(strike_price * shares)
+                description = f"ASSIGNMENT: BUY {shares} {ticker} @ ${strike_price} (assigned PUT)"
+            else:
+                # CALL assignment: positive amount (selling shares)
+                total_amount = strike_price * shares
+                description = f"ASSIGNMENT: SELL {shares} {ticker} @ ${strike_price} (assigned CALL)"
+            
             cursor.execute('''
                 INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (account_id, trade_date, 'BUY', round(total_amount, 2), 
-                  f"BUY {shares} {ticker} @ ${strike_price} (assigned)", trade_id, ticker_id))
+            ''', (account_id, trade_date, 'ASSIGNMENT', round(total_amount, 2), 
+                  description, trade_id, ticker_id))
             cash_flow_id = cursor.lastrowid
             
             # Link the cost_basis entry to this cash flow
@@ -1813,6 +1852,27 @@ def get_summary():
         
         cursor.execute(query, params)
         trades = cursor.fetchall()
+        
+        # Calculate total_net_credit from cash_flows where transaction_type='OPTIONS'
+        cash_flow_query = '''
+            SELECT SUM(amount) as total_net_credit
+            FROM cash_flows
+            WHERE transaction_type = 'OPTIONS'
+        '''
+        cash_flow_params = []
+        
+        if start_date:
+            cash_flow_query += ' AND transaction_date >= ?'
+            cash_flow_params.append(start_date)
+        
+        if end_date:
+            cash_flow_query += ' AND transaction_date <= ?'
+            cash_flow_params.append(end_date)
+        
+        cursor.execute(cash_flow_query, cash_flow_params)
+        result = cursor.fetchone()
+        total_net_credit = result['total_net_credit'] if result['total_net_credit'] is not None else 0
+        
         conn.close()
         
         # Calculate summary statistics
@@ -1825,8 +1885,6 @@ def get_summary():
         wins = len([t for t in completed_trades_list if t['total_premium'] > 0])
         losses = len([t for t in completed_trades_list if t['total_premium'] < 0])
         winning_percentage = (wins / len(completed_trades_list) * 100) if len(completed_trades_list) > 0 else 0
-        
-        total_net_credit = sum(t['total_premium'] for t in trades)
         
         # Calculate days remaining in year
         today = datetime.now().date()
@@ -1861,25 +1919,23 @@ def get_chart_data():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Build query with date filters
+        # Build query with date filters - sum only OPTIONS cash_flows.amount grouped by transaction_date
         query = '''
-            SELECT st.trade_date, SUM(st.total_premium) as daily_premium
-            FROM trades st 
-            JOIN tickers s ON st.ticker_id = s.id 
-            WHERE s.ticker IS NOT NULL AND s.ticker != "" 
-            AND st.trade_type NOT IN ("BTO", "STC", "ASSIGNED")
+            SELECT transaction_date, SUM(amount) as daily_premium
+            FROM cash_flows
+            WHERE transaction_type = 'OPTIONS'
         '''
         params = []
         
         if start_date:
-            query += ' AND st.trade_date >= ?'
+            query += ' AND transaction_date >= ?'
             params.append(start_date)
         
         if end_date:
-            query += ' AND st.trade_date <= ?'
+            query += ' AND transaction_date <= ?'
             params.append(end_date)
         
-        query += ' GROUP BY st.trade_date ORDER BY st.trade_date'
+        query += ' GROUP BY transaction_date ORDER BY transaction_date'
         
         cursor.execute(query, params)
         data = cursor.fetchall()
@@ -1888,7 +1944,7 @@ def get_chart_data():
         chart_data = []
         for row in data:
             # Format date as MM/DD
-            date_obj = datetime.strptime(row['trade_date'], '%Y-%m-%d')
+            date_obj = datetime.strptime(row['transaction_date'], '%Y-%m-%d')
             formatted_date = date_obj.strftime('%m/%d')
             
             chart_data.append({
@@ -1901,10 +1957,195 @@ def get_chart_data():
         print(f'Error fetching chart data: {e}')
         return jsonify({'error': 'Failed to fetch chart data'}), 500
 
+@app.route('/api/repopulate-cash-flows', methods=['POST'])
+def repopulate_cash_flows():
+    """Reset cash_flows table and repopulate from trades table"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Clear all existing cash flows
+        cursor.execute('DELETE FROM cash_flows')
+        print("Cleared cash_flows table", flush=True)
+        
+        # Get all trades
+        cursor.execute('''
+            SELECT t.*, tt.requires_contracts 
+            FROM trades t
+            LEFT JOIN trade_types tt ON t.trade_type = tt.type_name
+        ''')
+        trades = cursor.fetchall()
+        
+        print(f"Found {len(trades)} trades to process", flush=True)
+        
+        created_count = 0
+        
+        for trade in trades:
+            trade_dict = dict(trade)
+            account_id = trade_dict.get('account_id', 9)
+            ticker_id = trade_dict['ticker_id']
+            trade_date = trade_dict['trade_date']
+            trade_id = trade_dict['id']
+            premium = trade_dict['credit_debit']
+            num_of_contracts = trade_dict['num_of_contracts']
+            trade_type = trade_dict['trade_type']
+            trade_status = trade_dict['trade_status']
+            strike_price = trade_dict['strike_price']
+            requires_contracts = trade_dict.get('requires_contracts', 0)
+            
+            # Get ticker symbol
+            cursor.execute('SELECT ticker FROM tickers WHERE id = ?', (ticker_id,))
+            ticker_result = cursor.fetchone()
+            ticker = ticker_result['ticker'] if ticker_result else 'UNKNOWN'
+            
+            # Create cash flow entry for the initial trade
+            if requires_contracts == 1:
+                # Options trade: create positive cash flow entry
+                amount = premium * num_of_contracts * 100
+                cursor.execute('''
+                    INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (account_id, trade_date, 'OPTIONS', round(amount, 2), 
+                      f"{trade_type} premium received", trade_id, ticker_id))
+            else:
+                # Non-options trade: create BUY/SELL entry
+                amount = trade_dict.get('total_premium', premium * num_of_contracts)
+                transaction_type = 'BUY' if trade_type == 'BTO' else 'SELL'
+                cursor.execute('''
+                    INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (account_id, trade_date, transaction_type, round(amount, 2), 
+                      f"{trade_type} {num_of_contracts} shares", trade_id, ticker_id))
+            
+            created_count += 1
+            
+            # If trade is assigned, create ASSIGNMENT cash flow entry
+            if trade_status == 'assigned':
+                shares = num_of_contracts * 100
+                if 'PUT' in trade_type or 'ROP' in trade_type:
+                    # PUT assignment: negative amount (buying shares)
+                    assignment_amount = -(strike_price * shares)
+                    description = f"ASSIGNMENT: BUY {shares} {ticker} @ ${strike_price} (assigned PUT)"
+                else:
+                    # CALL assignment: positive amount (selling shares)
+                    assignment_amount = strike_price * shares
+                    description = f"ASSIGNMENT: SELL {shares} {ticker} @ ${strike_price} (assigned CALL)"
+                
+                cursor.execute('''
+                    INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (account_id, trade_date, 'ASSIGNMENT', round(assignment_amount, 2), 
+                      description, trade_id, ticker_id))
+                created_count += 1
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True, 
+            'message': f'Repopulated cash_flows with {created_count} entries from {len(trades)} trades'
+        })
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f'Error repopulating cash flows: {e}')
+        print(f'Traceback: {error_detail}')
+        return jsonify({'error': f'Failed to repopulate cash flows: {str(e)}'}), 500
+
+@app.route('/api/repopulate-cost-basis', methods=['POST'])
+def repopulate_cost_basis():
+    """Repopulate cost_basis entries for assigned trades and link to cash_flows"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get all assigned trades
+        cursor.execute('''
+            SELECT t.*, tick.ticker 
+            FROM trades t
+            JOIN tickers tick ON t.ticker_id = tick.id
+            WHERE t.trade_status = 'assigned'
+        ''')
+        assigned_trades = cursor.fetchall()
+        
+        print(f"Found {len(assigned_trades)} assigned trades", flush=True)
+        
+        linked_count = 0
+        created_count = 0
+        
+        for trade in assigned_trades:
+            trade_dict = dict(trade)
+            account_id = trade_dict.get('account_id', 9)
+            ticker_id = trade_dict['ticker_id']
+            trade_id = trade_dict['id']
+            trade_date = trade_dict['trade_date']
+            trade_type = trade_dict['trade_type']
+            num_of_contracts = trade_dict['num_of_contracts']
+            strike_price = trade_dict['strike_price']
+            expiration_date = trade_dict['expiration_date']
+            
+            # Check if cost_basis entry exists for this assignment
+            cursor.execute('''
+                SELECT id, cash_flow_id FROM cost_basis
+                WHERE trade_id = ? AND account_id = ? AND ticker_id = ?
+                AND description LIKE 'ASSIGNED%'
+            ''', (trade_id, account_id, ticker_id))
+            cost_basis_entry = cursor.fetchone()
+            
+            # Find the ASSIGNMENT cash flow for this trade
+            cursor.execute('''
+                SELECT id FROM cash_flows
+                WHERE trade_id = ? AND transaction_type = 'ASSIGNMENT'
+            ''', (trade_id,))
+            assignment_cash_flow = cursor.fetchone()
+            
+            if assignment_cash_flow:
+                cash_flow_id = assignment_cash_flow['id']
+                
+                if cost_basis_entry:
+                    # Update existing cost_basis entry to link to cash flow
+                    if not cost_basis_entry['cash_flow_id']:
+                        cursor.execute('''
+                            UPDATE cost_basis SET cash_flow_id = ?
+                            WHERE id = ?
+                        ''', (cash_flow_id, cost_basis_entry['id']))
+                        linked_count += 1
+                        print(f"Linked cost_basis {cost_basis_entry['id']} to cash_flow {cash_flow_id} for trade {trade_id}", flush=True)
+                else:
+                    # Create missing cost_basis entry for this assignment
+                    print(f"Creating missing cost_basis entry for trade {trade_id}", flush=True)
+                    create_assigned_cost_basis_entry(cursor, trade_dict)
+                    created_count += 1
+                    
+                    # Now link it to the cash flow
+                    cursor.execute('''
+                        UPDATE cost_basis SET cash_flow_id = ?
+                        WHERE trade_id = ? AND account_id = ? AND ticker_id = ?
+                        AND description LIKE 'ASSIGNED%'
+                    ''', (cash_flow_id, trade_id, account_id, ticker_id))
+                    linked_count += 1
+            else:
+                print(f"No ASSIGNMENT cash flow found for trade {trade_id}", flush=True)
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Linked {linked_count} cost_basis entries and created {created_count} new entries for {len(assigned_trades)} assigned trades'
+        })
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f'Error repopulating cost basis: {e}')
+        print(f'Traceback: {error_detail}')
+        return jsonify({'error': f'Failed to repopulate cost basis: {str(e)}'}), 500
+
 @app.route('/test')
 def test_endpoint():
     """Simple test endpoint to verify app is running"""
     return 'App is running!', 200
+
 
 @app.route('/webhook/deploy', methods=['POST'])
 def webhook_deploy():
@@ -2204,12 +2445,43 @@ def import_excel():
             
             # Debug: Check row 57
             if 57 in rows:
-                print(f"Row 57 has {len(rows[57])} columns", flush=True)
-                print(f"Row 57 column indices: {sorted(list(rows[57].keys()))}", flush=True)
+                logging.info(f"Row 57 has {len(rows[57])} columns")
+                logging.info(f"Row 57 column indices: {sorted(list(rows[57].keys()))}")
                 for col in sorted(rows[57].keys())[:20]:
-                    print(f"  Row 57, col {col} (letter={chr(64+col)}): '{rows[57][col]}'", flush=True)
+                    logging.info(f"  Row 57, col {col} (letter={chr(64+col)}): '{rows[57][col]}'")
             
-
+            # Debug: Check row 65
+            if 65 in rows:
+                logging.info(f"Row 65 has {len(rows[65])} columns")
+                logging.info(f"Row 65 column indices: {sorted(list(rows[65].keys()))}")
+                for col in sorted(rows[65].keys())[:20]:
+                    logging.info(f"  Row 65, col {col} (letter={chr(64+col)}): '{rows[65][col]}'")
+            
+            # Debug: Check row 4 for trade status in trade columns (5, 7, 9, 11, 13...)
+            print("\n=== CHECKING ROW 4 FOR TRADE STATUS ===", flush=True)
+            if 4 in rows:
+                trade_cols_1 = sorted(rows[1].keys())[:10]  # First 10 trade columns
+                for col in trade_cols_1:
+                    status_val = rows[4].get(col, '')
+                    print(f"Row 4, col {col}: '{status_val}'", flush=True)
+            
+            # Print requested rows in trade columns
+            logging.info("\n=== ROW DATA IN COLUMNS 5, 7, 9 ===")
+            for row_num in [1, 3, 5, 8, 41, 52, 54, 57, 61, 64, 65]:
+                if row_num in rows:
+                    logging.info(f"\nRow {row_num}:")
+                    for col in [5, 7, 9]:
+                        val = rows[row_num].get(col, '')
+                        logging.info(f"  Col {col}: '{val}'")
+            
+            # Print ALL non-empty values in row 64 to see what's actually there
+            logging.info("\n=== ALL ROW 64 VALUES (first 30 non-empty) ===")
+            if 64 in rows:
+                row_64_all = rows[64]
+                non_empty = [(col, val) for col, val in sorted(row_64_all.items()) if val]
+                for col, val in non_empty[:30]:
+                    logging.info(f"  Col {col}: '{val}'")
+            
             # Define fixed row mappings (Excel row -> database field)
             # Data starts in column E (column 5), each row represents one trade
             # Row 1 contains "TICKER TRADE_TYPE" - extract both ticker and trade_type from it
@@ -2221,38 +2493,43 @@ def import_excel():
                 15: "strike_price",     # Row 15 -> trades.strike_price (short strike)
                 21: "credit_debit",     # Row 21 -> trades.credit_debit
                 41: "num_of_contracts", # Row 41 -> trades.num_of_contracts
-                57: "trade_status",     # Row 57 -> trades.trade_status (dropdown: open, expired, closed, roll, assigned)
+                64: "trade_status",     # Row 64 -> trades.trade_status (dropdown: open, expired, closed, roll, assigned)
             }
 
             # Build trade columns from row 1 (trade_type_raw)
             trade_type_row = rows.get(1, {})
             trade_cols = sorted(trade_type_row.keys())
             
-            # Only use columns that exist in BOTH row 1 AND row 57
-            # This ensures trade_status values align with their corresponding trades
-            trade_status_row = rows.get(57, {})
-            valid_trade_cols = [c for c in trade_cols if c in trade_status_row]
+            # Use ALL columns where row 1 has data
+            # Row 64 will provide trade_status when available, otherwise it will be empty (defaults to 'open')
+            trade_status_row = rows.get(64, {})
             
             print(f"Row 1 has {len(trade_cols)} columns: {trade_cols[:10]}...")
-            print(f"Row 57 has {len(trade_status_row)} columns: {sorted(trade_status_row.keys())[:10]}...")
-            print(f"Valid trade columns (in both): {len(valid_trade_cols)}", flush=True)
+            print(f"Row 64 has {len(trade_status_row)} columns: {sorted(trade_status_row.keys())[:10]}...")
+            print(f"Importing all trades from row 1", flush=True)
 
             # Build a dataframe column by column
             # Only include columns where row 1 has a value (skip empty metadata columns)
-            # BUT always collect row 57 data (trade_status)
+            # Row 64 provides trade_status when available
             data = {field: [] for field in mapping.values()}
             collected_cols = []
             
-            for c in valid_trade_cols:
+            for c in trade_cols:
                 # Check if row 1 has data in this column (trade_type_raw)
                 if 1 in rows and c in rows[1] and rows[1][c]:
                     collected_cols.append(c)
                     for r, field in mapping.items():
-                        val = rows.get(r, {}).get(c, "")
+                        # For trade_status (row 64), use the value from trade_status_row
+                        # If not present in row 64, it will be empty string (will default to 'open' later)
+                        if field == "trade_status":
+                            val = trade_status_row.get(c, "")
+                        else:
+                            val = rows.get(r, {}).get(c, "")
                         data[field].append(val)
-                        # Debug: Check if row 57 has data
-                        if r == 57 and field == "trade_status":
-                            print(f"Trade status from column {c} (row 57): '{val}'", flush=True)
+                        # Debug: Check if row 64 has data
+                        if r == 64 and field == "trade_status":
+                            status_msg = f"'{val}'" if val else "'EMPTY - will default to open'"
+                            print(f"Trade status from column {c} (row 64): {status_msg}", flush=True)
             
             df = pd.DataFrame(data)
             
@@ -2260,10 +2537,10 @@ def import_excel():
             
             # Debug: Check what row 57 has
             if 57 in rows:
-                print(f"\nRow 57 data (keys): {list(rows[57].keys())[:10]}...")
+                logging.info(f"Row 57 data (keys): {list(rows[57].keys())[:10]}...")
                 # Print first few values from row 57
                 for k in list(rows[57].keys())[:10]:
-                    print(f"  Column {k}: {rows[57][k]}")
+                    logging.info(f"  Column {k}: {rows[57][k]}")
             
             print(f"\nDataframe has {len(df)} rows", flush=True)
             print(f"Dataframe columns: {df.columns.tolist()}", flush=True)
@@ -2418,7 +2695,7 @@ def import_excel():
                     strike_price = float(row['strike_price']) if pd.notna(row['strike_price']) else 0
                     current_price = float(row['current_price']) if pd.notna(row['current_price']) else 0
                     
-                    # Read trade_status from row 57 (required, no default)
+                    # Read trade_status from row 64 (required, no default)
                     # Normalize to lowercase for case-insensitive matching
                     if 'trade_status' in row and pd.notna(row['trade_status']):
                         status_val = str(row['trade_status']).strip().lower().strip()  # Double strip to remove any whitespace

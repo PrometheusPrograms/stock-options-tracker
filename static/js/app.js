@@ -1514,8 +1514,18 @@ function updateTradesTable() {
                 case 6: // Credit - Read-only
                     cellContent = `<span class="text-center">$${parseFloat(trade.credit_debit || trade.premium).toFixed(2)}</span>`;
                     break;
-                case 7: // Contracts - Read-only
-                    cellContent = `<span class="text-center">${trade.num_of_contracts}</span>`;
+                case 7: // Contracts - Editable
+                    cellContent = `
+                        <input type="number" 
+                               class="form-control form-control-sm text-center" 
+                               value="${trade.num_of_contracts}" 
+                               step="1"
+                               min="1"
+                               data-trade-id="${trade.id}" 
+                               data-field="num_of_contracts" 
+                               onchange="updateTradeField(${trade.id}, 'num_of_contracts', this.value)"
+                               style="width: 60px; display: inline-block;">
+                    `;
                     break;
                 case 8: // Shares - Read-only (calculated from num_of_contracts)
                     cellContent = `<span class="text-center">${trade.num_of_contracts * 100}</span>`;
@@ -1633,36 +1643,36 @@ function updateCostBasisTable(costBasisData) {
                 </div>
                 
                 <!-- Summary Cards -->
-                <div class="row mb-3">
-                    <div class="col-md-3">
+                <div class="row mb-2 g-2">
+                    <div class="col-md-2">
                         <div class="card bg-light">
-                            <div class="card-body text-center">
-                                <h6 class="card-title">Total Shares</h6>
-                                <p class="card-text h5 ${total_shares < 0 ? 'text-danger' : ''}">${total_shares < 0 ? `(${Math.abs(total_shares).toLocaleString()})` : total_shares.toLocaleString()}</p>
+                            <div class="card-body text-center p-2">
+                                <h6 class="card-title mb-1" style="font-size: 0.75rem;">Total Shares</h6>
+                                <p class="card-text mb-0" style="font-size: 1.1rem; ${total_shares < 0 ? 'color: red;' : ''}">${total_shares < 0 ? `(${Math.abs(total_shares).toLocaleString()})` : total_shares.toLocaleString()}</p>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <div class="card bg-light">
-                            <div class="card-body text-center">
-                                <h6 class="card-title">Total Cost Basis</h6>
-                                <p class="card-text h5 ${total_cost_basis < 0 ? 'text-danger' : ''}">${total_cost_basis < 0 ? `($${Math.abs(total_cost_basis).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
+                            <div class="card-body text-center p-2">
+                                <h6 class="card-title mb-1" style="font-size: 0.75rem;">Total Cost Basis</h6>
+                                <p class="card-text mb-0" style="font-size: 1.1rem; ${total_cost_basis < 0 ? 'color: red;' : ''}">${total_cost_basis < 0 ? `($${Math.abs(total_cost_basis).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <div class="card bg-light">
-                            <div class="card-body text-center">
-                                <h6 class="card-title">Cost Basis/Share</h6>
-                                <p class="card-text h5 ${total_cost_basis_per_share < 0 ? 'text-danger' : ''}">${total_cost_basis_per_share < 0 ? `($${Math.abs(total_cost_basis_per_share).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis_per_share.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
+                            <div class="card-body text-center p-2">
+                                <h6 class="card-title mb-1" style="font-size: 0.75rem;">Cost Basis/Share</h6>
+                                <p class="card-text mb-0" style="font-size: 1.1rem; ${total_cost_basis_per_share < 0 ? 'color: red;' : ''}">${total_cost_basis_per_share < 0 ? `($${Math.abs(total_cost_basis_per_share).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis_per_share.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <div class="card bg-light">
-                            <div class="card-body text-center">
-                                <h6 class="card-title">Total Trades</h6>
-                                <p class="card-text h5">${trades.length}</p>
+                            <div class="card-body text-center p-2">
+                                <h6 class="card-title mb-1" style="font-size: 0.75rem;">Total Trades</h6>
+                                <p class="card-text mb-0" style="font-size: 1.1rem;">${trades.length}</p>
                             </div>
                         </div>
                     </div>
@@ -1976,15 +1986,11 @@ function showAllSymbols(data) {
     
     let symbolsHtml = '<div class="row">';
     allTickers.forEach(ticker => {
-        const costBasisData = costBasisGroups[ticker];
-        const tradeCount = costBasisData ? costBasisData.count : 0;
-        
         symbolsHtml += `
-            <div class="col-md-3 col-sm-4 col-6 mb-3">
+            <div class="col-md-1 col-sm-2 col-3 mb-2">
                 <div class="card h-100 symbol-card" onclick="selectCostBasisSymbol('${ticker}')" style="cursor: pointer;">
-                    <div class="card-body text-center">
-                        <h5 class="card-title text-primary">${ticker}</h5>
-                        <p class="card-text text-muted">${tradeCount} entry${tradeCount !== 1 ? 'ies' : ''}</p>
+                    <div class="card-body text-center p-1">
+                        <h6 class="card-title text-primary mb-0" style="font-size: 0.8rem;">${ticker}</h6>
                     </div>
                 </div>
             </div>
@@ -1992,29 +1998,13 @@ function showAllSymbols(data) {
     });
     symbolsHtml += '</div>';
     
-    costBasisContainer.innerHTML = `
-        <div class="mb-3">
-            <h6 class="text-primary mb-3">
-                <i class="fas fa-list me-2"></i>
-                Available Stock Symbols (${allTickers.length})
-            </h6>
-            ${symbolsHtml}
-            <div class="text-center mt-3">
-                <small class="text-muted">Click on any symbol to view its cost basis</small>
-            </div>
-        </div>
-    `;
+    costBasisContainer.innerHTML = symbolsHtml;
 }
 
 function hideCostBasisTable() {
     const container = document.getElementById('cost-basis-table-container');
     if (container) {
-        container.innerHTML = `
-            <div class="text-center text-muted">
-                <i class="fas fa-info-circle me-2"></i>
-                Click on a stock symbol above to view its cost basis
-            </div>
-        `;
+        container.innerHTML = '';
     }
 }
 
@@ -2093,6 +2083,31 @@ async function updateTradeStatus(tradeId, newStatus) {
     } catch (error) {
         console.error('Error updating trade status:', error);
         alert('Error updating trade status: ' + error.message);
+    }
+}
+
+async function updateTradeField(tradeId, field, value) {
+    try {
+        const response = await fetch(`/api/trades/${tradeId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ [field]: value })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            await loadTrades();
+            loadSummary();
+            // Reload cost basis with the selected ticker if one is set
+            const selectedTicker = window.symbolFilter || document.getElementById('symbol-filter')?.value || '';
+            await loadCostBasis(selectedTicker);
+        } else {
+            alert('Failed to update trade field: ' + result.error);
+        }
+    } catch (error) {
+        console.error('Error updating trade field:', error);
+        alert('Error updating trade field: ' + error.message);
     }
 }
 
@@ -2489,7 +2504,7 @@ function initializeChart() {
         data: {
             labels: [],
             datasets: [{
-                label: 'Daily Premium',
+                label: 'Total Amount per Day',
                 data: [],
                 borderColor: 'rgb(75, 192, 192)',
                 backgroundColor: 'rgba(75, 192, 192, 0.2)',
