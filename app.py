@@ -2184,21 +2184,18 @@ def webhook_deploy():
         
         print(f"Deploying from: {project_dir}")
         
-        # Stash any local changes to trades.db to avoid merge conflicts
-        stash_result = subprocess.run(['git', 'stash', 'push', '-m', 'Webhook stash'], 
+        # Reset to discard any local changes (especially to trades.db)
+        print("Resetting local changes...")
+        reset_result = subprocess.run(['git', 'reset', '--hard', 'HEAD'], 
                                      cwd=project_dir, 
                                      capture_output=True, 
                                      text=True)
-        if stash_result.returncode == 0 and 'No local changes' not in stash_result.stdout:
-            print(f"Stashed local changes")
-            # Drop the stash to use repo version
-            subprocess.run(['git', 'stash', 'drop'], 
-                          cwd=project_dir, 
-                          capture_output=True, 
-                          text=True)
+        if reset_result.returncode == 0:
+            print("✓ Reset local changes")
         
         # Pull latest changes from GitHub
-        result = subprocess.run(['git', 'pull'], 
+        print("Pulling latest code...")
+        result = subprocess.run(['git', 'pull', 'origin', 'main'], 
                               cwd=project_dir, 
                               capture_output=True, 
                               text=True)
