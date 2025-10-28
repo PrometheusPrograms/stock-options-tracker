@@ -2179,10 +2179,23 @@ def webhook_deploy():
         if 'pythonanywhere' not in current_dir.lower():
             project_dir = current_dir
         else:
-            # For PythonAnywhere
-            project_dir = '/home/greenmangroup/cursor_tracker/stock-options-tracker/stock-options-tracker'
+            # For PythonAnywhere - update this to your actual project path
+            project_dir = '/home/prometheusprograms/stock-options-tracker'
         
         print(f"Deploying from: {project_dir}")
+        
+        # Stash any local changes to trades.db to avoid merge conflicts
+        stash_result = subprocess.run(['git', 'stash', 'push', '-m', 'Webhook stash'], 
+                                     cwd=project_dir, 
+                                     capture_output=True, 
+                                     text=True)
+        if stash_result.returncode == 0 and 'No local changes' not in stash_result.stdout:
+            print(f"Stashed local changes")
+            # Drop the stash to use repo version
+            subprocess.run(['git', 'stash', 'drop'], 
+                          cwd=project_dir, 
+                          capture_output=True, 
+                          text=True)
         
         # Pull latest changes from GitHub
         result = subprocess.run(['git', 'pull'], 
@@ -2205,7 +2218,50 @@ def webhook_deploy():
                 os.utime(alt_wsgi, None)
                 print("✓ Reloaded alternative WSGI application")
             
-            return jsonify({'success': True, 'message': 'Deployment successful', 'output': result.stdout}), 200
+            # After deployment, automatically repopulate database tables
+            # Wait a moment for the app to reload
+            import time
+            time.sleep(2)
+            
+            messages = []
+            try:
+                # Repopulate cash_flows
+                print("Repopulating cash_flows table...")
+                cash_flow_result = subprocess.run([
+                    'curl', '-X', 'POST', 
+                    'http://prometheusprograms.pythonanywhere.com/api/repopulate-cash-flows'
+                ], capture_output=True, text=True, timeout=30)
+                
+                if cash_flow_result.returncode == 0:
+                    print(f"✓ Cash flows repopulated")
+                    messages.append("Cash flows repopulated")
+                else:
+                    print(f"Warning: Could not repopulate cash flows: {cash_flow_result.stderr}")
+                    messages.append("Cash flows: skipped")
+            except Exception as e:
+                print(f"Warning: Could not repopulate cash flows: {e}")
+                messages.append("Cash flows: skipped")
+            
+            try:
+                # Repopulate cost_basis
+                print("Repopulating cost_basis table...")
+                cost_basis_result = subprocess.run([
+                    'curl', '-X', 'POST',
+                    'http://prometheusprograms.pythonanywhere.com/api/repopulate-cost-basis'
+                ], capture_output=True, text=True, timeout=30)
+                
+                if cost_basis_result.returncode == 0:
+                    print(f"✓ Cost basis repopulated")
+                    messages.append("Cost basis repopulated")
+                else:
+                    print(f"Warning: Could not repopulate cost basis: {cost_basis_result.stderr}")
+                    messages.append("Cost basis: skipped")
+            except Exception as e:
+                print(f"Warning: Could not repopulate cost basis: {e}")
+                messages.append("Cost basis: skipped")
+            
+            message = f"Deployment successful. {'; '.join(messages)}"
+            return jsonify({'success': True, 'message': message, 'output': result.stdout}), 200
         else:
             print(f"Git pull failed: {result.stderr}")
             return jsonify({'success': False, 'error': result.stderr}), 500
