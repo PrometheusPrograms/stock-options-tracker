@@ -477,17 +477,7 @@ body {
 }
 
 /* Layout Containers - Updated for Bootstrap Grid */
-.trade-form-container {
-    /* Removed float-based layout - now using Bootstrap grid */
-}
-
-.trades-content-container {
-    /* Removed float-based layout - now using Bootstrap grid */
-}
-
-.cost-basis-container {
-    /* Removed float-based layout - now using Bootstrap grid */
-}
+/* Container styles now use Bootstrap grid in HTML */
 
 /* Duplicate definitions removed - now defined at lines 121-138 */
 
@@ -785,13 +775,18 @@ h1 {
     background: #a8a8a8;
 }
 
-/* Trades Table Specific */
+/* Trades Table Specific - Compact Layout */
+#trades-table-main {
+    font-size: 0.875rem; /* Smaller font */
+}
+
 #trades-table-main tr td:first-child {
     background-color: transparent !important;
     text-align: center;
     white-space: normal;
     word-wrap: break-word;
     vertical-align: middle;
+    padding: 0.25rem 0.5rem; /* Compact padding */
 }
 
 #trades-table-main tr:first-child td {
@@ -799,6 +794,16 @@ h1 {
     word-wrap: break-word;
     text-align: center;
     vertical-align: middle;
+    padding: 0.25rem 0.5rem; /* Compact padding */
+}
+
+#trades-table-main td {
+    padding: 0.25rem 0.5rem !important; /* Compact padding for all cells */
+}
+
+#trades-table-main .form-control {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
 }
 
 /* Responsive Design */

@@ -9,7 +9,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=137">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=145">
     <style>
         .floating-nav {
             position: fixed;
@@ -356,6 +356,10 @@
                                     Trades
                                 </h5>
                                 <div class="d-flex align-items-center ms-3" style="gap: 2px;">
+                                    <label for="excel-upload" class="btn btn-sm btn-light mb-0 me-2" style="cursor: pointer;">
+                                        <i class="fas fa-file-excel me-1"></i>Import Excel
+                                    </label>
+                                    <input type="file" id="excel-upload" name="file" accept=".xlsx,.xls,.xlsm" style="display: none;">
                                     <input type="text" class="form-control form-control-sm" id="symbol-filter" placeholder="Type symbol..." autocomplete="off" style="width: 180px;">
                                     <div id="symbol-suggestions" class="dropdown-menu filter-suggestions"></div>
                                     <button id="clear-symbol" class="btn btn-sm btn-outline-light clear-button" onclick="clearSymbolFilter()" style="display: none;">
@@ -843,7 +847,7 @@
     <!-- Alert Container -->
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}?v=319"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=330"></script>
     
     <script>
         // Global variable to track current section

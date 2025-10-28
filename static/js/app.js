@@ -583,6 +583,13 @@ async function loadTrades() {
         
         const response = await fetch(`/api/trades?${params}`);
         trades = await response.json();
+        
+        // Ensure trades is an array
+        if (!Array.isArray(trades)) {
+            console.error('trades is not an array:', trades);
+            trades = [];
+        }
+        
         lastTradeCount = trades.length;
         console.log('Trades loaded:', trades.length, 'trades');
         console.log('Sample trade:', trades[0]);
@@ -1346,9 +1353,9 @@ function updateTradesTable() {
     // Filter out BTO/STC trades from the trades table
     filteredTrades = filteredTrades.filter(trade => trade.trade_type !== 'BTO' && trade.trade_type !== 'STC' && trade.trade_type !== 'ASSIGNED');
     
-    // Apply status filter
+    // Apply status filter (case-insensitive)
     if (statusFilter) {
-        filteredTrades = filteredTrades.filter(trade => trade.status && trade.status === statusFilter);
+        filteredTrades = filteredTrades.filter(trade => trade.trade_status && trade.trade_status.toLowerCase() === statusFilter.toLowerCase());
     }
     
     // Apply symbol filter
@@ -1452,7 +1459,7 @@ function updateTradesTable() {
             // Check if this trade should be visible based on filters
             const isVisible = visibleTrades.some(visibleTrade => visibleTrade.id === trade.id);
             const tradeType = trade.trade_type || 'ROCT PUT';
-            const status = trade.status || 'open';
+            const status = trade.trade_status || 'open';
             let bgColor = '';
             
             if (status === 'roll') {
@@ -1470,7 +1477,8 @@ function updateTradesTable() {
             let cellContent = '';
             
             // Calculate financial metrics once for all cases that need them
-            const netCreditPerShare = trade.premium - commission; // Net Credit Per Share = Credit - Commission
+            const premium = trade.credit_debit || trade.premium;
+            const netCreditPerShare = premium - commission; // Net Credit Per Share = Credit - Commission
             const netCreditTotal = netCreditPerShare * (trade.num_of_contracts * 100); // Net Credit Total = Net Credit Per Share * Shares
             const riskCapital = trade.strike_price - netCreditPerShare; // Risk Capital = Strike - Net Credit Per Share
             const marginCapital = riskCapital * (trade.num_of_contracts * 100);
@@ -1481,63 +1489,33 @@ function updateTradesTable() {
                 case 0: // Symbol/Type (back to first row)
                     const today = new Date();
                     const expirationDate = new Date(trade.expiration_date);
-                    const isExpired = trade.status === 'open' && today > expirationDate;
+                    const isExpired = trade.trade_status && trade.trade_status.toLowerCase() === 'open' && today > expirationDate;
                     // Use type_name from trade_types table if available, otherwise use trade.ticker + tradeType
                     const displayType = trade.type_name ? `${trade.ticker} ${trade.type_name}` : `${trade.ticker} ${tradeType}`;
                     cellContent = `<div style="text-align: center; white-space: normal; word-wrap: break-word; vertical-align: top;"><strong>${isExpired ? '<i class="fas fa-exclamation-triangle text-danger me-1" title="Expired"></i>' : ''}<span class="clickable-symbol" onclick="filterBySymbol('${trade.ticker}')" style="cursor: pointer; color: #007bff; text-decoration: underline;">${displayType}</span></strong></div>`;
                     break;
-                case 1: // Trade Date (moved to second row) - Custom date input
+                case 1: // Trade Date - Read-only
                     const tradeDateDisplay = formatDate(trade.trade_date || trade.created_at);
-                    cellContent = `
-                        <div class="text-center">
-                            <input type="text" 
-                                   class="form-control form-control-sm text-center d-inline-block" 
-                                   placeholder="DD-MMM-YY" 
-                                   value="${tradeDateDisplay}" 
-                                   data-trade-id="${trade.id}" 
-                                   data-field="trade_date" 
-                                   data-display-format="DD-MMM-YY"
-                                   data-edit-format="MM/DD/YY"
-                                   onfocus="handleDateInputFocus(this)"
-                                   onblur="handleDateInputBlur(this)"
-                                   onchange="updateTradeDate(${trade.id}, 'trade_date', this.value)"
-                                   style="width: 100px;">
-                        </div>
-                    `;
+                    cellContent = `<span class="text-center">${tradeDateDisplay}</span>`;
                     break;
-                case 2: // Price (was Trade Price) - Editable
-                    cellContent = `<div class="text-center d-flex justify-content-center align-items-center"><span class="text-muted me-1">$</span><input type="text" class="form-control form-control-sm text-center" value="${parseFloat(trade.current_price || trade.price || 0).toFixed(2)}" data-trade-id="${trade.id}" data-field="current_price" onchange="updateTradeField(${trade.id}, 'current_price', this.value)" style="width: 80px;"></div>`;
+                case 2: // Price - Read-only
+                    cellContent = `<span class="text-center">$${parseFloat(trade.current_price || trade.price || 0).toFixed(2)}</span>`;
                     break;
-                case 3: // Exp Date (was Expiration) - Custom date input
+                case 3: // Exp Date - Read-only
                     const expDateDisplay = formatDate(trade.expiration_date);
-                    cellContent = `
-                        <div class="text-center">
-                            <input type="text" 
-                                   class="form-control form-control-sm text-center d-inline-block" 
-                                   placeholder="DD-MMM-YY" 
-                                   value="${expDateDisplay}" 
-                                   data-trade-id="${trade.id}" 
-                                   data-field="expiration_date" 
-                                   data-display-format="DD-MMM-YY"
-                                   data-edit-format="MM/DD/YY"
-                                   onfocus="handleDateInputFocus(this)"
-                                   onblur="handleDateInputBlur(this)"
-                                   onchange="updateTradeDate(${trade.id}, 'expiration_date', this.value)"
-                                   style="width: 100px;">
-                        </div>
-                    `;
+                    cellContent = `<span class="text-center">${expDateDisplay}</span>`;
                     break;
                 case 4: // DTE (was Days to Exp) - Read-only (calculated)
                     cellContent = `<span class="text-center">${trade.days_to_expiration || calculateDaysToExpiration(trade.expiration_date, trade.trade_date)}</span>`;
                     break;
-                case 5: // Strike (was Strike Price) - Editable
-                    cellContent = `<div class="text-center d-flex justify-content-center align-items-center"><span class="text-muted me-1">$</span><input type="text" class="form-control form-control-sm text-center" value="${parseFloat(trade.strike_price || 0).toFixed(2)}" data-trade-id="${trade.id}" data-field="strike_price" onchange="updateTradeField(${trade.id}, 'strike_price', this.value)" style="width: 80px;"></div>`;
+                case 5: // Strike - Read-only
+                    cellContent = `<span class="text-center">$${parseFloat(trade.strike_price || 0).toFixed(2)}</span>`;
                     break;
-                case 6: // Credit (was Premium) - Editable
-                    cellContent = `<div class="text-center d-flex justify-content-center align-items-center"><span class="text-muted me-1">$</span><input type="text" class="form-control form-control-sm text-center" value="${parseFloat(trade.premium).toFixed(2)}" data-trade-id="${trade.id}" data-field="premium" onchange="updateTradeField(${trade.id}, 'premium', this.value)" style="width: 80px;"></div>`;
+                case 6: // Credit - Read-only
+                    cellContent = `<span class="text-center">$${parseFloat(trade.credit_debit || trade.premium).toFixed(2)}</span>`;
                     break;
-                case 7: // Contracts - Editable (num_of_contracts)
-                    cellContent = `<div class="text-center"><input type="number" class="form-control form-control-sm text-center d-inline-block" value="${trade.num_of_contracts}" step="1" data-trade-id="${trade.id}" data-field="num_of_contracts" onchange="updateTradeField(${trade.id}, 'num_of_contracts', this.value)" style="width: 80px;"></div>`;
+                case 7: // Contracts - Read-only
+                    cellContent = `<span class="text-center">${trade.num_of_contracts}</span>`;
                     break;
                 case 8: // Shares - Read-only (calculated from num_of_contracts)
                     cellContent = `<span class="text-center">${trade.num_of_contracts * 100}</span>`;
@@ -1560,25 +1538,23 @@ function updateTradesTable() {
                 case 14: // ARORC = (365 / DTE) * RORC
                     cellContent = `<span class="text-center">${arorc.toFixed(1)}%</span>`;
                     break;
-                case 15: // Status
+                case 15: // Status - Editable dropdown (case-insensitive)
+                    const tradeStatusLower = trade.trade_status ? trade.trade_status.toLowerCase() : 'open';
                     cellContent = `
                         <div class="text-center">
                             <select class="form-select form-select-sm status-select" data-trade-id="${trade.id}" onchange="updateTradeStatus(${trade.id}, this.value)">
-                                <option value="open" ${trade.status === 'open' ? 'selected' : ''}>Open</option>
-                                <option value="closed" ${trade.status === 'closed' ? 'selected' : ''}>Closed</option>
-                                <option value="assigned" ${trade.status === 'assigned' ? 'selected' : ''}>Assigned</option>
-                                <option value="expired" ${trade.status === 'expired' ? 'selected' : ''}>Expired</option>
-                                <option value="roll" ${trade.status === 'roll' ? 'selected' : ''}>Roll</option>
+                                <option value="open" ${tradeStatusLower === 'open' ? 'selected' : ''}>Open</option>
+                                <option value="closed" ${tradeStatusLower === 'closed' ? 'selected' : ''}>Closed</option>
+                                <option value="assigned" ${tradeStatusLower === 'assigned' ? 'selected' : ''}>Assigned</option>
+                                <option value="expired" ${tradeStatusLower === 'expired' ? 'selected' : ''}>Expired</option>
+                                <option value="roll" ${tradeStatusLower === 'roll' ? 'selected' : ''}>Roll</option>
                             </select>
                         </div>
                     `;
                     break;
-                case 16: // Actions
+                case 16: // Actions - Delete only
                     cellContent = `
                         <div class="text-center">
-                            <button class="btn btn-sm btn-outline-primary me-1" onclick="editTrade(${trade.id})" title="Edit Trade">
-                                <i class="fas fa-edit"></i>
-                            </button>
                             <button class="btn btn-sm btn-outline-danger" onclick="deleteTrade(${trade.id})" title="Delete Trade">
                                 <i class="fas fa-trash"></i>
                             </button>
@@ -1747,7 +1723,7 @@ function updateCostBasisTable(costBasisData) {
             
             // Apply color coding based on status and trade type (from backup)
             const tradeType = trade.trade_description || '';
-            const status = trade.status || 'open';
+            const status = trade.trade_status || 'open';
             let bgColor = '';
             
             // Check if this is an expired or assigned trade from the description
@@ -3136,9 +3112,70 @@ async function submitROCTPutForm(action = 'addAndClose') {
     await submitTradeForm('roctPut', action);
 }
 
-// Debug function to log section widths with detailed info
+// ============================================================================
+// EXCEL IMPORT FUNCTION
+// ============================================================================
 
-window.addEventListener('load', function() {
-    setTimeout(logDetailedSectionInfo, 1000);
+async function handleExcelUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    try {
+        const response = await fetch('/api/import-excel', {
+            method: 'POST',
+            body: formData
+        });
+        
+        console.log('Response status:', response.status);
+        console.log('Response headers:', [...response.headers.entries()]);
+        
+        // Check if response is OK before reading body
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Error response body:', errorText);
+            alert('Error uploading file: Server returned ' + response.status);
+            return;
+        }
+        
+        const result = await response.json();
+        
+        // Print to console for debugging
+        console.log('Import result:', result);
+        
+        if (result.success) {
+            let message = `Successfully imported ${result.imported} trades.`;
+            if (result.skipped > 0) {
+                message += `\n${result.skipped} duplicate trades skipped.`;
+            }
+            if (result.errors && result.errors.length > 0) {
+                console.error('Import errors:', result.errors);
+                message += '\n\nErrors:\n' + result.errors.join('\n');
+            }
+            alert(message);
+            // Reload trades table
+            await loadTrades();
+            await loadSummary();
+        } else {
+            console.error('Import failed:', result.error);
+            alert('Error importing Excel file: ' + result.error);
+        }
+    } catch (error) {
+        console.error('Upload error:', error);
+        alert('Error uploading file: ' + error.message);
+    }
+    
+    // Reset file input
+    event.target.value = '';
+}
+
+// Add event listener for Excel upload
+document.addEventListener('DOMContentLoaded', function() {
+    const excelUpload = document.getElementById('excel-upload');
+    if (excelUpload) {
+        excelUpload.addEventListener('change', handleExcelUpload);
+    }
 });
 

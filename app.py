@@ -1,14 +1,29 @@
 from flask import Flask, render_template, request, jsonify
 import sqlite3
 import os
+import re
 from datetime import datetime, timedelta
 import requests
 from dotenv import load_dotenv
+import pandas as pd
+import io
+import zipfile
+import logging
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
+
+# Setup logging to file
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('flask_debug.log'),
+        logging.StreamHandler()
+    ]
+)
 
 # Database configuration
 DATABASE = 'trades.db'
@@ -31,16 +46,16 @@ def create_views(cursor):
             t.trade_date,
             t.expiration_date,
             t.num_of_contracts,
-            t.premium,
+            t.credit_debit,
             t.total_premium,
             t.days_to_expiration,
             t.current_price,
             t.strike_price,
-            t.status,
+            t.trade_status,
             t.trade_type,
-            t.commission,
+            t.commission_paid,
             t.created_at,
-            t.strike_price - t.premium AS net_credit_per_share
+            t.strike_price - t.credit_debit AS net_credit_per_share
         FROM trades t
         JOIN tickers tk ON t.ticker_id = tk.id
         ''',
@@ -55,7 +70,7 @@ def create_views(cursor):
             cb.running_basis,
             cb.running_shares,
             cb.basis_per_share,
-            t.status
+            t.trade_status as status
         FROM cost_basis cb
         JOIN tickers tk ON cb.ticker_id = tk.id
         LEFT JOIN trades t ON cb.trade_id = t.id
@@ -110,13 +125,20 @@ def init_db():
         CREATE TABLE IF NOT EXISTS tickers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT UNIQUE NOT NULL,
-            company_name TEXT NOT NULL,
+            company_name TEXT,
             sector TEXT,
             market_cap REAL,
+            needs_update BOOLEAN DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    
+    # Add needs_update column if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE tickers ADD COLUMN needs_update BOOLEAN DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     
     # Create trades table
     cursor.execute('''
@@ -127,14 +149,14 @@ def init_db():
             trade_date TEXT NOT NULL,
             expiration_date TEXT NOT NULL,
             num_of_contracts INTEGER NOT NULL,
-            premium REAL NOT NULL,
+            credit_debit REAL NOT NULL,
             total_premium REAL NOT NULL,
             days_to_expiration INTEGER NOT NULL,
             current_price REAL NOT NULL,
             strike_price REAL NOT NULL,
-            status TEXT DEFAULT 'open',
+            trade_status TEXT DEFAULT 'open',
             trade_type TEXT NOT NULL,
-            commission REAL DEFAULT 0,
+            commission_paid REAL DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             price_per_share REAL DEFAULT 0,
             total_amount REAL DEFAULT 0,
@@ -263,6 +285,78 @@ def init_db():
             # Commit the changes
             conn.commit()
     
+    # Migration: Rename status to trade_status if table exists with old schema
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades'")
+    if cursor.fetchone():
+        # Check if the column is named 'status' instead of 'trade_status'
+        cursor.execute("PRAGMA table_info(trades)")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        if ('status' in columns and 'trade_status' not in columns) or \
+           ('premium' in columns and 'credit_debit' not in columns) or \
+           ('commission' in columns and 'commission_paid' not in columns):
+            print("Renaming 'status' column to 'trade_status' in trades table...")
+            # SQLite doesn't support RENAME COLUMN in older versions, so we need to:
+            # 1. Drop views that depend on trades table
+            # 2. Create new table with new schema
+            # 3. Copy data
+            # 4. Drop old table
+            # 5. Rename new table
+            # 6. Recreate views
+            
+            try:
+                cursor.execute('DROP VIEW IF EXISTS v_trade_summary')
+                cursor.execute('DROP VIEW IF EXISTS v_cost_basis_summary')
+                cursor.execute('DROP VIEW IF EXISTS v_cash_flow_summary')
+            except:
+                pass
+            
+            cursor.execute('''
+                CREATE TABLE trades_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id INTEGER DEFAULT 9,
+                    ticker_id INTEGER NOT NULL,
+                    trade_date TEXT NOT NULL,
+                    expiration_date TEXT NOT NULL,
+                    num_of_contracts INTEGER NOT NULL,
+                    credit_debit REAL NOT NULL,
+                    total_premium REAL NOT NULL,
+                    days_to_expiration INTEGER NOT NULL,
+                    current_price REAL NOT NULL,
+                    strike_price REAL NOT NULL,
+                    trade_status TEXT DEFAULT 'open',
+                    trade_type TEXT NOT NULL,
+                    commission_paid REAL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    price_per_share REAL DEFAULT 0,
+                    total_amount REAL DEFAULT 0,
+                    margin_capital REAL DEFAULT 0,
+                    FOREIGN KEY (ticker_id) REFERENCES tickers(id),
+                    FOREIGN KEY (account_id) REFERENCES accounts(id)
+                )
+            ''')
+            
+            # Copy data from old table to new table
+            cursor.execute('''
+                INSERT INTO trades_new (id, account_id, ticker_id, trade_date, expiration_date, num_of_contracts, 
+                                      credit_debit, total_premium, days_to_expiration, current_price, strike_price, 
+                                      trade_status, trade_type, commission_paid, created_at, price_per_share, total_amount, margin_capital)
+                SELECT id, account_id, ticker_id, trade_date, expiration_date, num_of_contracts,
+                       COALESCE(premium, 0) as credit_debit, total_premium, days_to_expiration, current_price, strike_price,
+                       COALESCE(status, 'open') as trade_status, trade_type, COALESCE(commission, 0) as commission_paid, created_at, price_per_share, total_amount, margin_capital
+                FROM trades
+            ''')
+            
+            # Drop old table and rename new one
+            cursor.execute('DROP TABLE trades')
+            cursor.execute('ALTER TABLE trades_new RENAME TO trades')
+            
+            # Recreate views
+            create_views(cursor)
+            
+            conn.commit()
+            print("Successfully renamed 'status' to 'trade_status'")
+
     # Create commissions table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS commissions (
@@ -280,8 +374,7 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_types (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            type_code TEXT UNIQUE NOT NULL,
-            type_name TEXT NOT NULL,
+            type_name TEXT UNIQUE NOT NULL,
             description TEXT,
             category TEXT NOT NULL,
             is_credit BOOLEAN DEFAULT 0,
@@ -292,6 +385,38 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    
+    # Migrate trade_types table if it has type_code column (old schema)
+    try:
+        cursor.execute("PRAGMA table_info(trade_types)")
+        # Column info returns tuples: (cid, name, type, notnull, default_value, pk)
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'type_code' in columns:
+            print("Migrating trade_types table: removing type_code column", flush=True)
+            # Copy data to new table without type_code
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS trade_types_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    type_name TEXT UNIQUE NOT NULL,
+                    description TEXT,
+                    category TEXT NOT NULL,
+                    is_credit BOOLEAN DEFAULT 0,
+                    requires_expiration BOOLEAN DEFAULT 1,
+                    requires_strike BOOLEAN DEFAULT 1,
+                    requires_contracts BOOLEAN DEFAULT 1,
+                    requires_shares BOOLEAN DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute('''
+                INSERT INTO trade_types_new (id, type_name, description, category, is_credit, requires_expiration, requires_strike, requires_contracts, requires_shares, created_at)
+                SELECT id, type_name, description, category, is_credit, requires_expiration, requires_strike, requires_contracts, requires_shares, created_at
+                FROM trade_types
+            ''')
+            cursor.execute('DROP TABLE trade_types')
+            cursor.execute('ALTER TABLE trade_types_new RENAME TO trade_types')
+    except Exception as e:
+        print(f"Migration note: {e}", flush=True)
     
     # Add trade_type_id column to trades table if it doesn't exist
     try:
@@ -307,12 +432,12 @@ def init_db():
     
     # Insert default trade types
     cursor.execute('''
-        INSERT OR IGNORE INTO trade_types (type_code, type_name, description, category, is_credit, requires_expiration, requires_strike, requires_contracts, requires_shares) 
+        INSERT OR IGNORE INTO trade_types (type_name, description, category, is_credit, requires_expiration, requires_strike, requires_contracts, requires_shares) 
         VALUES 
-        ('ROCT_PUT', 'ROCT PUT', 'Roll Over Cash-secured PUT', 'OPTIONS', 1, 1, 1, 1, 0),
-        ('ROCT_CALL', 'ROCT CALL', 'Roll Over Cash-secured CALL', 'OPTIONS', 1, 1, 1, 1, 0),
-        ('BTO', 'BTO', 'Buy To Open Stock', 'STOCK', 0, 0, 0, 0, 1),
-        ('STC', 'STC', 'Sell To Close Stock', 'STOCK', 0, 0, 0, 0, 1)
+        ('ROCT PUT', 'Roll Over Cash-secured PUT', 'OPTIONS', 1, 1, 1, 1, 0),
+        ('ROCT CALL', 'Roll Over Cash-secured CALL', 'OPTIONS', 1, 1, 1, 1, 0),
+        ('BTO', 'Buy To Open Stock', 'STOCK', 0, 0, 0, 0, 1),
+        ('STC', 'Sell To Close Stock', 'STOCK', 0, 0, 0, 0, 1)
     ''')
     
     # Create SQL views to simplify queries
@@ -329,10 +454,10 @@ def create_indexes(cursor):
     indexes = [
         # TRADES TABLE
         'CREATE INDEX IF NOT EXISTS idx_trades_account ON trades(account_id)',
-        'CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)',
+        'CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(trade_status)',
         'CREATE INDEX IF NOT EXISTS idx_trades_ticker ON trades(ticker_id)',
         'CREATE INDEX IF NOT EXISTS idx_trades_trade_date ON trades(trade_date)',
-        'CREATE INDEX IF NOT EXISTS idx_trades_account_status ON trades(account_id, status)',
+        'CREATE INDEX IF NOT EXISTS idx_trades_account_status ON trades(account_id, trade_status)',
         'CREATE INDEX IF NOT EXISTS idx_trades_account_date ON trades(account_id, trade_date)',
         'CREATE INDEX IF NOT EXISTS idx_trades_type ON trades(trade_type)',
         'CREATE INDEX IF NOT EXISTS idx_trades_created ON trades(created_at DESC)',
@@ -449,11 +574,11 @@ def get_bankroll_summary():
         # Build query for premiums based on date filters and account
         query = '''
             SELECT COALESCE(SUM(CASE 
-                WHEN trade_type = 'SELL' THEN premium 
-                ELSE -premium 
+                WHEN trade_type = 'SELL' THEN credit_debit 
+                ELSE -credit_debit 
             END), 0) as total_premiums
             FROM trades
-            WHERE status != 'roll' AND account_id = ?
+            WHERE trade_status != 'roll' AND account_id = ?
         '''
         query_params = [account_id]
         
@@ -473,21 +598,21 @@ def get_bankroll_summary():
         # Get total used in open and assigned trades (margin capital) based on date filters
         # Margin Capital = (Strike Price - Net Credit Per Share) * Shares
         # Net Credit Per Share = Premium - Commission
-        # So: Margin Capital = (strike_price - (premium - commission)) * (num_of_contracts * 100)
+        # So: Margin Capital = (strike_price - (credit_debit - commission)) * (num_of_contracts * 100)
         # Calculate for options trades (not BTO/STC stock trades) that are open or assigned
         # Apply status filter if provided
-        base_where = 'status != \'roll\' AND account_id = ? AND trade_type NOT IN (\'BTO\', \'STC\') AND (trade_type LIKE \'%ROCT PUT\' OR trade_type LIKE \'%ROCT CALL\' OR trade_type LIKE \'ROCT%\' OR trade_type LIKE \'BTO CALL\' OR trade_type LIKE \'STC CALL\')'
+        base_where = 'trade_status != \'roll\' AND account_id = ? AND trade_type NOT IN (\'BTO\', \'STC\') AND (trade_type LIKE \'%ROCT PUT\' OR trade_type LIKE \'%ROCT CALL\' OR trade_type LIKE \'ROCT%\' OR trade_type LIKE \'BTO CALL\' OR trade_type LIKE \'STC CALL\')'
         
         # Determine status condition
         if status_filter == 'open':
-            status_condition = 'status = \'open\''
+            status_condition = 'trade_status = \'open\''
         elif status_filter == 'completed':
-            status_condition = 'status = \'closed\''
+            status_condition = 'trade_status = \'closed\''
         elif status_filter == 'assigned':
-            status_condition = 'status = \'assigned\''
+            status_condition = 'trade_status = \'assigned\''
         else:
             # Default: include both open and assigned
-            status_condition = '(status = \'open\' OR status = \'assigned\')'
+            status_condition = '(trade_status = \'open\' OR trade_status = \'assigned\')'
         
         query = f'''
             SELECT COALESCE(SUM(margin_capital), 0) as used
@@ -676,7 +801,7 @@ def get_trades():
         
         # Join with symbols table to get ticker and company name, and join with trade_types to get type_name
         cursor.execute('''
-            SELECT st.*, s.ticker, s.company_name, tt.type_name, tt.type_code
+            SELECT st.*, s.ticker, s.company_name, tt.type_name
             FROM trades st 
             JOIN tickers s ON st.ticker_id = s.id 
             LEFT JOIN trade_types tt ON st.trade_type_id = tt.id
@@ -795,9 +920,9 @@ def add_trade():
         # Insert trade
         cursor.execute('''
             INSERT INTO trades 
-            (account_id, ticker_id, trade_date, expiration_date, num_of_contracts, premium, total_premium, 
-             days_to_expiration, current_price, strike_price, status, trade_type, 
-             price_per_share, total_amount, commission, margin_capital)
+            (account_id, ticker_id, trade_date, expiration_date, num_of_contracts, credit_debit, total_premium, 
+             days_to_expiration, current_price, strike_price, trade_status, trade_type, 
+             price_per_share, total_amount, commission_paid, margin_capital)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (account_id, ticker_id, trade_date, expiration_date, num_of_contracts, premium, total_premium,
               days_to_expiration, current_price, strike_price, 'open', trade_type,
@@ -1053,9 +1178,9 @@ def update_trade(trade_id):
             updates.append('num_of_contracts = ?')
             params.append(int(data['num_of_contracts']))
         
-        if 'premium' in data:
-            updates.append('premium = ?')
-            params.append(float(data['premium']))
+        if 'premium' in data or 'creditDebit' in data:
+            updates.append('credit_debit = ?')
+            params.append(float(data.get('premium') or data.get('creditDebit')))
         
         if 'currentPrice' in data:
             updates.append('current_price = ?')
@@ -1086,7 +1211,7 @@ def update_trade(trade_id):
 def update_trade_status(trade_id):
     try:
         data = request.get_json()
-        new_status = data['status']
+        new_status = data.get('status') or data.get('trade_status')
         
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -1098,10 +1223,10 @@ def update_trade_status(trade_id):
         if not trade:
             return jsonify({'error': 'Trade not found'}), 404
         
-        old_status = trade['status']
+        old_status = trade['trade_status']
         
         # Update status
-        cursor.execute('UPDATE trades SET status = ? WHERE id = ?', (new_status, trade_id))
+        cursor.execute('UPDATE trades SET trade_status = ? WHERE id = ?', (new_status, trade_id))
         
         # Record status change
         cursor.execute('''
@@ -1267,7 +1392,7 @@ def update_trade_field(trade_id):
         cursor = conn.cursor()
         
         # Validate field name
-        valid_fields = ['num_of_contracts', 'premium', 'strike_price', 'status']
+        valid_fields = ['num_of_contracts', 'credit_debit', 'strike_price', 'trade_status']
         if field not in valid_fields:
             return jsonify({'error': 'Invalid field'}), 400
         
@@ -1362,8 +1487,25 @@ def get_company_info(ticker):
             return jsonify({'error': data['Error Message']}), 500
         
         if 'Note' in data:
+            # Rate limit exceeded - mark ticker as pending and return ticker as name
+            # Check if ticker exists
+            cursor.execute('SELECT company_name FROM tickers WHERE ticker = ?', (ticker.upper(),))
+            existing = cursor.fetchone()
+            
+            if not existing:
+                # Create ticker with pending flag (company_name = NULL indicates pending)
+                cursor.execute('''
+                    INSERT INTO tickers (ticker, company_name, needs_update)
+                    VALUES (?, NULL, 1)
+                ''', (ticker.upper(),))
+                conn.commit()
+            
             conn.close()
-            return jsonify({'error': 'API rate limit exceeded'}), 429
+            return jsonify({
+                'symbol': ticker.upper(),
+                'name': ticker,
+                'pending': True
+            })
         
         company_name = ticker  # Default fallback
         # Find exact match for the ticker
@@ -1375,15 +1517,15 @@ def get_company_info(ticker):
                     # Cache the result in database
                     cursor.execute('''
                         UPDATE tickers 
-                        SET company_name = ? 
+                        SET company_name = ?, needs_update = 0
                         WHERE ticker = ?
                     ''', (company_name, ticker.upper()))
                     
                     # If ticker doesn't exist, create it
                     if cursor.rowcount == 0:
                         cursor.execute('''
-                            INSERT INTO tickers (ticker, company_name)
-                            VALUES (?, ?)
+                            INSERT INTO tickers (ticker, company_name, needs_update)
+                            VALUES (?, ?, 0)
                         ''', (ticker.upper(), company_name))
                     
                     conn.commit()
@@ -1401,6 +1543,62 @@ def get_company_info(ticker):
         print(f'Error getting company info: {e}')
         return jsonify({'symbol': ticker, 'name': ticker})
 
+@app.route('/api/pending-tickers/update', methods=['POST'])
+def update_pending_tickers():
+    """Update company names for tickers marked as needing update"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get all tickers that need updating
+        cursor.execute('SELECT ticker FROM tickers WHERE needs_update = 1 LIMIT 10')
+        pending_tickers = cursor.fetchall()
+        
+        if not pending_tickers:
+            conn.close()
+            return jsonify({'updated': 0, 'message': 'No pending tickers'})
+        
+        api_key = os.environ.get('ALPHA_VANTAGE_API_KEY')
+        if not api_key:
+            conn.close()
+            return jsonify({'error': 'Alpha Vantage API key not configured'}), 500
+        
+        updated_count = 0
+        for ticker_row in pending_tickers:
+            ticker = ticker_row['ticker']
+            
+            try:
+                url = f'https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords={ticker}&apikey={api_key}'
+                response = requests.get(url, timeout=10)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    if 'Note' not in data and 'Error Message' not in data:
+                        if 'bestMatches' in data:
+                            for match in data['bestMatches']:
+                                if match['1. symbol'].upper() == ticker.upper():
+                                    company_name = match['2. name']
+                                    cursor.execute('''
+                                        UPDATE tickers 
+                                        SET company_name = ?, needs_update = 0
+                                        WHERE ticker = ?
+                                    ''', (company_name, ticker))
+                                    conn.commit()
+                                    updated_count += 1
+                                    break
+            except Exception as e:
+                print(f'Error updating {ticker}: {e}')
+                continue
+        
+        conn.close()
+        return jsonify({
+            'updated': updated_count,
+            'message': f'Updated {updated_count} tickers'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/top-symbols')
 def get_top_symbols():
     try:
@@ -1410,8 +1608,8 @@ def get_top_symbols():
         # Get top 10 most commonly used ticker symbols with status information
         cursor.execute('''
             SELECT t.ticker, COUNT(st.id) as trade_count,
-                   MAX(CASE WHEN st.status = 'open' THEN 1 ELSE 0 END) as has_open_trades,
-                   MAX(CASE WHEN st.status IN ('assigned', 'expired') THEN st.trade_date ELSE NULL END) as last_assigned_expired_date
+                   MAX(CASE WHEN st.trade_status = 'open' THEN 1 ELSE 0 END) as has_open_trades,
+                   MAX(CASE WHEN st.trade_status IN ('assigned', 'expired') THEN st.trade_date ELSE NULL END) as last_assigned_expired_date
             FROM tickers t
             JOIN trades st ON t.id = st.ticker_id
             WHERE t.ticker IS NOT NULL AND t.ticker != ""
@@ -1465,7 +1663,7 @@ def get_cost_basis():
         # Query cost_basis table directly instead of trades table
         if ticker:
             cursor.execute('''
-                SELECT cb.*, t.ticker, tr.status
+                SELECT cb.*, t.ticker, tr.trade_status as status
                 FROM cost_basis cb
                 JOIN tickers t ON cb.ticker_id = t.id
                 LEFT JOIN trades tr ON cb.trade_id = tr.id
@@ -1474,7 +1672,7 @@ def get_cost_basis():
             ''', (ticker,))
         else:
             cursor.execute('''
-                SELECT cb.*, t.ticker, tr.status
+                SELECT cb.*, t.ticker, tr.trade_status as status
                 FROM cost_basis cb
                 JOIN tickers t ON cb.ticker_id = t.id
                 LEFT JOIN trades tr ON cb.trade_id = tr.id
@@ -1601,7 +1799,7 @@ def get_summary():
             JOIN tickers s ON st.ticker_id = s.id 
             WHERE s.ticker IS NOT NULL AND s.ticker != "" 
             AND st.trade_type NOT IN ("BTO", "STC", "ASSIGNED")
-            AND st.status != "roll"
+            AND st.trade_status != "roll"
         '''
         params = []
         
@@ -1619,11 +1817,11 @@ def get_summary():
         
         # Calculate summary statistics
         total_trades = len(trades)
-        open_trades = len([t for t in trades if t['status'] == 'open'])
-        closed_trades = len([t for t in trades if t['status'] in ['closed', 'expired', 'assigned']])
+        open_trades = len([t for t in trades if t['trade_status'] == 'open'])
+        closed_trades = len([t for t in trades if t['trade_status'] in ['closed', 'expired', 'assigned']])
         
         # Calculate wins and losses only from completed trades
-        completed_trades_list = [t for t in trades if t['status'] in ['closed', 'expired', 'assigned']]
+        completed_trades_list = [t for t in trades if t['trade_status'] in ['closed', 'expired', 'assigned']]
         wins = len([t for t in completed_trades_list if t['total_premium'] > 0])
         losses = len([t for t in completed_trades_list if t['total_premium'] < 0])
         winning_percentage = (wins / len(completed_trades_list) * 100) if len(completed_trades_list) > 0 else 0
@@ -1835,6 +2033,480 @@ def recalculate_cost_basis():
         print(f'Error recalculating cost basis: {e}')
         print(f'Traceback: {traceback.format_exc()}')
         return jsonify({'error': f'Failed to recalculate cost basis: {str(e)}'}), 500
+
+@app.route('/api/import-excel', methods=['POST'])
+def import_excel():
+    """Import trades from Excel file using OKW format"""
+    import zipfile
+    import re
+    import tempfile
+    from xml.etree import ElementTree as ET
+    
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': 'No file selected'}), 400
+        
+        # No limit on number of trades - import all
+        
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+            file.save(tmp_file.name)
+            excel_path = tmp_file.name
+        
+        try:
+            # Read workbook XML using the original working approach
+            import zipfile
+            import re
+            from xml.etree import ElementTree as ET
+            
+            print(f"Reading Excel file: {file.filename}", flush=True)
+            print(f"Temporary file path: {excel_path}", flush=True)
+            
+            with zipfile.ZipFile(excel_path, "r") as z:
+                # Shared strings for Excel text values
+                shared_strings = []
+                if "xl/sharedStrings.xml" in z.namelist():
+                    shared_xml = ET.parse(z.open("xl/sharedStrings.xml"))
+                    shared_strings = [t.text for t in shared_xml.findall(".//{*}t")]
+                
+                # Find the first sheet (use it as default)
+                wb = ET.parse(z.open("xl/workbook.xml"))
+                sheets = wb.findall(".//{*}sheet")
+                if not sheets:
+                    raise ValueError("Couldn't find any sheets in the workbook")
+                
+                # Use the first sheet
+                sheet_index = 1
+                sheet_name = sheets[0].attrib.get("name", "Sheet1")
+                print(f"Reading from first sheet: '{sheet_name}' (sheet index {sheet_index})", flush=True)
+                
+                sheet_xml = ET.parse(z.open(f"xl/worksheets/sheet{sheet_index}.xml"))
+                
+                def cell_value(c):
+                    v = c.find("{*}v")
+                    if v is None:
+                        return ""
+                    if c.attrib.get("t") == "s":
+                        idx = int(v.text)
+                        return shared_strings[idx] if idx < len(shared_strings) else ""
+                    return v.text
+                
+                def col_num(ref):
+                    m = re.match(r"([A-Z]+)", ref)
+                    if not m:
+                        return 1
+                    col = m.group(1)
+                    n = 0
+                    for ch in col:
+                        n = n * 26 + (ord(ch) - 64)
+                    return n
+                
+                # Collect all rows from the sheet
+                rows = {}
+                for r in sheet_xml.findall(".//{*}row"):
+                    idx = int(r.attrib["r"])
+                    row_cells = {}
+                    for c in r.findall("{*}c"):
+                        ref = c.attrib.get("r")
+                        if not ref:
+                            continue
+                        col = col_num(ref)
+                        if col >= 5:  # read only from column E onward
+                            row_cells[col] = cell_value(c)
+                    if row_cells:
+                        rows[idx] = row_cells
+                
+                print(f"Collected {len(rows)} rows from Excel", flush=True)
+            
+            # Debug: Check row 57
+            if False:  # Placeholder for old commented code
+                pass
+            if False:
+                import zipfile
+                import re
+                from xml.etree import ElementTree as ET
+                with zipfile.ZipFile(excel_path, "r") as z:
+                    # Shared strings for Excel text values
+                    shared_strings = []
+                if "xl/sharedStrings.xml" in z.namelist():
+                    shared_xml = ET.parse(z.open("xl/sharedStrings.xml"))
+                    shared_strings = [t.text for t in shared_xml.findall(".//{*}t")]
+                
+                # Find the first sheet (use it as default)
+                wb = ET.parse(z.open("xl/workbook.xml"))
+                sheets = wb.findall(".//{*}sheet")
+                if not sheets:
+                    raise ValueError("Couldn't find any sheets in the workbook")
+                
+                # Use the first sheet
+                sheet_index = 1
+                sheet_name = sheets[0].attrib.get("name", "Sheet1")
+                print(f"Reading from first sheet: '{sheet_name}' (sheet index {sheet_index})", flush=True)
+                print(f"Total sheets found: {len(sheets)}", flush=True)
+                
+                sheet_xml = ET.parse(z.open(f"xl/worksheets/sheet{sheet_index}.xml"))
+                
+                def cell_value(c):
+                    v = c.find("{*}v")
+                    if v is None:
+                        return ""
+                    if c.attrib.get("t") == "s":
+                        idx = int(v.text)
+                        return shared_strings[idx] if idx < len(shared_strings) else ""
+                    return v.text
+                
+                def col_num(ref):
+                    m = re.match(r"([A-Z]+)", ref)
+                    if not m:
+                        return 1
+                    col = m.group(1)
+                    n = 0
+                    for ch in col:
+                        n = n * 26 + (ord(ch) - 64)
+                    return n
+                
+                # Collect all rows from the sheet
+                rows = {}
+                for r in sheet_xml.findall(".//{*}row"):
+                    idx = int(r.attrib["r"])
+                    row_cells = {}
+                    for c in r.findall("{*}c"):
+                        ref = c.attrib.get("r")
+                        if not ref:
+                            continue
+                        col = col_num(ref)
+                        if col >= 5:  # read only from column E onward
+                            row_cells[col] = cell_value(c)
+                    if row_cells:
+                        rows[idx] = row_cells
+                
+                print(f"Collected {len(rows)} rows from Excel", flush=True)
+            
+            # Debug: Check row 57
+            if 57 in rows:
+                print(f"Row 57 has {len(rows[57])} columns: {sorted(list(rows[57].keys()))[:10]}", flush=True)
+                for col in sorted(rows[57].keys())[:10]:
+                    print(f"  Row 57, col {col}: '{rows[57][col]}'", flush=True)
+            
+
+            # Define fixed row mappings (Excel row -> database field)
+            # Data starts in column E (column 5), each row represents one trade
+            # Row 1 contains "TICKER TRADE_TYPE" - extract both ticker and trade_type from it
+            mapping = {
+                1:  "trade_type_raw",  # Row 1 -> Format: "SLV ROCT CALL" -> Extract "SLV" as ticker, "ROCT CALL" as trade_type
+                3:  "trade_date",      # Row 3 -> trades.trade_date  
+                5:  "current_price",   # Row 5 -> trades.current_price
+                8:  "expiration_date",  # Row 8 -> trades.expiration_date
+                15: "strike_price",     # Row 15 -> trades.strike_price (short strike)
+                21: "credit_debit",     # Row 21 -> trades.credit_debit
+                41: "num_of_contracts", # Row 41 -> trades.num_of_contracts
+                57: "trade_status",     # Row 57 -> trades.trade_status (dropdown: open, expired, closed, roll, assigned)
+            }
+
+            # Build trade columns from row 1 (trade_type_raw)
+            trade_type_row = rows.get(1, {})
+            trade_cols = sorted(trade_type_row.keys())
+            
+            # Only use columns that exist in BOTH row 1 AND row 57
+            # This ensures trade_status values align with their corresponding trades
+            trade_status_row = rows.get(57, {})
+            valid_trade_cols = [c for c in trade_cols if c in trade_status_row]
+            
+            print(f"Row 1 has {len(trade_cols)} columns: {trade_cols[:10]}...")
+            print(f"Row 57 has {len(trade_status_row)} columns: {sorted(trade_status_row.keys())[:10]}...")
+            print(f"Valid trade columns (in both): {len(valid_trade_cols)}", flush=True)
+
+            # Build a dataframe column by column
+            # Only include columns where row 1 has a value (skip empty metadata columns)
+            # BUT always collect row 57 data (trade_status)
+            data = {field: [] for field in mapping.values()}
+            collected_cols = []
+            
+            for c in valid_trade_cols:
+                # Check if row 1 has data in this column (trade_type_raw)
+                if 1 in rows and c in rows[1] and rows[1][c]:
+                    collected_cols.append(c)
+                    for r, field in mapping.items():
+                        val = rows.get(r, {}).get(c, "")
+                        data[field].append(val)
+                        # Debug: Check if row 57 has data
+                        if r == 57 and field == "trade_status":
+                            print(f"Trade status from column {c} (row 57): '{val}'", flush=True)
+            
+            df = pd.DataFrame(data)
+            
+            print(f"Collected {len(collected_cols)} columns: {collected_cols[:5]}...")
+            
+            # Debug: Check what row 57 has
+            if 57 in rows:
+                print(f"\nRow 57 data (keys): {list(rows[57].keys())[:10]}...")
+                # Print first few values from row 57
+                for k in list(rows[57].keys())[:10]:
+                    print(f"  Column {k}: {rows[57][k]}")
+            
+            print(f"\nDataframe has {len(df)} rows", flush=True)
+            print(f"Dataframe columns: {df.columns.tolist()}", flush=True)
+            
+            # Check if trade_status column has values
+            if 'trade_status' in df.columns:
+                print(f"\nTrade status sample values: {df['trade_status'].head(10).tolist()}", flush=True)
+                print(f"Trade status unique: {df['trade_status'].unique()}", flush=True)
+
+            # Clean and convert
+            def clean_trade_type(label):
+                """Strip the ticker symbol from 'SLV ROCT CALL' → 'ROCT CALL'"""
+                parts = str(label).split()
+                return " ".join(parts[1:]) if len(parts) > 1 else str(label)
+
+            df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+            df["expiration_date"] = pd.to_datetime(df["expiration_date"], errors="coerce")
+            
+            # Extract ticker and trade_type from trade_type_raw (format: "TICKER ROCT PUT")
+            def extract_ticker(row):
+                trade_type_raw = row.get('trade_type_raw')
+                
+                if pd.notna(trade_type_raw):
+                    val = str(trade_type_raw).strip()
+                    parts = val.split()
+                    if len(parts) >= 2:
+                        return parts[0]  # First word is ticker
+                    elif len(parts) == 1:
+                        return parts[0]
+                
+                return 'UNKNOWN'
+            
+            def extract_trade_type(row):
+                trade_type_raw = row.get('trade_type_raw')
+                
+                if pd.notna(trade_type_raw):
+                    val = str(trade_type_raw).strip()
+                    parts = val.split()
+                    if len(parts) >= 2:
+                        return ' '.join(parts[1:])  # Everything after first word is trade type
+                    elif len(parts) == 1:
+                        return 'ROCT PUT'
+                
+                return 'ROCT PUT'
+            
+            # Apply both extractions
+            df["ticker"] = df.apply(extract_ticker, axis=1)
+            df["trade_type"] = df.apply(extract_trade_type, axis=1)
+            
+            # Print extracted trade types for debugging
+            print("Extracted trade types from Excel:", df["trade_type"].unique(), flush=True)
+            
+            # Debug: Check if trade_status column exists and what values it has
+            if 'trade_status' in df.columns:
+                print("Trade status values in dataframe:", df["trade_status"].unique(), flush=True)
+                print(f"Sample trade_status values: {df['trade_status'].head(10).tolist()}", flush=True)
+            else:
+                print("WARNING: trade_status column NOT found in dataframe!", flush=True)
+
+            for n in ["current_price", "strike_price", "credit_debit", "num_of_contracts"]:
+                df[n] = pd.to_numeric(df[n], errors="coerce")
+
+            df = df.dropna(subset=["trade_date", "ticker"], how="any")
+
+            # Import all trades
+            df_to_insert = df
+
+            # Insert into database
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Reset trades and cost_basis tables before importing
+            cursor.execute('DELETE FROM cost_basis')
+            cursor.execute('DELETE FROM trades')
+            conn.commit()
+            print("Reset trades and cost_basis tables before import", flush=True)
+            
+            # Check for duplicates against existing trades (will be empty after reset)
+            try:
+                existing = pd.read_sql("SELECT * FROM trades", conn)
+                # Get ticker names for comparison
+                existing_tickers = pd.read_sql("SELECT * FROM tickers", conn)
+                if not existing_tickers.empty:
+                    existing = existing.merge(existing_tickers[['id', 'ticker']], left_on='ticker_id', right_on='id', suffixes=('', '_ticker'))
+                    existing['ticker'] = existing['ticker']
+            except Exception:
+                existing = pd.DataFrame()
+            
+            # Only import trades that don't already exist
+            # Compare based on key fields
+            if not existing.empty and not df_to_insert.empty:
+                # Convert dates for comparison
+                df_to_insert['trade_date_str'] = df_to_insert['trade_date'].dt.strftime('%Y-%m-%d')
+                df_to_insert['expiration_date_str'] = df_to_insert['expiration_date'].dt.strftime('%Y-%m-%d')
+                
+                # Create comparison columns
+                df_to_insert['key'] = (df_to_insert['ticker'] + '|' + 
+                                     df_to_insert['trade_date_str'] + '|' + 
+                                     df_to_insert['expiration_date_str'] + '|' + 
+                                     df_to_insert['trade_type'].astype(str) + '|' + 
+                                     df_to_insert['num_of_contracts'].astype(str) + '|' + 
+                                     df_to_insert['credit_debit'].astype(str))
+                
+                if 'ticker' in existing.columns:
+                    existing['key'] = (existing['ticker'].astype(str) + '|' + 
+                                     existing['trade_date'].astype(str) + '|' + 
+                                     existing['expiration_date'].astype(str) + '|' + 
+                                     existing['trade_type'].astype(str) + '|' + 
+                                     existing['num_of_contracts'].astype(str) + '|' + 
+                                     existing['credit_debit'].astype(str))
+                    
+                    # Filter out duplicates
+                    df_to_insert = df_to_insert[~df_to_insert['key'].isin(existing['key'])]
+                
+                # Drop helper columns
+                df_to_insert = df_to_insert.drop(columns=['key', 'trade_date_str', 'expiration_date_str'], errors='ignore')
+            
+            # Store count before insertion loop
+            final_count_before_insert = len(df_to_insert)
+            imported_count = 0
+            errors = []
+            
+            for idx, row in df_to_insert.iterrows():
+                try:
+                    # Get ticker safely
+                    ticker = str(row.get('ticker', '')).strip()
+                    if not ticker:
+                        errors.append(f"Row {idx}: Missing ticker")
+                        continue
+                        
+                    trade_date = row['trade_date'].strftime('%Y-%m-%d')
+                    expiration_date = row['expiration_date'].strftime('%Y-%m-%d')
+                    trade_type = str(row['trade_type']).strip()
+                    
+                    # Debug: Print trade_type being imported
+                    print(f"Importing trade with trade_type: '{trade_type}' (ticker: {ticker})", flush=True)
+                    
+                    # Validate trade_type against trade_types table
+                    cursor.execute("SELECT type_name FROM trade_types WHERE type_name = ?", (trade_type,))
+                    valid_type = cursor.fetchone()
+                    if not valid_type:
+                        # Check if there's a similar valid type (e.g., underscores vs spaces)
+                        cursor.execute("SELECT type_name FROM trade_types")
+                        valid_types = [row['type_name'] for row in cursor.fetchall()]
+                        error_msg = f"Row {idx} ({ticker}): Invalid trade_type '{trade_type}'. Valid types are: {', '.join(valid_types)}"
+                        errors.append(error_msg)
+                        print(f"Import Error: {error_msg}", flush=True)
+                        continue
+                    
+                    num_of_contracts = int(row['num_of_contracts']) if pd.notna(row['num_of_contracts']) else 0
+                    credit_debit = float(row['credit_debit']) if pd.notna(row['credit_debit']) else 0
+                    strike_price = float(row['strike_price']) if pd.notna(row['strike_price']) else 0
+                    current_price = float(row['current_price']) if pd.notna(row['current_price']) else 0
+                    
+                    # Read trade_status from row 57 (required, no default)
+                    # Normalize to lowercase for case-insensitive matching
+                    if 'trade_status' in row and pd.notna(row['trade_status']):
+                        status_val = str(row['trade_status']).strip().lower().strip()  # Double strip to remove any whitespace
+                        
+                        # Debug: print the raw status value
+                        print(f"Importing trade_status: raw='{row['trade_status']}', normalized='{status_val}' (ticker: {ticker})", flush=True)
+                        
+                        # Normalize common variations to standard values
+                        # Excel dropdown order: open, expired, closed, roll, assigned
+                        status_normalize = {
+                            # Text values (handle all case variations)
+                            'open': 'open',
+                            'closed': 'closed',
+                            'assigned': 'assigned',
+                            'expired': 'expired',
+                            'roll': 'roll',
+                            'rolling': 'roll',
+                            # Uppercase variants
+                            'OPEN': 'open',
+                            'CLOSED': 'closed',
+                            'ASSIGNED': 'assigned',
+                            'EXPIRED': 'expired',
+                            'ROLL': 'roll',
+                            # Excel dropdown numeric indices (0-indexed)
+                            '0': 'open',      # First option
+                            '1': 'expired',   # Second option
+                            '2': 'closed',    # Third option
+                            '3': 'roll',      # Fourth option
+                            '4': 'assigned',  # Fifth option
+                            # Excel status codes (mapped based on actual data)
+                            '43': 'open',      # Less common, mapped to open
+                            '79': 'expired',   # Most common - expired trades
+                            '90': 'closed',    # Closed trades
+                            '108': 'assigned', # Assigned trades (first 2 in your file)
+                            '109': 'roll',     # Roll trades (next 6 in your file)
+                        }
+                        trade_status = status_normalize.get(status_val, 'open')
+                        print(f"  Mapped to: '{trade_status}'", flush=True)
+                    else:
+                        # No status provided - skip this trade or use open as last resort
+                        print(f"  WARNING: No trade_status in row for {ticker}, using 'open'", flush=True)
+                        trade_status = 'open'
+                    
+                    # Get or create ticker
+                    cursor.execute("SELECT id FROM tickers WHERE ticker = ?", (ticker,))
+                    ticker_row = cursor.fetchone()
+                    if ticker_row:
+                        ticker_id = ticker_row['id']
+                    else:
+                        # Insert ticker with company_name (use ticker as default)
+                        cursor.execute("INSERT INTO tickers (ticker, company_name) VALUES (?, ?)", (ticker, ticker))
+                        ticker_id = cursor.lastrowid
+                    
+                    # Calculate days to expiration
+                    trade_date_obj = datetime.strptime(trade_date, '%Y-%m-%d').date()
+                    expiration = datetime.strptime(expiration_date, '%Y-%m-%d').date()
+                    days_to_expiration = (expiration - trade_date_obj).days
+                    
+                    # Calculate total_premium
+                    total_premium = credit_debit * num_of_contracts
+                    
+                    # Insert trade
+                    cursor.execute('''
+                        INSERT INTO trades 
+                        (account_id, ticker_id, trade_date, expiration_date, num_of_contracts, 
+                         credit_debit, total_premium, days_to_expiration, current_price, 
+                         strike_price, trade_status, trade_type, price_per_share, total_amount)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (9, ticker_id, trade_date, expiration_date, num_of_contracts,
+                          credit_debit, total_premium, days_to_expiration, current_price,
+                          strike_price, trade_status, trade_type, current_price, total_premium))
+                    
+                    trade_id = cursor.lastrowid
+                    
+                    # Create cost basis entry for options trades
+                    create_options_cost_basis_entry(cursor, 9, ticker_id, trade_id, trade_date, trade_type, 
+                                                    num_of_contracts, credit_debit, strike_price, expiration_date)
+                    
+                    imported_count += 1
+                    
+                except Exception as e:
+                    ticker_name = str(row.get('ticker', 'Unknown')).strip()
+                    error_msg = f"Row {idx} ({ticker_name}): {str(e)}"
+                    errors.append(error_msg)
+                    print(f"Import Error: {error_msg}", flush=True)  # Print to console
+            
+            conn.commit()
+            conn.close()
+            
+            skipped_count = final_count_before_insert - imported_count
+            
+            return jsonify({
+                'success': True,
+                'imported': imported_count,
+                'skipped': skipped_count,
+                'errors': errors
+            })
+            
+        finally:
+            # Clean up temporary file
+            import os
+            os.unlink(excel_path)
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':
     init_db()
