@@ -2179,8 +2179,8 @@ def webhook_deploy():
         if 'pythonanywhere' not in current_dir.lower():
             project_dir = current_dir
         else:
-            # For PythonAnywhere - update this to your actual project path
-            project_dir = '/home/prometheusprograms/stock-options-tracker'
+            # For PythonAnywhere
+            project_dir = '/home/greenmangroup/cursor_tracker/stock-options-tracker/stock-options-tracker'
         
         print(f"Deploying from: {project_dir}")
         
