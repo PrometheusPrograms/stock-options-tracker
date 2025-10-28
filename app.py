@@ -2184,7 +2184,20 @@ def webhook_deploy():
         
         print(f"Deploying from: {project_dir}")
         
-        # Fetch latest changes
+        # Force checkout to overwrite local changes to trades.db
+        print("Force checking out trades.db...")
+        checkout_result = subprocess.run(['git', 'checkout', '--force', 'HEAD', '--', 'trades.db'], 
+                                        cwd=project_dir, 
+                                        capture_output=True, 
+                                        text=True)
+        
+        # Clean and fetch
+        print("Cleaning working directory...")
+        subprocess.run(['git', 'clean', '-fd'], 
+                      cwd=project_dir, 
+                      capture_output=True, 
+                      text=True)
+        
         print("Fetching latest code...")
         fetch_result = subprocess.run(['git', 'fetch', 'origin'], 
                                      cwd=project_dir, 
@@ -2194,7 +2207,7 @@ def webhook_deploy():
         if fetch_result.returncode == 0:
             print("✓ Fetched latest code")
         
-        # Reset to origin/main to overwrite local changes
+        # Reset to origin/main
         print("Resetting to origin/main...")
         result = subprocess.run(['git', 'reset', '--hard', 'origin/main'], 
                                cwd=project_dir, 
