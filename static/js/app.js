@@ -1432,6 +1432,9 @@ function updateTradesTable() {
         '' // Empty for actions row (no label)
     ];
     
+    // Use document fragment for better performance
+    const fragment = document.createDocumentFragment();
+    
     // Create data rows (transposed) - no header row
     fieldNames.forEach((fieldName, fieldIndex) => {
         const row = document.createElement('tr');
@@ -1589,8 +1592,11 @@ function updateTradesTable() {
             row.innerHTML += `<td style="${bgColor}; width: 160px; min-width: 160px; max-width: 160px; ${visibilityStyle} ${verticalAlign}">${cellContent}</td>`;
         });
         
-        tbody.appendChild(row);
+        fragment.appendChild(row);
     });
+    
+    // Append all rows at once for better performance
+    tbody.appendChild(fragment);
     
     console.log('Trades table update completed. Rows:', tbody.children.length);
     
