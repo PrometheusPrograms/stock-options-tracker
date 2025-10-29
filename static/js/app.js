@@ -2602,20 +2602,16 @@ function clearUniversalDateFilters() {
 // Toggle Cost Basis Column
 function toggleCostBasis() {
     const costBasisColumn = document.getElementById('cost-basis-column');
-    const tradesColumn = document.getElementById('trades-column');
     const toggleIcon = document.getElementById('cost-basis-toggle-icon');
     const floatingToggle = document.getElementById('cost-basis-floating-toggle');
     
     if (!costBasisColumn) return;
     
-    // Toggle collapse/show classes
+    // Toggle collapse/show classes - CSS handles the flex adjustments
     if (costBasisColumn.classList.contains('show')) {
         // Collapsing
         costBasisColumn.classList.remove('show');
         costBasisColumn.classList.add('collapse');
-        if (tradesColumn) {
-            tradesColumn.style.flex = '1 1 auto';
-        }
         toggleIcon.classList.remove('fa-chevron-left');
         toggleIcon.classList.add('fa-chevron-right');
         if (floatingToggle) floatingToggle.style.display = 'block';
@@ -2623,9 +2619,6 @@ function toggleCostBasis() {
         // Expanding
         costBasisColumn.classList.remove('collapse');
         costBasisColumn.classList.add('show');
-        if (tradesColumn) {
-            tradesColumn.style.flex = '1 1 66.666667%';
-        }
         toggleIcon.classList.remove('fa-chevron-right');
         toggleIcon.classList.add('fa-chevron-left');
         if (floatingToggle) floatingToggle.style.display = 'none';

@@ -9,7 +9,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=148">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=149">
     <style>
         .sticky-control-bar {
             position: sticky;
@@ -79,7 +79,6 @@
         
         #cost-basis-column {
             flex-shrink: 0;
-            overflow: hidden;
         }
         
         #cost-basis-column.collapse:not(.show) {
@@ -87,14 +86,24 @@
             min-width: 0 !important;
             padding: 0 !important;
             margin: 0 !important;
+            overflow: hidden !important;
         }
         
         #cost-basis-column.show {
             width: 33.333333% !important;
             flex: 0 0 33.333333%;
+            overflow: visible;
         }
         
-        /* #trades-column flex is managed by JavaScript */
+        #trades-column {
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+        
+        #trades-column .table-responsive {
+            overflow-x: auto;
+            max-width: 100%;
+        }
         
         /* Floating toggle button for collapsed cost basis */
         .cost-basis-collapsed-toggle {
@@ -542,7 +551,7 @@
         <div class="container-fluid px-0">
             <div class="trades-cost-container mb-5" style="margin-top: 2.25rem;">
                 <!-- Trades Card (on the left) -->
-                <div id="trades-column" class="transition-width me-3" style="flex: 1 1 66.666667%;">
+                <div id="trades-column" class="transition-width me-3">
                     <div class="card section-card" id="trades" style="width: 100%;">
                     <div class="card-header bg-success text-white compact">
                         <div class="d-flex align-items-center justify-content-between">
@@ -1068,7 +1077,7 @@
     <!-- Alert Container -->
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}?v=331"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=332"></script>
     
     <script>
         // Global variable to track current section
