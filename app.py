@@ -873,15 +873,15 @@ def add_trade():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Check if symbol exists
-        cursor.execute('SELECT id FROM tickers WHERE ticker = ?', (ticker,))
+        # Check if symbol exists (case-insensitive)
+        cursor.execute('SELECT id FROM tickers WHERE UPPER(ticker) = UPPER(?)', (ticker,))
         symbol_row = cursor.fetchone()
         
         if symbol_row:
             ticker_id = symbol_row['id']
         else:
-            # Create new symbol
-            cursor.execute('INSERT INTO tickers (ticker, company_name) VALUES (?, ?)', (ticker, ticker))
+            # Create new symbol (store as uppercase)
+            cursor.execute('INSERT INTO tickers (ticker, company_name) VALUES (?, ?)', (ticker.upper(), ticker))
             ticker_id = cursor.lastrowid
         
         # Calculate days to expiration
@@ -1163,14 +1163,15 @@ def update_trade(trade_id):
         
         if 'ticker' in data:
             ticker = data['ticker'].upper()
-            # Get or create symbol
-            cursor.execute('SELECT id FROM tickers WHERE ticker = ?', (ticker,))
+            # Get or create symbol (case-insensitive)
+            cursor.execute('SELECT id FROM tickers WHERE UPPER(ticker) = UPPER(?)', (ticker,))
             symbol_row = cursor.fetchone()
             
             if symbol_row:
                 ticker_id = symbol_row['id']
             else:
-                cursor.execute('INSERT INTO tickers (ticker, company_name) VALUES (?, ?)', (ticker, ticker))
+                # Create new symbol (store as uppercase)
+                cursor.execute('INSERT INTO tickers (ticker, company_name) VALUES (?, ?)', (ticker.upper(), ticker))
                 ticker_id = cursor.lastrowid
             
             updates.append('ticker_id = ?')
@@ -1454,39 +1455,32 @@ def company_search():
         if not query:
             return jsonify([])
         
-        # Use Alpha Vantage API to search for companies
-        api_key = os.environ.get('ALPHA_VANTAGE_API_KEY')
-        if not api_key:
-            return jsonify({'error': 'Alpha Vantage API key not configured'}), 500
+        # Search in tickers table (case-insensitive)
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
-        # Alpha Vantage Symbol Search API
-        url = f'https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords={query}&apikey={api_key}'
+        # Search for tickers that start with or contain the query
+        cursor.execute('''
+            SELECT DISTINCT ticker, company_name 
+            FROM tickers 
+            WHERE UPPER(ticker) LIKE ? OR UPPER(company_name) LIKE ?
+            ORDER BY ticker
+            LIMIT 20
+        ''', (f'%{query}%', f'%{query}%'))
         
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        
-        data = response.json()
-        
-        if 'Error Message' in data:
-            return jsonify({'error': data['Error Message']}), 500
-        
-        if 'Note' in data:
-            return jsonify({'error': 'API rate limit exceeded'}), 429
+        results = cursor.fetchall()
+        conn.close()
         
         companies = []
-        if 'bestMatches' in data:
-            for match in data['bestMatches'][:10]:  # Limit to 10 results
-                companies.append({
-                    'symbol': match['1. symbol'],
-                    'name': match['2. name']
-                })
+        for row in results:
+            companies.append({
+                'symbol': row['ticker'].upper(),  # Ensure uppercase
+                'name': row['company_name'] or row['ticker'].upper()  # Use company_name or fallback to ticker
+            })
         
         return jsonify(companies)
-    except requests.exceptions.RequestException as e:
-        print(f'Error fetching from Alpha Vantage: {e}')
-        return jsonify({'error': 'Failed to fetch company data'}), 500
     except Exception as e:
-        print(f'Error searching companies: {e}')
+        print(f'Error searching tickers: {e}')
         return jsonify([])
 
 @app.route('/api/company-info/<ticker>')
@@ -2807,14 +2801,14 @@ def import_excel():
                         print(f"  WARNING: No trade_status in row for {ticker}, using 'open'", flush=True)
                         trade_status = 'open'
                     
-                    # Get or create ticker
-                    cursor.execute("SELECT id FROM tickers WHERE ticker = ?", (ticker,))
+                    # Get or create ticker (case-insensitive)
+                    cursor.execute("SELECT id FROM tickers WHERE UPPER(ticker) = UPPER(?)", (ticker,))
                     ticker_row = cursor.fetchone()
                     if ticker_row:
                         ticker_id = ticker_row['id']
                     else:
-                        # Insert ticker with company_name (use ticker as default)
-                        cursor.execute("INSERT INTO tickers (ticker, company_name) VALUES (?, ?)", (ticker, ticker))
+                        # Insert ticker with company_name (use ticker as default, store as uppercase)
+                        cursor.execute("INSERT INTO tickers (ticker, company_name) VALUES (?, ?)", (ticker.upper(), ticker.upper()))
                         ticker_id = cursor.lastrowid
                     
                     # Calculate days to expiration
