@@ -1629,14 +1629,19 @@ function setTableWidth() {
 
 function updateCostBasisTable(costBasisData) {
     const container = document.getElementById('cost-basis-table-container');
+    const inlineContainer = document.getElementById('cost-basis-inline-container');
+    
+    const targetContainers = [container, inlineContainer].filter(c => c !== null);
     
     if (!costBasisData || costBasisData.length === 0) {
-        container.innerHTML = `
-            <div class="text-center text-muted">
-                <i class="fas fa-info-circle me-2"></i>
-                No cost basis data available for the selected stock symbol.
-            </div>
-        `;
+        targetContainers.forEach(c => {
+            c.innerHTML = `
+                <div class="text-center text-muted">
+                    <i class="fas fa-info-circle me-2"></i>
+                    No cost basis data available for the selected stock symbol.
+                </div>
+            `;
+        });
         return;
     }
     
@@ -1793,7 +1798,10 @@ function updateCostBasisTable(costBasisData) {
         `;
     }
     
-    container.innerHTML = html;
+    // Set HTML for both containers
+    targetContainers.forEach(c => {
+        c.innerHTML = html;
+    });
 }
 
 // ============================================================================
@@ -1965,18 +1973,23 @@ function clearCostBasisSymbolFilter() {
 
 function showAllSymbols(data = null) {
     const costBasisContainer = document.getElementById('cost-basis-table-container');
-    if (!costBasisContainer) return;
+    const inlineContainer = document.getElementById('cost-basis-inline-container');
+    
+    const targetContainers = [costBasisContainer, inlineContainer].filter(c => c !== null);
+    if (targetContainers.length === 0) return;
     
     // Get all unique tickers from trades data - we already have this loaded!
     const allTickers = [...new Set(trades.map(trade => trade.ticker))].filter(ticker => ticker && ticker.trim() !== '');
     
     if (allTickers.length === 0) {
-        costBasisContainer.innerHTML = `
-            <div class="text-center text-muted">
-                <i class="fas fa-info-circle me-2"></i>
-                No trades found. Add some trades to see symbols here.
-            </div>
-        `;
+        targetContainers.forEach(c => {
+            c.innerHTML = `
+                <div class="text-center text-muted">
+                    <i class="fas fa-info-circle me-2"></i>
+                    No trades found. Add some trades to see symbols here.
+                </div>
+            `;
+        });
         return;
     }
     
@@ -2009,7 +2022,10 @@ function showAllSymbols(data = null) {
     });
     symbolsHtml += '</div>';
     
-    costBasisContainer.innerHTML = symbolsHtml;
+    // Set HTML for both containers
+    targetContainers.forEach(c => {
+        c.innerHTML = symbolsHtml;
+    });
 }
 
 // Optimized version that skips API call when clearing filters
@@ -2020,9 +2036,11 @@ function showAllSymbolsFromTrades() {
 
 function hideCostBasisTable() {
     const container = document.getElementById('cost-basis-table-container');
-    if (container) {
-        container.innerHTML = '';
-    }
+    const inlineContainer = document.getElementById('cost-basis-inline-container');
+    
+    [container, inlineContainer].forEach(c => {
+        if (c) c.innerHTML = '';
+    });
 }
 
 // ============================================================================
@@ -2437,6 +2455,184 @@ async function loadAccounts() {
 }
 
 // ============================================================================
+// UNIVERSAL CONTROL BAR FUNCTIONS
+// ============================================================================
+
+function setupUniversalControls() {
+    // Setup universal ticker filter
+    const universalTickerInput = document.getElementById('universal-ticker-filter');
+    const universalClearButton = document.getElementById('clear-universal-ticker');
+    
+    if (universalTickerInput && universalClearButton) {
+        setupAutocomplete('universal-ticker-filter', 'universal-ticker-suggestions', (symbol) => {
+            window.symbolFilter = symbol;
+            // Update both trades and cost basis
+            updateTradesTable();
+            if (symbol) {
+                loadCostBasis(symbol);
+            } else {
+                showAllSymbolsFromTrades();
+            }
+        });
+        
+        // Show/hide clear button
+        universalTickerInput.addEventListener('input', function() {
+            universalClearButton.style.display = this.value.trim() ? 'inline-block' : 'none';
+        });
+        
+        // Clear button
+        universalClearButton.addEventListener('click', function() {
+            universalTickerInput.value = '';
+            this.style.display = 'none';
+            window.symbolFilter = '';
+            updateTradesTable();
+            showAllSymbolsFromTrades();
+        });
+    }
+    
+    // Setup universal status filter
+    const universalStatusFilter = document.getElementById('universal-status-filter');
+    if (universalStatusFilter) {
+        universalStatusFilter.addEventListener('change', function() {
+            statusFilter = this.value || '';
+            updateTradesTable();
+        });
+    }
+    
+    // Setup universal date filters
+    setupUniversalDateFilters();
+    
+    // Setup universal Excel upload
+    const universalExcelUpload = document.getElementById('universal-excel-upload');
+    if (universalExcelUpload) {
+        universalExcelUpload.addEventListener('change', handleExcelUpload);
+    }
+}
+
+function clearUniversalTickerFilter() {
+    const universalTickerInput = document.getElementById('universal-ticker-filter');
+    const universalClearButton = document.getElementById('clear-universal-ticker');
+    
+    if (universalTickerInput) {
+        universalTickerInput.value = '';
+        if (universalClearButton) {
+            universalClearButton.style.display = 'none';
+        }
+        window.symbolFilter = '';
+        updateTradesTable();
+        showAllSymbolsFromTrades();
+    }
+}
+
+function setupUniversalDateFilters() {
+    const startDateInput = document.getElementById('universal-start-date');
+    const endDateInput = document.getElementById('universal-end-date');
+    
+    if (!startDateInput || !endDateInput) return;
+    
+    // Set default to empty (all time)
+    startDateInput.value = '';
+    endDateInput.value = '';
+    
+    // Update both dashboard and trades filters when changed
+    startDateInput.addEventListener('change', function() {
+        document.getElementById('dashboard-start-date').value = this.value;
+        updateDashboardData();
+    });
+    
+    endDateInput.addEventListener('change', function() {
+        document.getElementById('dashboard-end-date').value = this.value;
+        updateDashboardData();
+    });
+}
+
+function setUniversalDateRange(period) {
+    const startDateInput = document.getElementById('universal-start-date');
+    const endDateInput = document.getElementById('universal-end-date');
+    const dashboardStartDate = document.getElementById('dashboard-start-date');
+    const dashboardEndDate = document.getElementById('dashboard-end-date');
+    
+    if (!startDateInput || !endDateInput) return;
+    
+    const today = new Date();
+    let startDate = null;
+    let endDate = today.toISOString().split('T')[0];
+    
+    switch(period) {
+        case 'week':
+            startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+            break;
+        case 'month':
+            startDate = new Date(today.getFullYear(), today.getMonth() - 1, today.getDate());
+            break;
+        case 'year':
+            startDate = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
+            break;
+        case 'ytd':
+            startDate = new Date(today.getFullYear(), 0, 1);
+            break;
+    }
+    
+    if (startDate) {
+        const startDateStr = startDate.toISOString().split('T')[0];
+        startDateInput.value = startDateStr;
+        if (dashboardStartDate) dashboardStartDate.value = startDateStr;
+    }
+    
+    endDateInput.value = endDate;
+    if (dashboardEndDate) dashboardEndDate.value = endDate;
+    
+    updateDashboardData();
+}
+
+function clearUniversalDateFilters() {
+    const startDateInput = document.getElementById('universal-start-date');
+    const endDateInput = document.getElementById('universal-end-date');
+    const dashboardStartDate = document.getElementById('dashboard-start-date');
+    const dashboardEndDate = document.getElementById('dashboard-end-date');
+    
+    if (startDateInput) startDateInput.value = '';
+    if (endDateInput) endDateInput.value = '';
+    if (dashboardStartDate) dashboardStartDate.value = '';
+    if (dashboardEndDate) dashboardEndDate.value = '';
+    
+    updateDashboardData();
+}
+
+// Toggle Cost Basis Column
+function toggleCostBasis() {
+    const costBasisColumn = document.getElementById('cost-basis-column');
+    const tradesColumn = document.getElementById('trades-column');
+    const toggleIcon = document.getElementById('cost-basis-toggle-icon');
+    const floatingToggle = document.getElementById('cost-basis-floating-toggle');
+    
+    if (!costBasisColumn) return;
+    
+    // Toggle collapse/show classes
+    if (costBasisColumn.classList.contains('show')) {
+        // Collapsing
+        costBasisColumn.classList.remove('show');
+        costBasisColumn.classList.add('collapse');
+        if (tradesColumn) {
+            tradesColumn.style.flex = '1 1 auto';
+        }
+        toggleIcon.classList.remove('fa-chevron-left');
+        toggleIcon.classList.add('fa-chevron-right');
+        if (floatingToggle) floatingToggle.style.display = 'block';
+    } else {
+        // Expanding
+        costBasisColumn.classList.remove('collapse');
+        costBasisColumn.classList.add('show');
+        if (tradesColumn) {
+            tradesColumn.style.flex = '1 1 66.666667%';
+        }
+        toggleIcon.classList.remove('fa-chevron-right');
+        toggleIcon.classList.add('fa-chevron-left');
+        if (floatingToggle) floatingToggle.style.display = 'none';
+    }
+}
+
+// ============================================================================
 // INITIALIZATION
 // ============================================================================
 
@@ -2462,6 +2658,7 @@ document.addEventListener('DOMContentLoaded', function() {
     updateChart();
     
     // Set up event listeners
+    setupUniversalControls();  // Setup new universal control bar
     setupTradesSymbolFilter();
     setupStatusFilter();
     setupCostBasisSymbolFilter();

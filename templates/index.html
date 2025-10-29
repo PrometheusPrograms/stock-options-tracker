@@ -9,8 +9,125 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=146">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=148">
     <style>
+        .sticky-control-bar {
+            position: sticky;
+            top: 90px; /* Position right below sticky banner (banner height ~90px) */
+            z-index: 98; /* Below banner (z-index: 999) but above content */
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 1rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            margin-top: -1.5rem; /* Pull up to fill gap */
+            margin-bottom: 1.5rem; /* Add margin below for spacing to dashboard */
+        }
+        
+        /* Add a pseudo-element to fill the transparent gap */
+        .sticky-control-bar::before {
+            content: '';
+            position: absolute;
+            top: -1.5rem;
+            left: 0;
+            right: 0;
+            height: 1.5rem;
+            background-color: #f5f7fa; /* Match page background */
+            z-index: -1;
+        }
+        
+        .control-bar-content {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .control-group label {
+            color: white;
+            font-weight: 500;
+            font-size: 0.875rem;
+            white-space: nowrap;
+        }
+        
+        .quick-add-buttons {
+            display: flex;
+            gap: 0.25rem;
+            flex-wrap: wrap;
+        }
+        
+        .quick-add-btn {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+        }
+        
+        /* Flex container for trades and cost basis */
+        .trades-cost-container {
+            display: flex;
+            flex-wrap: nowrap;
+            width: 100%;
+        }
+        
+        .transition-width {
+            transition: width 0.3s ease-in-out;
+        }
+        
+        #cost-basis-column {
+            flex-shrink: 0;
+            overflow: hidden;
+        }
+        
+        #cost-basis-column.collapse:not(.show) {
+            width: 0 !important;
+            min-width: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+        
+        #cost-basis-column.show {
+            width: 33.333333% !important;
+            flex: 0 0 33.333333%;
+        }
+        
+        /* #trades-column flex is managed by JavaScript */
+        
+        /* Floating toggle button for collapsed cost basis */
+        .cost-basis-collapsed-toggle {
+            position: fixed;
+            right: 0;
+            top: 300px;
+            z-index: 1000;
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            border: none;
+            padding: 1rem 0.5rem;
+            border-radius: 8px 0 0 8px;
+            cursor: pointer;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.2);
+            transition: all 0.3s ease;
+            animation: slideInFromRight 0.3s ease;
+        }
+        
+        .cost-basis-collapsed-toggle:hover {
+            right: 5px;
+            box-shadow: -4px 0 15px rgba(0,0,0,0.3);
+        }
+        
+        @keyframes slideInFromRight {
+            from {
+                right: -50px;
+                opacity: 0;
+            }
+            to {
+                right: 0;
+                opacity: 1;
+            }
+        }
         .floating-nav {
             position: fixed;
             left: 20px;
@@ -116,6 +233,84 @@
             </div>
         </div>
         
+        <!-- Sticky Control Bar -->
+        <div class="sticky-control-bar">
+            <div class="control-bar-content">
+                <!-- Quick Add Buttons -->
+                <div class="control-group">
+                    <label>Quick Add:</label>
+                    <div class="quick-add-buttons">
+                        <button class="btn btn-sm btn-light quick-add-btn" onclick="openROCTPutModal()">
+                            <i class="fas fa-plus me-1"></i>ROCT PUT
+                        </button>
+                        <button class="btn btn-sm btn-light quick-add-btn" onclick="openROCTCallModal()">
+                            <i class="fas fa-plus me-1"></i>ROCT CALL
+                        </button>
+                        <button class="btn btn-sm btn-light quick-add-btn" onclick="openBTOModal()">
+                            <i class="fas fa-plus me-1"></i>BTO
+                        </button>
+                        <button class="btn btn-sm btn-light quick-add-btn" onclick="openSTCModal()">
+                            <i class="fas fa-plus me-1"></i>STC
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Universal Ticker Filter -->
+                <div class="control-group">
+                    <label for="universal-ticker-filter">Symbol:</label>
+                    <div style="position: relative;">
+                        <input type="text" class="form-control form-control-sm" id="universal-ticker-filter" placeholder="Filter by ticker..." style="width: 150px;" autocomplete="off">
+                        <div id="universal-ticker-suggestions" class="dropdown-menu" style="display: none;"></div>
+                    </div>
+                    <button id="clear-universal-ticker" class="btn btn-sm btn-light" onclick="clearUniversalTickerFilter()" style="display: none;">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                
+                <!-- Status Filter -->
+                <div class="control-group">
+                    <label for="universal-status-filter">Status:</label>
+                    <select class="form-select form-select-sm" id="universal-status-filter" style="width: 110px;">
+                        <option value="">All</option>
+                        <option value="open">Open</option>
+                        <option value="closed">Closed</option>
+                        <option value="assigned">Assigned</option>
+                        <option value="expired">Expired</option>
+                        <option value="roll">Roll</option>
+                    </select>
+                </div>
+                
+                <!-- Date Filters -->
+                <div class="control-group">
+                    <label for="universal-start-date">Start:</label>
+                    <input type="date" class="form-control form-control-sm" id="universal-start-date" style="width: 140px;">
+                </div>
+                <div class="control-group">
+                    <label for="universal-end-date">End:</label>
+                    <input type="date" class="form-control form-control-sm" id="universal-end-date" style="width: 140px;">
+                </div>
+                
+                <!-- Quick Date Buttons -->
+                <div class="control-group">
+                    <div class="btn-group btn-group-sm">
+                        <button class="btn btn-light" onclick="setUniversalDateRange('week')">1W</button>
+                        <button class="btn btn-light" onclick="setUniversalDateRange('month')">1M</button>
+                        <button class="btn btn-light" onclick="setUniversalDateRange('year')">1Y</button>
+                        <button class="btn btn-light" onclick="setUniversalDateRange('ytd')">YTD</button>
+                        <button class="btn btn-light" onclick="clearUniversalDateFilters()">Clear</button>
+                    </div>
+                </div>
+                
+                <!-- Import Excel -->
+                <div class="control-group">
+                    <label for="universal-excel-upload" class="btn btn-sm btn-light mb-0" style="cursor: pointer;">
+                        <i class="fas fa-file-excel me-1"></i>Import Excel
+                    </label>
+                    <input type="file" id="universal-excel-upload" name="file" accept=".xlsx,.xls,.xlsm" style="display: none;">
+                </div>
+            </div>
+        </div>
+        
         <!-- Commission Settings Modal -->
         <div id="commission-modal" class="modal fade" tabindex="-1">
             <div class="modal-dialog">
@@ -165,7 +360,8 @@
                                     <i class="fas fa-tachometer-alt me-2"></i>
                                     Dashboard
                                 </h5>
-                                <div class="d-flex align-items-center dashboard-controls" style="gap: 2px;">
+                                <!-- Old dashboard controls hidden - now in universal control bar -->
+                                <div class="d-flex align-items-center dashboard-controls" style="gap: 2px; display: none !important;">
                                     <div class="d-flex align-items-center">
                                         <label for="dashboard-start-date" class="form-label form-label-sm text-white me-1 mb-0">Start</label>
                                         <input type="date" class="form-control form-control-sm dashboard-date-input" id="dashboard-start-date">
@@ -342,10 +538,11 @@
         </div>
         </div>
 
-        <!-- Trades Section -->
+        <!-- Trades and Cost Basis Section -->
         <div class="container-fluid px-0">
-            <div class="row mb-5" style="margin-top: 2.25rem;">
-                <div class="col-12">
+            <div class="trades-cost-container mb-5" style="margin-top: 2.25rem;">
+                <!-- Trades Card (on the left) -->
+                <div id="trades-column" class="transition-width me-3" style="flex: 1 1 66.666667%;">
                     <div class="card section-card" id="trades" style="width: 100%;">
                     <div class="card-header bg-success text-white compact">
                         <div class="d-flex align-items-center justify-content-between">
@@ -355,7 +552,8 @@
                                     <i class="fas fa-chart-line me-2"></i>
                                     Trades
                                 </h5>
-                                <div class="d-flex align-items-center ms-3" style="gap: 2px;">
+                                <!-- Old controls hidden - now in universal control bar -->
+                                <div class="d-flex align-items-center ms-3" style="gap: 2px; display: none !important;">
                                     <label for="excel-upload" class="btn btn-sm btn-light mb-0 me-2" style="cursor: pointer;">
                                         <i class="fas fa-file-excel me-1"></i>Import Excel
                                     </label>
@@ -375,7 +573,8 @@
                                     </div>
                                 </div>
                             </div>
-                            <div class="d-flex align-items-center" style="gap: 1px;">
+                            <!-- Old status filter hidden -->
+                            <div class="d-flex align-items-center" style="gap: 1px; display: none !important;">
                                 <label for="status-filter" class="form-label mb-0 me-1">Status:</label>
                                 <select class="form-select form-select-sm status-filter" id="status-filter" style="width: 120px;">
                                     <option value="">All</option>
@@ -392,7 +591,8 @@
                     <div class="card-body">
                         <div class="dashboard-content-container">
                             <div class="row">
-                                <div class="col-md-1">
+                                <!-- Old Add Trade box hidden - now in universal control bar -->
+                                <div class="col-md-1" style="display: none;">
                                     <div class="card shadow-sm border-0">
                                         <div class="card-header bg-primary text-white">
                                             <h6 class="mb-0" style="font-size: 0.75rem;">
@@ -430,7 +630,8 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div class="col-md-11">
+                                <!-- Trades Table -->
+                                <div class="col-12">
                                     <div class="table-responsive">
                                         <table class="table table-sm table-fixed" id="trades-table-main">
                                             <tbody id="trades-table"></tbody>
@@ -441,13 +642,37 @@
                         </div>
                     </div>
                 </div>
+                    </div>
+                </div>
+                
+                <!-- Cost Basis Card (on the right, collapsible) -->
+                <div id="cost-basis-column" class="collapse show flex-shrink-0 transition-width">
+                    <div class="card section-card" style="width: 100%;">
+                        <div class="card-header bg-success text-white compact d-flex justify-content-between align-items-center">
+                            <div>
+                                <i class="fas fa-calculator me-2"></i>
+                                <span>Cost Basis</span>
+                            </div>
+                            <button class="btn btn-sm btn-light" id="cost-basis-toggle-btn" onclick="toggleCostBasis()">
+                                <i class="fas fa-chevron-left" id="cost-basis-toggle-icon"></i>
+                            </button>
+                        </div>
+                        <div class="card-body" id="cost-basis-inline-container">
+                            <!-- Cost basis content will be inserted here -->
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
         </div>
+        
+        <!-- Floating Toggle Button for Collapsed Cost Basis -->
+        <button class="cost-basis-collapsed-toggle" id="cost-basis-floating-toggle" onclick="toggleCostBasis()" style="display: none;">
+            <i class="fas fa-chevron-left fa-lg"></i>
+        </button>
 
-        <!-- Cost Basis Section -->
-        <div class="container-fluid px-0">
+        <!-- Cost Basis Section (Hidden - now inline with trades) -->
+        <div class="container-fluid px-0" style="display: none;">
             <div class="row mb-5" style="margin-top: 2.25rem;">
                 <div class="col-12">
                     <div class="card section-card" id="cost-basis" style="width: 100%;">
@@ -459,7 +684,8 @@
                                     <i class="fas fa-calculator me-2"></i>
                                     Cost Basis
                                 </h5>
-                                <div class="d-flex align-items-center ms-3" style="gap: 2px;">
+                                <!-- Old controls hidden - now in universal control bar -->
+                                <div class="d-flex align-items-center ms-3" style="gap: 2px; display: none !important;">
                                     <input type="text" class="form-control form-control-sm" id="cost-basis-symbol-filter" placeholder="Type symbol..." style="width: 220px;" autocomplete="off">
                                     <div id="cost-basis-symbol-suggestions" class="dropdown-menu" style="display: none;"></div>
                                     <button id="clear-cost-basis-symbol" class="btn btn-sm btn-outline-light" style="display: none;" onclick="clearCostBasisSymbolFilter()">
@@ -842,7 +1068,7 @@
     <!-- Alert Container -->
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}?v=330"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=331"></script>
     
     <script>
         // Global variable to track current section
