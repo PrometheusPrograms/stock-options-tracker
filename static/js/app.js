@@ -1910,9 +1910,9 @@ function clearSymbolFilter() {
         costBasisClearButton.style.display = 'none';
     }
     
-    // Update both tables
+    // Update both tables - use optimized function to avoid API call
     updateTradesTable();
-    loadCostBasis(); // Load all symbols
+    showAllSymbolsFromTrades(); // Show symbols instantly without API call
 }
 
 function clearCostBasisSymbolFilter() {
@@ -1947,16 +1947,16 @@ function clearCostBasisSymbolFilter() {
     // Arrow buttons should always be visible, just update their positions
     updateArrowPositions();
     
-    // Update both tables
+    // Update both tables - use optimized function to avoid API call
     updateTradesTable();
-    loadCostBasis(); // Load all symbols
+    showAllSymbolsFromTrades(); // Show symbols instantly without API call
 }
 
-function showAllSymbols(data) {
+function showAllSymbols(data = null) {
     const costBasisContainer = document.getElementById('cost-basis-table-container');
     if (!costBasisContainer) return;
     
-    // Get all unique tickers from trades data, not just cost basis data
+    // Get all unique tickers from trades data - we already have this loaded!
     const allTickers = [...new Set(trades.map(trade => trade.ticker))].filter(ticker => ticker && ticker.trim() !== '');
     
     if (allTickers.length === 0) {
@@ -1969,7 +1969,7 @@ function showAllSymbols(data) {
         return;
     }
     
-    // Group cost basis data by ticker for counting entries
+    // If data is provided, use it to count entries (optional optimization)
     const costBasisGroups = {};
     if (data && data.length > 0) {
         data.forEach(entry => {
@@ -1999,6 +1999,12 @@ function showAllSymbols(data) {
     symbolsHtml += '</div>';
     
     costBasisContainer.innerHTML = symbolsHtml;
+}
+
+// Optimized version that skips API call when clearing filters
+function showAllSymbolsFromTrades() {
+    console.log('Showing all symbols from trades data (no API call)');
+    showAllSymbols(null);
 }
 
 function hideCostBasisTable() {
@@ -2371,7 +2377,7 @@ function setupCostBasisSymbolFilter() {
             symbolFilterInput.value = '';
             clearButton.style.display = 'none';
             selectedTicker = null;
-            loadCostBasis();
+            showAllSymbolsFromTrades(); // Use optimized function to skip API call
         });
     }
     
