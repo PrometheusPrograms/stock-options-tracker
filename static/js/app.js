@@ -1457,6 +1457,9 @@ function updateTradesTable() {
             firstCell.style.backgroundColor = 'transparent';
         }
         
+        // Build cell HTML using array for better performance
+        const cellHTMLs = [];
+        
         // Create columns for ALL trades (unlimited scalability)
         allTrades.forEach((trade, tradeIndex) => {
             // Check if this trade should be visible based on filters
@@ -1589,9 +1592,11 @@ function updateTradesTable() {
             } else if (fieldIndex === 1 || fieldIndex === 3) {
                 verticalAlign = 'vertical-align: middle;';
             }
-            row.innerHTML += `<td style="${bgColor}; width: 160px; min-width: 160px; max-width: 160px; ${visibilityStyle} ${verticalAlign}">${cellContent}</td>`;
+            cellHTMLs.push(`<td style="${bgColor}; width: 160px; min-width: 160px; max-width: 160px; ${visibilityStyle} ${verticalAlign}">${cellContent}</td>`);
         });
         
+        // Set all cells at once for better performance
+        row.innerHTML += cellHTMLs.join('');
         fragment.appendChild(row);
     });
     
