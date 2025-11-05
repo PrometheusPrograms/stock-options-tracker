@@ -9,7 +9,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=149">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=164">
     <style>
         .sticky-control-bar {
             position: sticky;
@@ -20,6 +20,31 @@
             box-shadow: 0 2px 10px rgba(0,0,0,0.2);
             margin-top: -1.5rem; /* Pull up to fill gap */
             margin-bottom: 1.5rem; /* Add margin below for spacing to dashboard */
+        }
+        
+        /* Date range button styling - remove outline on click and add selected state */
+        .date-range-btn {
+            outline: none !important;
+            box-shadow: none !important;
+            border: 1px solid rgba(255, 255, 255, 0.3) !important;
+        }
+        
+        .date-range-btn:focus,
+        .date-range-btn:active {
+            outline: none !important;
+            box-shadow: none !important;
+        }
+        
+        .date-range-btn.selected {
+            background-color: white !important;
+            color: black !important;
+            font-weight: bold !important;
+            border-color: white !important;
+        }
+        
+        .date-range-btn:not(.selected) {
+            background-color: rgba(255, 255, 255, 0.2) !important;
+            color: white !important;
         }
         
         /* Add a pseudo-element to fill the transparent gap */
@@ -109,7 +134,6 @@
         .cost-basis-collapsed-toggle {
             position: fixed;
             right: 0;
-            top: 300px;
             z-index: 1000;
             background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
             color: white;
@@ -212,6 +236,169 @@
             transform: scale(1.05);
             border: 1px solid rgba(13, 110, 253, 0.5);
         }
+        
+        /* Dropdown submenu styling */
+        .dropdown-submenu {
+            position: relative;
+        }
+        
+        .dropdown-submenu .dropdown-menu {
+            top: 0;
+            right: 100%;
+            left: auto;
+            margin-top: -1px;
+            margin-right: 0;
+            display: none;
+            padding: 0;
+            border-top-left-radius: 0;
+            border-bottom-left-radius: 0;
+        }
+        
+        /* Keep submenu open when hovering over parent item or submenu itself */
+        .dropdown-submenu:hover > .dropdown-menu,
+        .dropdown-submenu.show > .dropdown-menu,
+        .dropdown-submenu .dropdown-menu:hover {
+            display: block !important;
+        }
+        
+        /* Ensure the submenu item itself maintains hover */
+        .dropdown-submenu > .dropdown-item:hover + .dropdown-menu,
+        .dropdown-submenu > .dropdown-item:hover ~ .dropdown-menu {
+            display: block !important;
+        }
+        
+        /* Add a small delay bridge to prevent accidental closing */
+        .dropdown-submenu::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: -5px;
+            width: 5px;
+            height: 100%;
+            background: transparent;
+            z-index: 1052;
+        }
+        
+        .dropdown-submenu > .dropdown-toggle::after {
+            transform: rotate(90deg);
+            float: right;
+            margin-top: 0.5rem;
+        }
+        
+        /* Prevent parent dropdown from closing when clicking in submenu */
+        .dropdown-submenu .dropdown-menu {
+            pointer-events: auto;
+        }
+        
+        #header-menu-dropdown {
+            z-index: 1050;
+        }
+        
+        #import-submenu {
+            z-index: 1051;
+            min-width: 250px;
+        }
+        
+        /* Hamburger button styling */
+        #header-menu-toggle {
+            border: none !important;
+            outline: none !important;
+            box-shadow: none !important;
+            width: 3rem;
+            padding: 0.5rem;
+        }
+        
+        #header-menu-toggle:focus,
+        #header-menu-toggle:active,
+        #header-menu-toggle:hover {
+            border: none !important;
+            outline: none !important;
+            box-shadow: none !important;
+        }
+        
+        /* Make all dropdown items show pointer cursor on hover */
+        #header-menu-dropdown .dropdown-item {
+            cursor: pointer;
+        }
+        
+        #header-menu-dropdown .dropdown-item:hover {
+            cursor: pointer;
+            background-color: rgba(0, 0, 0, 0.05);
+        }
+        
+        #header-menu-dropdown .dropdown-submenu > .dropdown-item:hover {
+            cursor: pointer;
+            background-color: rgba(0, 0, 0, 0.05);
+        }
+        
+        /* Ensure both import type buttons are always visible */
+        #import-submenu .btn-group {
+            display: flex !important;
+        }
+        
+        #import-submenu .btn-group label {
+            display: block !important;
+            flex: 1 1 auto;
+        }
+        
+        /* Ensure Trades and Cost Basis buttons are visually distinct when selected */
+        #import-type-trades:checked + label[for="import-type-trades"],
+        #import-type-cost-basis:checked + label[for="import-type-cost-basis"] {
+            background-color: #0d6efd !important;
+            border-color: #0d6efd !important;
+            color: white !important;
+            font-weight: 600;
+        }
+        
+        /* Unselected state - make it clear both are visible */
+        #import-type-trades:not(:checked) + label[for="import-type-trades"],
+        #import-type-cost-basis:not(:checked) + label[for="import-type-cost-basis"] {
+            background-color: transparent !important;
+            border-color: #0d6efd !important;
+            color: #0d6efd !important;
+        }
+        
+        #import-type-trades:checked + label[for="import-type-trades"]:active,
+        #import-type-cost-basis:checked + label[for="import-type-cost-basis"]:active {
+            background-color: #0a58ca !important;
+            border-color: #0a58ca !important;
+        }
+        
+        /* Hover state for unselected buttons */
+        #import-type-trades:not(:checked) + label[for="import-type-trades"]:hover,
+        #import-type-cost-basis:not(:checked) + label[for="import-type-cost-basis"]:hover {
+            background-color: rgba(13, 110, 253, 0.1) !important;
+        }
+        
+        /* Cost basis ticker card - fixed width of 60px (fits 4 characters) */
+        .cost-basis-ticker-card {
+            width: 60px !important;
+            min-width: 60px !important;
+            max-width: 60px !important;
+            height: 80px !important;
+            overflow: hidden !important;
+        }
+        
+        .cost-basis-ticker-card .card-body {
+            overflow: hidden !important;
+            padding: 0.5rem !important;
+            height: 100% !important;
+            display: flex !important;
+            flex-direction: column !important;
+            justify-content: center !important;
+            align-items: center !important;
+        }
+        
+        .cost-basis-ticker-card .card-body h6 {
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+            display: block !important;
+            text-align: center !important;
+        }
     </style>
 </head>
 <body>
@@ -238,13 +425,63 @@
                 <h1 class="text-center mb-0">
                     🔥🔥🔥🔥 Tracker
                 </h1>
-                <i class="fas fa-cog text-white header-settings-icon position-absolute" onclick="toggleCommissionSettings()" title="Commission Settings" style="right: 20px; top: 50%; transform: translateY(-50%); cursor: pointer; font-size: 2.25rem;"></i>
+                <div class="position-absolute" style="right: 20px; top: 50%; transform: translateY(-50%);">
+                    <button class="btn btn-link text-white p-0" type="button" id="header-menu-toggle" data-bs-toggle="dropdown" aria-expanded="false" style="cursor: pointer; font-size: 2.25rem; text-decoration: none; border: none; outline: none; width: 3rem; padding: 0.5rem;">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" id="header-menu-dropdown" style="min-width: 250px;">
+                        <li class="dropdown-item-text fw-bold">Menu</li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li class="dropdown-item" onclick="toggleCommissionSettings()">
+                            <i class="fas fa-percent me-2"></i>Commissions
+                        </li>
+                        <li class="dropdown-item" onclick="toggleBankrollSettings()">
+                            <i class="fas fa-wallet me-2"></i>Bankroll
+                        </li>
+                        <li class="dropdown-submenu">
+                            <a class="dropdown-item dropdown-toggle" href="#" role="button" id="import-submenu-toggle">
+                                <i class="fas fa-file-excel me-2"></i>Import
+                            </a>
+                            <ul class="dropdown-menu" id="import-submenu">
+                                <li class="px-3 py-2">
+                                    <label class="form-label small mb-1">Account:</label>
+                                    <select class="form-select form-select-sm" id="import-account-select">
+                                        <option value="">Loading accounts...</option>
+                                    </select>
+                                </li>
+                                <li class="px-3 py-2">
+                                    <label class="form-label small mb-1">Type:</label>
+                                    <div class="btn-group w-100" role="group">
+                                        <input type="radio" class="btn-check" name="import-type" id="import-type-trades" value="trades">
+                                        <label class="btn btn-outline-primary btn-sm" for="import-type-trades">Trades</label>
+                                        <input type="radio" class="btn-check" name="import-type" id="import-type-cost-basis" value="cost-basis">
+                                        <label class="btn btn-outline-primary btn-sm" for="import-type-cost-basis">Cost Basis</label>
+                                    </div>
+                                </li>
+                                <li class="px-3 py-2">
+                                    <label for="menu-excel-upload" class="btn btn-primary btn-sm w-100 mb-0" style="cursor: pointer;">
+                                        <i class="fas fa-upload me-1"></i>Choose File
+                                    </label>
+                                    <input type="file" id="menu-excel-upload" name="file" accept=".xlsx,.xls,.xlsm" style="display: none;">
+                                </li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
             </div>
         </div>
         
         <!-- Sticky Control Bar -->
         <div class="sticky-control-bar">
             <div class="control-bar-content">
+                <!-- Account Filter -->
+                <div class="control-group">
+                    <label for="universal-account-filter">Account:</label>
+                    <select class="form-select form-select-sm" id="universal-account-filter" style="width: 150px;">
+                        <option value="">All</option>
+                    </select>
+                </div>
+                
                 <!-- Quick Add Buttons -->
                 <div class="control-group">
                     <label>Quick Add:</label>
@@ -276,19 +513,6 @@
                     </button>
                 </div>
                 
-                <!-- Status Filter -->
-                <div class="control-group">
-                    <label for="universal-status-filter">Status:</label>
-                    <select class="form-select form-select-sm" id="universal-status-filter" style="width: 110px;">
-                        <option value="">All</option>
-                        <option value="open">Open</option>
-                        <option value="closed">Closed</option>
-                        <option value="assigned">Assigned</option>
-                        <option value="expired">Expired</option>
-                        <option value="roll">Roll</option>
-                    </select>
-                </div>
-                
                 <!-- Date Filters -->
                 <div class="control-group">
                     <label for="universal-start-date">Start:</label>
@@ -301,28 +525,21 @@
                 
                 <!-- Quick Date Buttons -->
                 <div class="control-group">
-                    <div class="btn-group btn-group-sm">
-                        <button class="btn btn-light" onclick="setUniversalDateRange('week')">1W</button>
-                        <button class="btn btn-light" onclick="setUniversalDateRange('month')">1M</button>
-                        <button class="btn btn-light" onclick="setUniversalDateRange('year')">1Y</button>
-                        <button class="btn btn-light" onclick="setUniversalDateRange('ytd')">YTD</button>
-                        <button class="btn btn-light" onclick="clearUniversalDateFilters()">Clear</button>
+                    <div class="btn-group btn-group-sm" id="universal-date-range-buttons">
+                        <button class="btn btn-light date-range-btn" data-period="week" onclick="setUniversalDateRange('week')">1W</button>
+                        <button class="btn btn-light date-range-btn" data-period="month" onclick="setUniversalDateRange('month')">1M</button>
+                        <button class="btn btn-light date-range-btn" data-period="year" onclick="setUniversalDateRange('year')">1Y</button>
+                        <button class="btn btn-light date-range-btn" data-period="ytd" onclick="setUniversalDateRange('ytd')">YTD</button>
+                        <button class="btn btn-light date-range-btn" data-period="clear" onclick="clearUniversalDateFilters()">Clear</button>
                     </div>
                 </div>
                 
-                <!-- Import Excel -->
-                <div class="control-group">
-                    <label for="universal-excel-upload" class="btn btn-sm btn-light mb-0" style="cursor: pointer;">
-                        <i class="fas fa-file-excel me-1"></i>Import Excel
-                    </label>
-                    <input type="file" id="universal-excel-upload" name="file" accept=".xlsx,.xls,.xlsm" style="display: none;">
-                </div>
             </div>
         </div>
         
         <!-- Commission Settings Modal -->
         <div id="commission-modal" class="modal fade" tabindex="-1">
-            <div class="modal-dialog">
+            <div class="modal-dialog modal-lg">
                 <div class="modal-content">
                     <div class="modal-header">
                         <h5 class="modal-title">Commission Settings</h5>
@@ -330,27 +547,65 @@
                     </div>
                     <div class="modal-body">
                         <div class="mb-3">
-                            <label for="commission-input" class="form-label">Commission per Trade ($)</label>
-                            <input type="number" class="form-control" id="commission-input" name="commission" step="0.00001" min="0" max="999.99999">
-                            <div class="form-text">Enter commission as a dollar value with up to 5 decimal places</div>
+                            <label for="commission-account-select" class="form-label">Account:</label>
+                            <select class="form-select form-select-sm" id="commission-account-select">
+                                <option value="">Loading accounts...</option>
+                            </select>
                         </div>
                         
-                        <hr>
-                        
-                        <h6 class="mb-3">Bankroll</h6>
-                        <div class="mb-3">
-                            <label for="bankroll-beginning-date" class="form-label">Beginning Date</label>
-                            <input type="date" class="form-control" id="bankroll-beginning-date" name="bankroll-beginning-date">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h6 class="mb-0">Commission History</h6>
+                            <button type="button" class="btn btn-sm btn-primary" onclick="openNewCommissionForm()">
+                                <i class="fas fa-plus me-1"></i>New Commission
+                            </button>
                         </div>
-                        <div class="mb-3">
-                            <label for="bankroll-beginning-balance" class="form-label">Beginning Balance ($)</label>
-                            <input type="number" class="form-control" id="bankroll-beginning-balance" name="bankroll-beginning-balance" step="0.01" min="0">
-                            <div class="form-text">Enter the starting balance for your trading account</div>
+                        
+                        <div id="commissions-table-container" class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                            <table class="table table-sm table-striped">
+                                <thead class="table-light sticky-top">
+                                    <tr>
+                                        <th>Effective Date</th>
+                                        <th>Commission Rate ($)</th>
+                                        <th>Notes</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="commissions-table-body">
+                                    <tr>
+                                        <td colspan="4" class="text-center text-muted">Loading commissions...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <!-- New/Edit Commission Form (initially hidden) -->
+                        <div id="commission-form-container" style="display: none; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #dee2e6;">
+                            <h6 id="commission-form-title">New Commission</h6>
+                            <form id="commission-form">
+                                <input type="hidden" id="commission-edit-id" value="">
+                                <div class="row">
+                                    <div class="col-md-4 mb-3">
+                                        <label for="commission-rate-input" class="form-label">Commission Rate ($)</label>
+                                        <input type="number" class="form-control form-control-sm" id="commission-rate-input" step="0.00001" min="0" max="999.99999" required>
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <label for="commission-effective-date-input" class="form-label">Effective Date</label>
+                                        <input type="date" class="form-control form-control-sm" id="commission-effective-date-input" required>
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <label for="commission-notes-input" class="form-label">Notes (optional)</label>
+                                        <input type="text" class="form-control form-control-sm" id="commission-notes-input">
+                                    </div>
+                                </div>
+                                <div class="d-flex gap-2">
+                                    <button type="submit" class="btn btn-sm btn-primary" id="commission-save-btn">Save</button>
+                                    <button type="button" class="btn btn-sm btn-secondary" onclick="cancelCommissionForm()">Cancel</button>
+                                </div>
+                            </form>
                         </div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                        <button type="button" class="btn btn-primary" onclick="saveCommission()">Save</button>
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                     </div>
                 </div>
             </div>
@@ -582,9 +837,9 @@
                                     </div>
                                 </div>
                             </div>
-                            <!-- Old status filter hidden -->
-                            <div class="d-flex align-items-center" style="gap: 1px; display: none !important;">
-                                <label for="status-filter" class="form-label mb-0 me-1">Status:</label>
+                            <!-- Status Filter -->
+                            <div class="d-flex align-items-center ms-3" style="gap: 1px;">
+                                <label for="status-filter" class="form-label mb-0 me-1 text-white">Status:</label>
                                 <select class="form-select form-select-sm status-filter" id="status-filter" style="width: 120px;">
                                     <option value="">All</option>
                                     <option value="open">Open</option>
@@ -663,7 +918,7 @@
                                 <span>Cost Basis</span>
                             </div>
                             <button class="btn btn-sm btn-light" id="cost-basis-toggle-btn" onclick="toggleCostBasis()">
-                                <i class="fas fa-chevron-left" id="cost-basis-toggle-icon"></i>
+                                <i class="fas fa-chevron-right" id="cost-basis-toggle-icon"></i>
                             </button>
                         </div>
                         <div class="card-body" id="cost-basis-inline-container">
@@ -677,7 +932,7 @@
         
         <!-- Floating Toggle Button for Collapsed Cost Basis -->
         <button class="cost-basis-collapsed-toggle" id="cost-basis-floating-toggle" onclick="toggleCostBasis()" style="display: none;">
-            <i class="fas fa-chevron-left fa-lg"></i>
+            <i class="fas fa-chevron-left fa-lg" id="cost-basis-floating-toggle-icon"></i>
         </button>
 
         <!-- Cost Basis Section (Hidden - now inline with trades) -->
@@ -1077,7 +1332,7 @@
     <!-- Alert Container -->
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}?v=332"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=366"></script>
     
     <script>
         // Global variable to track current section

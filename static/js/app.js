@@ -1,8 +1,8 @@
 let trades = [];
 let currentFilter = { startDate: null, endDate: null, period: 'all' };
 let statusFilter = '';
-let sortColumn = '';
-let sortDirection = 'asc';
+let sortColumn = 'trade_date'; // Default to sorting by trade date
+let sortDirection = 'desc'; // Default to descending (newest first)
 let commission = 0.0;
 let statusMonitorInterval = null;
 let lastTradeCount = 0;
@@ -564,11 +564,24 @@ async function loadTrades() {
     try {
         console.log('Loading trades...');
         
+        // Get account filter
+        const accountFilter = document.getElementById('universal-account-filter')?.value || '';
+        
+        // Get ticker filter - check both window.symbolFilter and input value
+        const universalTickerInput = document.getElementById('universal-ticker-filter');
+        const tickerFilter = window.symbolFilter || (universalTickerInput ? universalTickerInput.value.trim() : '') || '';
+        
         // Use dashboard date filters if available, otherwise use current filter
         const dashboardStartDate = document.getElementById('dashboard-start-date')?.value;
         const dashboardEndDate = document.getElementById('dashboard-end-date')?.value;
         
         const params = new URLSearchParams();
+        if (accountFilter) {
+            params.append('account_id', accountFilter);
+        }
+        if (tickerFilter) {
+            params.append('ticker', tickerFilter);
+        }
         if (dashboardStartDate) {
             params.append('start_date', dashboardStartDate);
         } else if (currentFilter.startDate) {
@@ -605,6 +618,17 @@ async function loadSummary() {
     try {
         console.log('Loading summary...');
         const params = new URLSearchParams();
+        
+        // Get account filter
+        const accountFilter = document.getElementById('universal-account-filter')?.value || '';
+        if (accountFilter) {
+            params.append('account_id', accountFilter);
+        }
+        
+        // Get ticker filter
+        if (window.symbolFilter) {
+            params.append('ticker', window.symbolFilter);
+        }
         
         // Use dashboard date filters if available, otherwise use current filter
         const dashboardStartDate = document.getElementById('dashboard-start-date')?.value;
@@ -1061,7 +1085,13 @@ async function updateBankroll(statusFilter = null) {
 async function loadCostBasis(ticker = null) {
     console.log('loadCostBasis called with ticker:', ticker);
     try {
+        // Get account filter
+        const accountFilter = document.getElementById('universal-account-filter')?.value || '';
+        
         const params = new URLSearchParams();
+        if (accountFilter) {
+            params.append('account_id', accountFilter);
+        }
         if (ticker) params.append('ticker', ticker);
         params.append('commission', commission.toString());
         
@@ -1364,14 +1394,64 @@ function updateTradesTable() {
     }
     
     // Sort trades if sort column is specified
-    if (sortColumn) {
+    if (sortColumn === 'trade_date') {
+        filteredTrades.sort((a, b) => {
+            // Primary sort: trade_date (when trade was executed)
+            const aTradeDate = new Date(a.trade_date || a.created_at);
+            const bTradeDate = new Date(b.trade_date || b.created_at);
+            
+            // Secondary sort: ticker symbol (alphabetical)
+            const aTicker = (a.ticker || '').toUpperCase();
+            const bTicker = (b.ticker || '').toUpperCase();
+            
+            // Tertiary sort: account (Rule One first)
+            const aAccountName = a.account_name || '';
+            const bAccountName = b.account_name || '';
+            const aAccountOrder = aAccountName === 'Rule One' ? 0 : 1;
+            const bAccountOrder = bAccountName === 'Rule One' ? 0 : 1;
+            
+            if (sortDirection === 'asc') {
+                // Ascending: oldest first
+                if (aTradeDate.getTime() !== bTradeDate.getTime()) {
+                    return aTradeDate - bTradeDate;
+                } else {
+                    // If same date, sort by ticker symbol (alphabetical)
+                    if (aTicker !== bTicker) {
+                        return aTicker.localeCompare(bTicker);
+                    } else {
+                        // If same ticker, sort by account (Rule One first)
+                        if (aAccountOrder !== bAccountOrder) {
+                            return aAccountOrder - bAccountOrder;
+                        } else {
+                            return aAccountName.localeCompare(bAccountName);
+                        }
+                    }
+                }
+            } else {
+                // Descending: newest first
+                if (aTradeDate.getTime() !== bTradeDate.getTime()) {
+                    return bTradeDate - aTradeDate;
+                } else {
+                    // If same date, sort by ticker symbol (alphabetical)
+                    if (aTicker !== bTicker) {
+                        return aTicker.localeCompare(bTicker);
+                    } else {
+                        // If same ticker, sort by account (Rule One first)
+                        if (aAccountOrder !== bAccountOrder) {
+                            return aAccountOrder - bAccountOrder;
+                        } else {
+                            return aAccountName.localeCompare(bAccountName);
+                        }
+                    }
+                }
+            }
+        });
+    } else if (sortColumn) {
+        // Handle other sort columns
         filteredTrades.sort((a, b) => {
             let aVal, bVal;
             
-            if (sortColumn === 'trade_date') {
-                aVal = new Date(a.trade_date || a.created_at);
-                bVal = new Date(b.trade_date || b.created_at);
-            } else if (sortColumn === 'expiration_date') {
+            if (sortColumn === 'expiration_date') {
                 aVal = new Date(a.expiration_date);
                 bVal = new Date(b.expiration_date);
             } else {
@@ -1414,7 +1494,8 @@ function updateTradesTable() {
     // Create transposed table structure - no header row
     const fieldNames = [
         '', // Empty for symbol/type row (no label)
-        'Trade Date', // Second row - Trade Date
+        'Account', // Account row
+        'Trade Date', // Trade Date row
         'Price', // Moved Trade Price to third row and renamed
         'Exp Date', // Moved Expiration to fourth row and renamed
         'DTE', // Moved Days to Exp to fifth row and renamed
@@ -1438,8 +1519,19 @@ function updateTradesTable() {
     // Create data rows (transposed) - no header row
     fieldNames.forEach((fieldName, fieldIndex) => {
         const row = document.createElement('tr');
-        // Only show field name if it's not empty (skip first row label)
-        row.innerHTML = fieldName ? `<td class="fw-bold">${fieldName}</td>` : '<td></td>';
+        
+        // Special handling for Trade Date row - make it sortable
+        if (fieldIndex === 2 && fieldName === 'Trade Date') {
+            const sortIcon = sortColumn === 'trade_date' 
+                ? (sortDirection === 'asc' ? '<i class="fas fa-sort-up"></i>' : '<i class="fas fa-sort-down"></i>')
+                : '<i class="fas fa-sort text-muted"></i>';
+            row.innerHTML = `<td class="fw-bold" style="cursor: pointer;" onclick="toggleTradeDateSort()" title="Click to sort by trade date">
+                ${fieldName} ${sortIcon}
+            </td>`;
+        } else {
+            // Only show field name if it's not empty (skip first row label)
+            row.innerHTML = fieldName ? `<td class="fw-bold">${fieldName}</td>` : '<td></td>';
+        }
         
         // Apply fixed row height - 30px
         row.style.height = '30px';
@@ -1500,27 +1592,31 @@ function updateTradesTable() {
                     const displayType = trade.type_name ? `${trade.ticker} ${trade.type_name}` : `${trade.ticker} ${tradeType}`;
                     cellContent = `<div style="text-align: center; white-space: normal; word-wrap: break-word; vertical-align: top;"><strong>${isExpired ? '<i class="fas fa-exclamation-triangle text-danger me-1" title="Expired"></i>' : ''}<span class="clickable-symbol" onclick="filterBySymbol('${trade.ticker}')" style="cursor: pointer; color: #007bff; text-decoration: underline;">${displayType}</span></strong></div>`;
                     break;
-                case 1: // Trade Date - Read-only
+                case 1: // Account - Read-only
+                    const accountName = trade.account_name || 'Unknown';
+                    cellContent = `<span class="text-center">${accountName}</span>`;
+                    break;
+                case 2: // Trade Date - Read-only
                     const tradeDateDisplay = formatDate(trade.trade_date || trade.created_at);
                     cellContent = `<span class="text-center">${tradeDateDisplay}</span>`;
                     break;
-                case 2: // Price - Read-only
+                case 3: // Price - Read-only
                     cellContent = `<span class="text-center">$${parseFloat(trade.current_price || trade.price || 0).toFixed(2)}</span>`;
                     break;
-                case 3: // Exp Date - Read-only
+                case 4: // Exp Date - Read-only
                     const expDateDisplay = formatDate(trade.expiration_date);
                     cellContent = `<span class="text-center">${expDateDisplay}</span>`;
                     break;
-                case 4: // DTE (was Days to Exp) - Read-only (calculated)
+                case 5: // DTE (was Days to Exp) - Read-only (calculated)
                     cellContent = `<span class="text-center">${trade.days_to_expiration || calculateDaysToExpiration(trade.expiration_date, trade.trade_date)}</span>`;
                     break;
-                case 5: // Strike - Read-only
+                case 6: // Strike - Read-only
                     cellContent = `<span class="text-center">$${parseFloat(trade.strike_price || 0).toFixed(2)}</span>`;
                     break;
-                case 6: // Credit - Read-only
+                case 7: // Credit - Read-only
                     cellContent = `<span class="text-center">$${parseFloat(trade.credit_debit || trade.premium).toFixed(2)}</span>`;
                     break;
-                case 7: // Contracts - Editable
+                case 8: // Contracts - Editable
                     cellContent = `
                         <input type="number" 
                                class="form-control form-control-sm text-center" 
@@ -1533,28 +1629,28 @@ function updateTradesTable() {
                                style="width: 60px; display: inline-block;">
                     `;
                     break;
-                case 8: // Shares - Read-only (calculated from num_of_contracts)
+                case 9: // Shares - Read-only (calculated from num_of_contracts)
                     cellContent = `<span class="text-center">${trade.num_of_contracts * 100}</span>`;
                     break;
-                case 9: // Commission
+                case 10: // Commission
                     cellContent = `<span class="text-center">$${commission.toLocaleString('en-US', {minimumFractionDigits: 5, maximumFractionDigits: 5})}</span>`;
                     break;
-                case 10: // Net Credit Total = Net Credit Per Share * Shares
+                case 11: // Net Credit Total = Net Credit Per Share * Shares
                     cellContent = `<strong class="text-center">$${netCreditTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong>`;
                     break;
-                case 11: // Risk Capital = Strike - Net Credit Per Share
+                case 12: // Risk Capital = Strike - Net Credit Per Share
                     cellContent = `<span class="text-center">$${riskCapital.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>`;
                     break;
-                case 12: // Margin Capital = Risk Capital * Shares
+                case 13: // Margin Capital = Risk Capital * Shares
                     cellContent = `<span class="text-center">$${marginCapital.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>`;
                     break;
-                case 13: // RORC = Net Credit Per Share / Risk Capital
+                case 14: // RORC = Net Credit Per Share / Risk Capital
                     cellContent = `<span class="text-center">${rorc.toFixed(2)}%</span>`;
                     break;
-                case 14: // ARORC = (365 / DTE) * RORC
+                case 15: // ARORC = (365 / DTE) * RORC
                     cellContent = `<span class="text-center">${arorc.toFixed(1)}%</span>`;
                     break;
-                case 15: // Status - Editable dropdown (case-insensitive)
+                case 16: // Status - Editable dropdown (case-insensitive)
                     const tradeStatusLower = trade.trade_status ? trade.trade_status.toLowerCase() : 'open';
                     cellContent = `
                         <div class="text-center">
@@ -1568,7 +1664,7 @@ function updateTradesTable() {
                         </div>
                     `;
                     break;
-                case 16: // Actions - Delete only
+                case 17: // Actions - Delete only
                     cellContent = `
                         <div class="text-center">
                             <button class="btn btn-sm btn-outline-danger" onclick="deleteTrade(${trade.id})" title="Delete Trade">
@@ -1609,6 +1705,21 @@ function updateTradesTable() {
     setTableWidth();
 }
 
+function toggleTradeDateSort() {
+    // Toggle sort direction
+    if (sortColumn === 'trade_date') {
+        // If already sorting by trade_date, toggle direction
+        sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+        // If not sorting by trade_date, set to trade_date with default desc
+        sortColumn = 'trade_date';
+        sortDirection = 'desc';
+    }
+    
+    // Re-render the table with new sort
+    updateTradesTable();
+}
+
 function setTableWidth() {
     const table = document.getElementById('trades-table-main');
     if (!table) return;
@@ -1647,52 +1758,111 @@ function updateCostBasisTable(costBasisData) {
     
     let html = '';
     
+    // Check if a ticker is selected by checking window.symbolFilter
+    const isTickerSelected = window.symbolFilter && window.symbolFilter.trim() !== '';
+    
     for (const tickerData of costBasisData) {
-        const { ticker, company_name, total_shares, total_cost_basis, total_cost_basis_per_share, trades } = tickerData;
+        const { ticker, company_name, account_id, account_name, total_shares, total_cost_basis, total_cost_basis_per_share, trades } = tickerData;
+        const accountDisplay = account_name ? ` (${account_name})` : '';
         
-        html += `
+        if (!isTickerSelected) {
+            // Original layout when no ticker is selected
+            html += `
             <div class="mb-4">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <h6 class="text-primary mb-0">
-                        <i class="fas fa-chart-line me-2"></i>${ticker} - ${company_name || ticker}
-                    </h6>
-                </div>
-                
-                <!-- Summary Cards -->
-                <div class="row mb-2 g-2">
-                    <div class="col-md-2">
-                        <div class="card bg-light">
-                            <div class="card-body text-center p-2">
-                                <h6 class="card-title mb-1" style="font-size: 0.75rem;">Total Shares</h6>
+                <!-- Ticker and Summary Cards in one row when no ticker selected -->
+                <div class="row mb-2 g-2 align-items-center">
+                    <div style="flex: 0 0 60px !important; width: 60px !important; min-width: 60px !important; max-width: 60px !important;">
+                        <div class="card bg-light cost-basis-ticker-card" style="cursor: pointer; width: 60px !important; height: 80px !important; min-width: 60px !important; max-width: 60px !important; overflow: hidden !important; box-sizing: border-box !important;" onclick="setUniversalTickerFilter('${ticker}')" title="Click to filter trades and cost basis by ${ticker}" onmouseover="this.style.backgroundColor='#e9ecef'" onmouseout="this.style.backgroundColor='#f8f9fa'">
+                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box;">
+                                <h6 class="text-primary mb-0" style="font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; padding: 0; width: 100%; display: block;">
+                                    ${ticker}
+                                </h6>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="flex: 0 0 60px !important; width: 60px !important; min-width: 60px !important; max-width: 60px !important;">
+                        <div class="card bg-light" style="width: 60px !important; height: 80px !important; min-width: 60px !important; max-width: 60px !important; box-sizing: border-box !important;">
+                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box;">
+                                <h6 class="card-title mb-1" style="font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Shares</h6>
                                 <p class="card-text mb-0" style="font-size: 1.1rem; ${total_shares < 0 ? 'color: red;' : ''}">${total_shares < 0 ? `(${Math.abs(total_shares).toLocaleString()})` : total_shares.toLocaleString()}</p>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-2">
-                        <div class="card bg-light">
-                            <div class="card-body text-center p-2">
-                                <h6 class="card-title mb-1" style="font-size: 0.75rem;">Total Cost Basis</h6>
+                    <div style="flex: 0 0 60px !important; width: 60px !important; min-width: 60px !important; max-width: 60px !important;">
+                        <div class="card bg-light" style="width: 60px !important; height: 80px !important; min-width: 60px !important; max-width: 60px !important; box-sizing: border-box !important;">
+                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box;">
+                                <h6 class="card-title mb-1" style="font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Cost Basis</h6>
                                 <p class="card-text mb-0" style="font-size: 1.1rem; ${total_cost_basis < 0 ? 'color: red;' : ''}">${total_cost_basis < 0 ? `($${Math.abs(total_cost_basis).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-2">
-                        <div class="card bg-light">
-                            <div class="card-body text-center p-2">
-                                <h6 class="card-title mb-1" style="font-size: 0.75rem;">Cost Basis/Share</h6>
+                    <div style="flex: 0 0 60px !important; width: 60px !important; min-width: 60px !important; max-width: 60px !important;">
+                        <div class="card bg-light" style="width: 60px !important; height: 80px !important; min-width: 60px !important; max-width: 60px !important; box-sizing: border-box !important;">
+                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box;">
+                                <h6 class="card-title mb-1" style="font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Cost Basis/Share</h6>
                                 <p class="card-text mb-0" style="font-size: 1.1rem; ${total_cost_basis_per_share < 0 ? 'color: red;' : ''}">${total_cost_basis_per_share < 0 ? `($${Math.abs(total_cost_basis_per_share).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis_per_share.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-2">
-                        <div class="card bg-light">
-                            <div class="card-body text-center p-2">
-                                <h6 class="card-title mb-1" style="font-size: 0.75rem;">Total Trades</h6>
+                    <div style="flex: 0 0 60px !important; width: 60px !important; min-width: 60px !important; max-width: 60px !important;">
+                        <div class="card bg-light" style="width: 60px !important; height: 80px !important; min-width: 60px !important; max-width: 60px !important; box-sizing: border-box !important;">
+                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box;">
+                                <h6 class="card-title mb-1" style="font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Trades</h6>
                                 <p class="card-text mb-0" style="font-size: 1.1rem;">${trades.length}</p>
                             </div>
                         </div>
                     </div>
                 </div>
+            `;
+        } else {
+            // When ticker is selected, show header card and summary cards for each account
+            html += `
+            <div class="mb-4">
+                <!-- First row: Ticker and Company Name card when ticker is selected -->
+                <div class="row mb-2 g-2 align-items-center">
+                    <div class="col-12">
+                        <div class="card bg-light" style="height: 80px;">
+                            <div class="card-body d-flex align-items-center justify-content-center p-2">
+                                <h6 class="mb-0 text-center" style="font-size: 1rem; font-weight: 600;">
+                                    ${ticker} - ${company_name || ticker}${accountDisplay}
+                                </h6>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Summary Cards in second row - split evenly across full width -->
+                <div class="row mb-2 g-2 align-items-center">
+                    <div class="col-md-4 col-sm-4 col-12">
+                        <div class="card bg-light" style="height: 80px;">
+                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%;">
+                                <h6 class="card-title mb-1" style="font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Shares</h6>
+                                <p class="card-text mb-0" style="font-size: 1.1rem; ${total_shares < 0 ? 'color: red;' : ''}">${total_shares < 0 ? `(${Math.abs(total_shares).toLocaleString()})` : total_shares.toLocaleString()}</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 col-sm-4 col-12">
+                        <div class="card bg-light" style="height: 80px;">
+                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%;">
+                                <h6 class="card-title mb-1" style="font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Cost Basis</h6>
+                                <p class="card-text mb-0" style="font-size: 1.1rem; ${total_cost_basis < 0 ? 'color: red;' : ''}">${total_cost_basis < 0 ? `($${Math.abs(total_cost_basis).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 col-sm-4 col-12">
+                        <div class="card bg-light" style="height: 80px;">
+                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%;">
+                                <h6 class="card-title mb-1" style="font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Cost Basis/Share</h6>
+                                <p class="card-text mb-0" style="font-size: 1.1rem; ${total_cost_basis_per_share < 0 ? 'color: red;' : ''}">${total_cost_basis_per_share < 0 ? `($${Math.abs(total_cost_basis_per_share).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis_per_share.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Render transactions table for each ticker data entry (each account separately)
+        const tableTrades = trades;
+        html += `
                 
                 <!-- Transactions Table -->
                 <div class="table-responsive">
@@ -1709,86 +1879,86 @@ function updateCostBasisTable(costBasisData) {
                             </tr>
                         </thead>
                         <tbody>
-        `;
-        
-        // Add each trade as a row
-        trades.forEach(trade => {
-            // Format numbers with parentheses for negative values
-            const formatNumber = (value, isCurrency = false) => {
-                if (value === null || value === undefined) return '';
-                if (value === 0) return '0'; // Special case for zero values
-                const formatted = value.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-                if (value < 0) {
-                    return `($${formatted.replace('-', '')})`;
-                }
-                return `$${formatted}`;
-            };
-            
-            const formatShares = (value) => {
-                if (value === null || value === undefined) return '0';
-                if (value === 0) return '0'; // Special case for zero values
-                const formatted = value.toLocaleString();
-                if (value < 0) {
-                    return `(${formatted.replace('-', '')})`;
-                }
-                return formatted;
-            };
-            
-            // Determine if value is zero for styling
-            const isSharesZero = trade.shares === 0 || trade.shares === null || trade.shares === undefined;
-            const isCostZero = trade.cost_per_share === 0 || trade.cost_per_share === null || trade.cost_per_share === undefined;
-            const isAmountZero = trade.amount === 0 || trade.amount === null || trade.amount === undefined;
-            const isBasisZero = trade.running_basis === 0 || trade.running_basis === null || trade.running_basis === undefined;
-            const isBasisPerShareZero = trade.running_basis_per_share === 0 || trade.running_basis_per_share === null || trade.running_basis_per_share === undefined;
-            
-            const sharesClass = trade.shares < 0 ? 'text-danger' : '';
-            const runningBasisClass = trade.running_basis < 0 ? 'text-danger' : '';
-            const runningBasisPerShareClass = trade.running_basis_per_share < 0 ? 'text-danger' : '';
-            const costClass = trade.cost_per_share < 0 ? 'text-danger' : '';
-            const amountClass = trade.amount < 0 ? 'text-danger' : '';
-            
-            // Apply color coding based on status and trade type (from backup)
-            const tradeType = trade.trade_description || '';
-            const status = trade.trade_status || 'open';
-            let bgColor = '';
-            
-            // Check if this is an expired or assigned trade from the description
-            const isAssignedDescription = tradeType.toUpperCase().includes('ASSIGNED');
-            const isExpired = status === 'expired' || (tradeType.toUpperCase().includes('EXPIRED') && !isAssignedDescription);
-            const isAssigned = status === 'assigned' && !isAssignedDescription;  // Only highlight if it's from trade status, not description
-            const isPut = tradeType.toLowerCase().includes('put') || tradeType.toLowerCase().includes('bought');
-            const isCall = tradeType.toLowerCase().includes('call') || tradeType.toLowerCase().includes('sold');
-            
-            // Color code for roll, expired, and assigned trades (from backup)
-            // Don't color code entries with "ASSIGNED" in the description (those are the cost basis entries we created)
-            if (!isAssignedDescription) {
-                if (status === 'roll' || tradeType.toUpperCase().includes('ROLL')) {
-                    bgColor = 'background-color: #FFF2CC;';
-                } else if (isExpired && isPut) {
-                    bgColor = 'background-color: #C6E0B4;';
-                } else if (isAssigned && isPut) {
-                    bgColor = 'background-color: #A9D08F;';
-                } else if (isAssigned && isCall) {
-                    bgColor = 'background-color: #9BC2E6;';
-                } else if (isExpired && isCall) {
-                    bgColor = 'background-color: #DEEAF7;';
-                }
-            }
-            
-            const rowStyle = bgColor ? `style="${bgColor}"` : '';
-            
-            html += `
-                <tr ${rowStyle}>
-                    <td class="text-center align-middle">${formatDate(trade.trade_date)}</td>
-                    <td class="text-start align-middle" style="width: 25%; word-wrap: break-word; overflow-wrap: break-word;">${trade.trade_description || ''}</td>
-                    <td class="text-end align-middle ${sharesClass}" style="${isSharesZero ? 'color: transparent;' : ''}">${formatShares(trade.shares || 0)}</td>
-                    <td class="text-end align-middle ${costClass}" style="${isCostZero ? 'color: transparent;' : ''}">${formatNumber(trade.cost_per_share || 0)}</td>
-                    <td class="text-end align-middle ${amountClass}" style="${isAmountZero ? 'color: transparent;' : ''}">${formatNumber(trade.amount || 0)}</td>
-                    <td class="text-end align-middle ${runningBasisClass}">${formatNumber(trade.running_basis)}</td>
-                    <td class="text-end align-middle ${runningBasisPerShareClass}">${formatNumber(trade.running_basis_per_share)}</td>
-                </tr>
             `;
-        });
+            
+            // Add each trade as a row
+            tableTrades.forEach(trade => {
+                // Format numbers with parentheses for negative values
+                const formatNumber = (value, isCurrency = false) => {
+                    if (value === null || value === undefined) return '';
+                    if (value === 0) return '0'; // Special case for zero values
+                    const formatted = value.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                    if (value < 0) {
+                        return `($${formatted.replace('-', '')})`;
+                    }
+                    return `$${formatted}`;
+                };
+                
+                const formatShares = (value) => {
+                    if (value === null || value === undefined) return '0';
+                    if (value === 0) return '0'; // Special case for zero values
+                    const formatted = value.toLocaleString();
+                    if (value < 0) {
+                        return `(${formatted.replace('-', '')})`;
+                    }
+                    return formatted;
+                };
+                
+                // Determine if value is zero for styling
+                const isSharesZero = trade.shares === 0 || trade.shares === null || trade.shares === undefined;
+                const isCostZero = trade.cost_per_share === 0 || trade.cost_per_share === null || trade.cost_per_share === undefined;
+                const isAmountZero = trade.amount === 0 || trade.amount === null || trade.amount === undefined;
+                const isBasisZero = trade.running_basis === 0 || trade.running_basis === null || trade.running_basis === undefined;
+                const isBasisPerShareZero = trade.running_basis_per_share === 0 || trade.running_basis_per_share === null || trade.running_basis_per_share === undefined;
+                
+                const sharesClass = trade.shares < 0 ? 'text-danger' : '';
+                const runningBasisClass = trade.running_basis < 0 ? 'text-danger' : '';
+                const runningBasisPerShareClass = trade.running_basis_per_share < 0 ? 'text-danger' : '';
+                const costClass = trade.cost_per_share < 0 ? 'text-danger' : '';
+                const amountClass = trade.amount < 0 ? 'text-danger' : '';
+                
+                // Apply color coding based on status and trade type (from backup)
+                const tradeType = trade.trade_description || '';
+                const status = trade.trade_status || 'open';
+                let bgColor = '';
+                
+                // Check if this is an expired or assigned trade from the description
+                const isAssignedDescription = tradeType.toUpperCase().includes('ASSIGNED');
+                const isExpired = status === 'expired' || (tradeType.toUpperCase().includes('EXPIRED') && !isAssignedDescription);
+                const isAssigned = status === 'assigned' && !isAssignedDescription;  // Only highlight if it's from trade status, not description
+                const isPut = tradeType.toLowerCase().includes('put') || tradeType.toLowerCase().includes('bought');
+                const isCall = tradeType.toLowerCase().includes('call') || tradeType.toLowerCase().includes('sold');
+                
+                // Color code for roll, expired, and assigned trades (from backup)
+                // Don't color code entries with "ASSIGNED" in the description (those are the cost basis entries we created)
+                if (!isAssignedDescription) {
+                    if (status === 'roll' || tradeType.toUpperCase().includes('ROLL')) {
+                        bgColor = 'background-color: #FFF2CC;';
+                    } else if (isExpired && isPut) {
+                        bgColor = 'background-color: #C6E0B4;';
+                    } else if (isAssigned && isPut) {
+                        bgColor = 'background-color: #A9D08F;';
+                    } else if (isAssigned && isCall) {
+                        bgColor = 'background-color: #9BC2E6;';
+                    } else if (isExpired && isCall) {
+                        bgColor = 'background-color: #DEEAF7;';
+                    }
+                }
+                
+                const rowStyle = bgColor ? `style="${bgColor}"` : '';
+                
+                html += `
+                    <tr ${rowStyle}>
+                        <td class="text-center align-middle">${formatDate(trade.trade_date)}</td>
+                        <td class="text-start align-middle" style="width: 25%; word-wrap: break-word; overflow-wrap: break-word;">${trade.trade_description || ''}</td>
+                        <td class="text-end align-middle ${sharesClass}" style="${isSharesZero ? 'color: transparent;' : ''}">${formatShares(trade.shares || 0)}</td>
+                        <td class="text-end align-middle ${costClass}" style="${isCostZero ? 'color: transparent;' : ''}">${formatNumber(trade.cost_per_share || 0)}</td>
+                        <td class="text-end align-middle ${amountClass}" style="${isAmountZero ? 'color: transparent;' : ''}">${formatNumber(trade.amount || 0)}</td>
+                        <td class="text-end align-middle ${runningBasisClass}">${formatNumber(trade.running_basis)}</td>
+                        <td class="text-end align-middle ${runningBasisPerShareClass}">${formatNumber(trade.running_basis_per_share)}</td>
+                    </tr>
+                `;
+            });
         
         html += `
                         </tbody>
@@ -1809,45 +1979,8 @@ function updateCostBasisTable(costBasisData) {
 // ============================================================================
 
 function filterBySymbol(symbol) {
-    window.symbolFilter = symbol; // Set global symbolFilter variable
-    const symbolFilterInput = document.getElementById('symbol-filter');
-    const clearButton = document.getElementById('clear-symbol');
-    
-    if (symbolFilterInput) {
-        symbolFilterInput.value = symbol;
-    }
-    
-    // Show clear button for trades table
-    if (clearButton) {
-        clearButton.style.display = 'inline-block';
-    }
-    
-    // Show down arrow button
-    const jumpToCostBasisBtn = document.getElementById('jump-to-cost-basis');
-    if (jumpToCostBasisBtn) {
-        jumpToCostBasisBtn.style.display = 'inline-block';
-    }
-    
-    // Also update cost basis symbol filter input
-    const costBasisSymbolFilter = document.getElementById('cost-basis-symbol-filter');
-    const costBasisClearButton = document.getElementById('clear-cost-basis-symbol');
-    
-    if (costBasisSymbolFilter) {
-        costBasisSymbolFilter.value = symbol;
-    }
-    
-    if (costBasisClearButton) {
-        costBasisClearButton.style.display = 'inline-block';
-    }
-    
-    // Show up arrow button
-    const jumpToTradesBtn = document.getElementById('jump-to-trades');
-    if (jumpToTradesBtn) {
-        jumpToTradesBtn.style.display = 'inline-block';
-    }
-    
-    updateTradesTable();
-    loadCostBasis(symbol);
+    // Use the universal ticker filter instead of the old separate filters
+    setUniversalTickerFilter(symbol);
     
     // Scroll to cost basis table
     setTimeout(() => {
@@ -1863,38 +1996,16 @@ function selectSymbol(symbol) {
 }
 
 function selectCostBasisSymbol(symbol) {
-    console.log('selectCostBasisSymbol called with:', symbol);
-    selectedTicker = symbol;
+    // Use the universal ticker filter instead of the old separate filters
+    setUniversalTickerFilter(symbol);
     
-    // Update trades table symbol filter
-    window.symbolFilter = symbol;
-    const symbolFilterInput = document.getElementById('symbol-filter');
-    const clearButton = document.getElementById('clear-symbol');
-    
-    if (symbolFilterInput) {
-        symbolFilterInput.value = symbol;
-    }
-    
-    if (clearButton) {
-        clearButton.style.display = 'inline-block';
-    }
-    
-    // Update cost basis symbol filter
-    const costBasisSymbolFilter = document.getElementById('cost-basis-symbol-filter');
-    const costBasisClearButton = document.getElementById('clear-cost-basis-symbol');
-    
-    if (costBasisSymbolFilter) {
-        costBasisSymbolFilter.value = symbol;
-    }
-    
-    if (costBasisClearButton) {
-        costBasisClearButton.style.display = 'inline-block';
-    }
-    
-    console.log('Updating trades table...');
-    updateTradesTable();
-    console.log('Loading cost basis for symbol:', symbol);
-    loadCostBasis(symbol);
+    // Scroll to cost basis table
+    setTimeout(() => {
+        const costBasisElement = document.getElementById('cost-basis-summary');
+        if (costBasisElement) {
+            costBasisElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }, 500); // Wait for cost basis to load
 }
 
 function clearSymbolFilter() {
@@ -2427,17 +2538,17 @@ async function loadAccounts() {
         const response = await fetch('/api/accounts');
         const accounts = await response.json();
         
+        // Sort accounts so Rule One appears first
+        const sortedAccounts = [...accounts].sort((a, b) => {
+            if (a.id === 9) return -1;
+            if (b.id === 9) return 1;
+            return a.account_name.localeCompare(b.account_name);
+        });
+        
         // Populate all account dropdowns
         const accountSelects = document.querySelectorAll('[id$="-account"], [id$="-account-id"]');
         accountSelects.forEach(select => {
             select.innerHTML = '';
-            // Sort accounts so Rule One appears first
-            const sortedAccounts = [...accounts].sort((a, b) => {
-                if (a.id === 9) return -1;
-                if (b.id === 9) return 1;
-                return a.account_name.localeCompare(b.account_name);
-            });
-            
             sortedAccounts.forEach((account, index) => {
                 const option = document.createElement('option');
                 option.value = account.id;
@@ -2449,6 +2560,33 @@ async function loadAccounts() {
                 select.appendChild(option);
             });
         });
+        
+        // Also populate import account select
+        const importAccountSelect = document.getElementById('import-account-select');
+        if (importAccountSelect) {
+            importAccountSelect.innerHTML = '';
+            sortedAccounts.forEach((account) => {
+                const option = document.createElement('option');
+                option.value = account.id;
+                option.textContent = account.account_name;
+                if (account.id === 9) {
+                    option.selected = true;
+                }
+                importAccountSelect.appendChild(option);
+            });
+        }
+        
+        // Populate universal account filter
+        const universalAccountFilter = document.getElementById('universal-account-filter');
+        if (universalAccountFilter) {
+            universalAccountFilter.innerHTML = '<option value="">All</option>';
+            sortedAccounts.forEach((account) => {
+                const option = document.createElement('option');
+                option.value = account.id;
+                option.textContent = account.account_name;
+                universalAccountFilter.appendChild(option);
+            });
+        }
     } catch (error) {
         console.error('Error loading accounts:', error);
     }
@@ -2466,13 +2604,19 @@ function setupUniversalControls() {
     if (universalTickerInput && universalClearButton) {
         setupAutocomplete('universal-ticker-filter', 'universal-ticker-suggestions', (symbol) => {
             window.symbolFilter = symbol;
-            // Update both trades and cost basis
-            updateTradesTable();
+            // Show/hide clear button based on whether symbol is selected
             if (symbol) {
-                loadCostBasis(symbol);
+                universalClearButton.style.display = 'inline-block';
             } else {
-                showAllSymbolsFromTrades();
+                universalClearButton.style.display = 'none';
             }
+            // Reload all data with the ticker filter to ensure everything is in sync
+            // This ensures the dashboard, trades table, and cost basis table all update
+            // based on both the selected account and ticker filter
+            loadTrades();
+            loadSummary();
+            // Always call loadCostBasis - it handles both ticker and null cases
+            loadCostBasis(symbol || null);
         });
         
         // Show/hide clear button
@@ -2482,30 +2626,186 @@ function setupUniversalControls() {
         
         // Clear button
         universalClearButton.addEventListener('click', function() {
-            universalTickerInput.value = '';
-            this.style.display = 'none';
-            window.symbolFilter = '';
-            updateTradesTable();
-            showAllSymbolsFromTrades();
-        });
-    }
-    
-    // Setup universal status filter
-    const universalStatusFilter = document.getElementById('universal-status-filter');
-    if (universalStatusFilter) {
-        universalStatusFilter.addEventListener('change', function() {
-            statusFilter = this.value || '';
-            updateTradesTable();
+            clearUniversalTickerFilter();
         });
     }
     
     // Setup universal date filters
     setupUniversalDateFilters();
     
-    // Setup universal Excel upload
-    const universalExcelUpload = document.getElementById('universal-excel-upload');
-    if (universalExcelUpload) {
-        universalExcelUpload.addEventListener('change', handleExcelUpload);
+    // Setup universal account filter
+    const universalAccountFilter = document.getElementById('universal-account-filter');
+    if (universalAccountFilter) {
+        universalAccountFilter.addEventListener('change', function() {
+            // Reload all data when account filter changes
+            loadTrades();
+            loadSummary();
+            // Pass current ticker filter to loadCostBasis if it exists
+            const currentTicker = window.symbolFilter || null;
+            loadCostBasis(currentTicker);
+            loadTopSymbols();
+        });
+    }
+    
+    // Setup import submenu toggle
+    const importSubmenuToggle = document.getElementById('import-submenu-toggle');
+    const importSubmenu = document.getElementById('import-submenu');
+    if (importSubmenuToggle && importSubmenu) {
+        const parent = importSubmenuToggle.closest('.dropdown-submenu');
+        let closeTimeout = null;
+        
+        // Prevent clicks on radio buttons from closing the menu
+        const importTypeTrades = document.getElementById('import-type-trades');
+        const importTypeCostBasis = document.getElementById('import-type-cost-basis');
+        const tradesLabel = importTypeTrades ? document.querySelector('label[for="import-type-trades"]') : null;
+        const costBasisLabel = importTypeCostBasis ? document.querySelector('label[for="import-type-cost-basis"]') : null;
+        
+        if (tradesLabel) {
+            tradesLabel.addEventListener('click', function(e) {
+                e.stopPropagation();
+            });
+        }
+        if (costBasisLabel) {
+            costBasisLabel.addEventListener('click', function(e) {
+                e.stopPropagation();
+            });
+        }
+        if (importTypeTrades) {
+            importTypeTrades.addEventListener('click', function(e) {
+                e.stopPropagation();
+            });
+        }
+        if (importTypeCostBasis) {
+            importTypeCostBasis.addEventListener('click', function(e) {
+                e.stopPropagation();
+            });
+        }
+        
+        // Handle hover to keep submenu open
+        if (parent) {
+            parent.addEventListener('mouseenter', function() {
+                if (closeTimeout) {
+                    clearTimeout(closeTimeout);
+                    closeTimeout = null;
+                }
+                parent.classList.add('show');
+            });
+            
+            parent.addEventListener('mouseleave', function(e) {
+                // Only close if mouse is not moving to the submenu
+                const relatedTarget = e.relatedTarget;
+                if (relatedTarget && (importSubmenu.contains(relatedTarget) || parent.contains(relatedTarget))) {
+                    return; // Don't close if moving to submenu
+                }
+                
+                // Add a small delay before closing to allow mouse to move to submenu
+                closeTimeout = setTimeout(function() {
+                    const isHovering = parent.matches(':hover') || importSubmenu.matches(':hover');
+                    if (!isHovering) {
+                        parent.classList.remove('show');
+                    }
+                }, 200);
+            });
+            
+            // Keep submenu open when hovering over it
+            importSubmenu.addEventListener('mouseenter', function() {
+                if (closeTimeout) {
+                    clearTimeout(closeTimeout);
+                    closeTimeout = null;
+                }
+                parent.classList.add('show');
+            });
+            
+            importSubmenu.addEventListener('mouseleave', function(e) {
+                const relatedTarget = e.relatedTarget;
+                if (relatedTarget && parent.contains(relatedTarget)) {
+                    return;
+                }
+                closeTimeout = setTimeout(function() {
+                    const isHovering = parent.matches(':hover') || importSubmenu.matches(':hover');
+                    if (!isHovering) {
+                        parent.classList.remove('show');
+                    }
+                }, 200);
+            });
+        }
+        
+        importSubmenuToggle.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (parent) {
+                const isOpening = !parent.classList.contains('show');
+                parent.classList.toggle('show');
+                
+                // When opening import submenu, ensure Trades is selected
+                if (isOpening) {
+                    if (importTypeTrades) {
+                        importTypeTrades.checked = true;
+                        // Trigger change event to update visual state
+                        importTypeTrades.dispatchEvent(new Event('change'));
+                    }
+                }
+            }
+        });
+        
+        // Close submenu when clicking outside
+        document.addEventListener('click', function(e) {
+            if (!importSubmenu.contains(e.target) && !importSubmenuToggle.contains(e.target) && !parent.contains(e.target)) {
+                if (parent) {
+                    parent.classList.remove('show');
+                }
+            }
+        });
+    }
+    
+    // Setup menu Excel upload
+    const menuExcelUpload = document.getElementById('menu-excel-upload');
+    if (menuExcelUpload) {
+        menuExcelUpload.addEventListener('change', function(event) {
+            const importTypeTrades = document.getElementById('import-type-trades');
+            const importTypeCostBasis = document.getElementById('import-type-cost-basis');
+            
+            // Check if any button is selected
+            if (!importTypeTrades.checked && !importTypeCostBasis.checked) {
+                // If no button is selected, default to Trades and select it
+                importTypeTrades.checked = true;
+                handleExcelUpload(event);
+            } else if (importTypeCostBasis && importTypeCostBasis.checked) {
+                // Call cost basis import function (to be implemented)
+                handleCostBasisUpload(event);
+            } else {
+                // Call trades import function (existing)
+                handleExcelUpload(event);
+            }
+        });
+    }
+}
+
+function setUniversalTickerFilter(ticker) {
+    const universalTickerInput = document.getElementById('universal-ticker-filter');
+    const universalClearButton = document.getElementById('clear-universal-ticker');
+    
+    if (universalTickerInput) {
+        // Set the input value - ensure it's set synchronously before any async operations
+        universalTickerInput.value = ticker || '';
+        
+        // Show the clear button if ticker is set
+        if (universalClearButton) {
+            universalClearButton.style.display = ticker ? 'inline-block' : 'none';
+        }
+        
+        // Set the global symbol filter to match the input value
+        window.symbolFilter = ticker || '';
+        
+        // Reload all data with the ticker filter to ensure everything is in sync
+        // This ensures the dashboard, trades table, and cost basis table all update
+        // based on both the selected account and ticker filter
+        // Use setTimeout to ensure the input value is set before async operations
+        setTimeout(() => {
+            loadTrades();
+            loadSummary();
+            loadCostBasis(ticker);
+        }, 0);
     }
 }
 
@@ -2519,8 +2819,13 @@ function clearUniversalTickerFilter() {
             universalClearButton.style.display = 'none';
         }
         window.symbolFilter = '';
-        updateTradesTable();
-        showAllSymbolsFromTrades();
+        
+        // Reload all data without the ticker filter to ensure everything is cleared
+        // This ensures the dashboard, trades table, and cost basis table all update
+        // based only on the selected account filter
+        loadTrades();
+        loadSummary();
+        loadCostBasis(null); // Pass null to load all cost basis data
     }
 }
 
@@ -2553,6 +2858,16 @@ function setUniversalDateRange(period) {
     const dashboardEndDate = document.getElementById('dashboard-end-date');
     
     if (!startDateInput || !endDateInput) return;
+    
+    // Update button selected state
+    const dateRangeButtons = document.querySelectorAll('.date-range-btn');
+    dateRangeButtons.forEach(btn => {
+        if (btn.dataset.period === period) {
+            btn.classList.add('selected');
+        } else {
+            btn.classList.remove('selected');
+        }
+    });
     
     const today = new Date();
     let startDate = null;
@@ -2591,6 +2906,12 @@ function clearUniversalDateFilters() {
     const dashboardStartDate = document.getElementById('dashboard-start-date');
     const dashboardEndDate = document.getElementById('dashboard-end-date');
     
+    // Remove selected state from all date range buttons
+    const dateRangeButtons = document.querySelectorAll('.date-range-btn');
+    dateRangeButtons.forEach(btn => {
+        btn.classList.remove('selected');
+    });
+    
     if (startDateInput) startDateInput.value = '';
     if (endDateInput) endDateInput.value = '';
     if (dashboardStartDate) dashboardStartDate.value = '';
@@ -2604,26 +2925,83 @@ function toggleCostBasis() {
     const costBasisColumn = document.getElementById('cost-basis-column');
     const toggleIcon = document.getElementById('cost-basis-toggle-icon');
     const floatingToggle = document.getElementById('cost-basis-floating-toggle');
+    const floatingToggleIcon = document.getElementById('cost-basis-floating-toggle-icon');
     
     if (!costBasisColumn) return;
     
     // Toggle collapse/show classes - CSS handles the flex adjustments
     if (costBasisColumn.classList.contains('show')) {
-        // Collapsing
+        // Collapsing - hide the cost basis table
         costBasisColumn.classList.remove('show');
         costBasisColumn.classList.add('collapse');
-        toggleIcon.classList.remove('fa-chevron-left');
-        toggleIcon.classList.add('fa-chevron-right');
-        if (floatingToggle) floatingToggle.style.display = 'block';
+        // When collapsed, arrow points left (to expand/show)
+        if (toggleIcon) {
+            toggleIcon.classList.remove('fa-chevron-right');
+            toggleIcon.classList.add('fa-chevron-left');
+        }
+        if (floatingToggle) {
+            floatingToggle.style.display = 'block';
+            if (floatingToggleIcon) {
+                floatingToggleIcon.classList.remove('fa-chevron-right');
+                floatingToggleIcon.classList.add('fa-chevron-left');
+            }
+            positionCostBasisToggle();
+        }
     } else {
-        // Expanding
+        // Expanding - show the cost basis table
         costBasisColumn.classList.remove('collapse');
         costBasisColumn.classList.add('show');
-        toggleIcon.classList.remove('fa-chevron-right');
-        toggleIcon.classList.add('fa-chevron-left');
-        if (floatingToggle) floatingToggle.style.display = 'none';
+        // When expanded, arrow points right (to collapse/hide)
+        if (toggleIcon) {
+            toggleIcon.classList.remove('fa-chevron-left');
+            toggleIcon.classList.add('fa-chevron-right');
+        }
+        if (floatingToggle) {
+            floatingToggle.style.display = 'none';
+        }
     }
 }
+
+function positionCostBasisToggle() {
+    const floatingToggle = document.getElementById('cost-basis-floating-toggle');
+    const tradesCard = document.getElementById('trades');
+    
+    if (!floatingToggle || !tradesCard) return;
+    
+    // Find the trades card header (where the "Trades" title is)
+    const tradesHeader = tradesCard.querySelector('.card-header');
+    
+    if (tradesHeader) {
+        // Get the trades header position
+        const headerRect = tradesHeader.getBoundingClientRect();
+        const headerMiddle = headerRect.top + (headerRect.height / 2);
+        
+        // Position the toggle button at the middle of the trades header
+        floatingToggle.style.top = `${headerMiddle}px`;
+        floatingToggle.style.transform = 'translateY(-50%)';
+    } else {
+        // Fallback to trades section middle if header not found
+        const tradesRect = tradesCard.getBoundingClientRect();
+        const tradesMiddle = tradesRect.top + (tradesRect.height / 2);
+        floatingToggle.style.top = `${tradesMiddle}px`;
+        floatingToggle.style.transform = 'translateY(-50%)';
+    }
+}
+
+// Update position on scroll and resize
+window.addEventListener('scroll', function() {
+    const floatingToggle = document.getElementById('cost-basis-floating-toggle');
+    if (floatingToggle && floatingToggle.style.display !== 'none') {
+        positionCostBasisToggle();
+    }
+});
+
+window.addEventListener('resize', function() {
+    const floatingToggle = document.getElementById('cost-basis-floating-toggle');
+    if (floatingToggle && floatingToggle.style.display !== 'none') {
+        positionCostBasisToggle();
+    }
+});
 
 // ============================================================================
 // INITIALIZATION
@@ -2631,6 +3009,24 @@ function toggleCostBasis() {
 
 document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM loaded, initializing app...');
+    
+    // Initialize cost basis toggle state
+    const costBasisColumn = document.getElementById('cost-basis-column');
+    const floatingToggle = document.getElementById('cost-basis-floating-toggle');
+    const floatingToggleIcon = document.getElementById('cost-basis-floating-toggle-icon');
+    
+    if (costBasisColumn && floatingToggle && floatingToggleIcon) {
+        // If cost basis is collapsed (hidden), show floating toggle with left arrow
+        if (!costBasisColumn.classList.contains('show')) {
+            floatingToggle.style.display = 'block';
+            floatingToggleIcon.classList.remove('fa-chevron-right');
+            floatingToggleIcon.classList.add('fa-chevron-left');
+            positionCostBasisToggle();
+        } else {
+            // If cost basis is visible, hide floating toggle
+            floatingToggle.style.display = 'none';
+        }
+    }
     
     // Load commission settings
     loadCommission();
@@ -2659,6 +3055,14 @@ document.addEventListener('DOMContentLoaded', function() {
     setupTradesToggle();
     setupCostBasisToggle();
     setupDashboardDatePickers();
+    
+    // Position cost basis toggle button if it's visible
+    setTimeout(() => {
+        const floatingToggle = document.getElementById('cost-basis-floating-toggle');
+        if (floatingToggle && floatingToggle.style.display !== 'none') {
+            positionCostBasisToggle();
+        }
+    }, 100);
     
     console.log('App initialized');
     
@@ -2761,6 +3165,239 @@ async function updateChart() {
 function toggleCommissionSettings() {
     const modal = new bootstrap.Modal(document.getElementById('commission-modal'));
     modal.show();
+    
+    // Load accounts and commissions when modal opens
+    loadCommissionAccounts();
+    loadCommissions();
+}
+
+async function loadCommissionAccounts() {
+    try {
+        const response = await fetch('/api/accounts');
+        const accounts = await response.json();
+        const select = document.getElementById('commission-account-select');
+        
+        if (select) {
+            select.innerHTML = '<option value="">All Accounts</option>';
+            accounts.forEach(account => {
+                const option = document.createElement('option');
+                option.value = account.id;
+                option.textContent = account.account_name || `Account ${account.id}`;
+                select.appendChild(option);
+            });
+            
+            // Set default to first account if available
+            if (accounts.length > 0) {
+                select.value = accounts[0].id;
+            }
+            
+            // Load commissions when account changes
+            select.addEventListener('change', function() {
+                loadCommissions();
+            });
+        }
+    } catch (error) {
+        console.error('Error loading accounts:', error);
+    }
+}
+
+async function loadCommissions() {
+    try {
+        const accountSelect = document.getElementById('commission-account-select');
+        const accountId = accountSelect ? accountSelect.value : '';
+        
+        if (!accountId) {
+            document.getElementById('commissions-table-body').innerHTML = '<tr><td colspan="4" class="text-center text-muted">Please select an account</td></tr>';
+            return;
+        }
+        
+        const response = await fetch(`/api/commissions?account_id=${accountId}`);
+        const commissions = await response.json();
+        
+        const tbody = document.getElementById('commissions-table-body');
+        if (!tbody) return;
+        
+        if (commissions.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No commission records found</td></tr>';
+            return;
+        }
+        
+        tbody.innerHTML = commissions.map(comm => {
+            const effectiveDate = comm.effective_date ? new Date(comm.effective_date).toLocaleDateString() : '';
+            return `
+                <tr>
+                    <td>${effectiveDate}</td>
+                    <td>$${comm.commission_rate.toFixed(5)}</td>
+                    <td>${comm.notes || ''}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-primary me-1" onclick="editCommission(${comm.id}, ${comm.commission_rate}, '${comm.effective_date}', '${(comm.notes || '').replace(/'/g, "\\'")}')">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="deleteCommission(${comm.id})">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    } catch (error) {
+        console.error('Error loading commissions:', error);
+        document.getElementById('commissions-table-body').innerHTML = '<tr><td colspan="4" class="text-center text-danger">Error loading commissions</td></tr>';
+    }
+}
+
+function openNewCommissionForm() {
+    const formContainer = document.getElementById('commission-form-container');
+    const formTitle = document.getElementById('commission-form-title');
+    const editId = document.getElementById('commission-edit-id');
+    const rateInput = document.getElementById('commission-rate-input');
+    const dateInput = document.getElementById('commission-effective-date-input');
+    const notesInput = document.getElementById('commission-notes-input');
+    const saveBtn = document.getElementById('commission-save-btn');
+    
+    // Reset form
+    editId.value = '';
+    rateInput.value = '';
+    notesInput.value = '';
+    
+    // Set default date to today
+    const today = new Date().toISOString().split('T')[0];
+    dateInput.value = today;
+    
+    // Update form title and button
+    formTitle.textContent = 'New Commission';
+    saveBtn.textContent = 'Save';
+    
+    // Show form
+    formContainer.style.display = 'block';
+    
+    // Scroll to form
+    formContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function editCommission(id, rate, effectiveDate, notes) {
+    const formContainer = document.getElementById('commission-form-container');
+    const formTitle = document.getElementById('commission-form-title');
+    const editId = document.getElementById('commission-edit-id');
+    const rateInput = document.getElementById('commission-rate-input');
+    const dateInput = document.getElementById('commission-effective-date-input');
+    const notesInput = document.getElementById('commission-notes-input');
+    const saveBtn = document.getElementById('commission-save-btn');
+    
+    // Fill form with existing data
+    editId.value = id;
+    rateInput.value = rate;
+    dateInput.value = effectiveDate;
+    notesInput.value = notes || '';
+    
+    // Update form title and button
+    formTitle.textContent = 'Edit Commission';
+    saveBtn.textContent = 'Update';
+    
+    // Show form
+    formContainer.style.display = 'block';
+    
+    // Scroll to form
+    formContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function cancelCommissionForm() {
+    const formContainer = document.getElementById('commission-form-container');
+    formContainer.style.display = 'none';
+}
+
+async function deleteCommission(id) {
+    if (!confirm('Are you sure you want to delete this commission record?')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/commissions/${id}`, {
+            method: 'DELETE'
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            loadCommissions();
+        } else {
+            alert('Error deleting commission: ' + (result.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error deleting commission:', error);
+        alert('Error deleting commission: ' + error.message);
+    }
+}
+
+// Setup commission form submission
+document.addEventListener('DOMContentLoaded', function() {
+    const commissionForm = document.getElementById('commission-form');
+    if (commissionForm) {
+        commissionForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const accountSelect = document.getElementById('commission-account-select');
+            const editId = document.getElementById('commission-edit-id');
+            const rateInput = document.getElementById('commission-rate-input');
+            const dateInput = document.getElementById('commission-effective-date-input');
+            const notesInput = document.getElementById('commission-notes-input');
+            
+            const accountId = accountSelect ? accountSelect.value : '';
+            if (!accountId) {
+                alert('Please select an account');
+                return;
+            }
+            
+            const commissionRate = parseFloat(rateInput.value);
+            const effectiveDate = dateInput.value;
+            const notes = notesInput.value || '';
+            const id = editId.value;
+            
+            try {
+                const url = id ? `/api/commissions/${id}` : '/api/commissions';
+                const method = id ? 'PUT' : 'POST';
+                
+                const response = await fetch(url, {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        account_id: accountId,
+                        commission_rate: commissionRate,
+                        effective_date: effectiveDate,
+                        notes: notes
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Reset form and hide it
+                    cancelCommissionForm();
+                    // Reload commissions table
+                    loadCommissions();
+                } else {
+                    alert('Error saving commission: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error saving commission:', error);
+                alert('Error saving commission: ' + error.message);
+            }
+        });
+    }
+});
+
+function toggleBankrollSettings() {
+    const modal = new bootstrap.Modal(document.getElementById('commission-modal'));
+    modal.show();
+    // Focus on bankroll section when modal opens
+    setTimeout(() => {
+        const bankrollSection = document.getElementById('bankroll-beginning-date');
+        if (bankrollSection) {
+            bankrollSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }, 300);
 }
 
 function saveCommission() {
@@ -3127,11 +3764,17 @@ function openROCTPutModal(tradeData = null) {
 
 async function loadTopSymbols() {
     try {
+        // Get account filter
+        const accountFilter = document.getElementById('universal-account-filter')?.value || '';
+        
         // Use dashboard date filters if available, otherwise use all time
         const dashboardStartDate = document.getElementById('dashboard-start-date')?.value;
         const dashboardEndDate = document.getElementById('dashboard-end-date')?.value;
         
         const params = new URLSearchParams();
+        if (accountFilter) {
+            params.append('account_id', accountFilter);
+        }
         if (dashboardStartDate) {
             params.append('start_date', dashboardStartDate);
         }
@@ -3342,10 +3985,40 @@ async function handleExcelUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
     
+    // Get account ID and import type from menu if available
+    const importAccountSelect = document.getElementById('import-account-select');
+    const importTypeTrades = document.getElementById('import-type-trades');
+    const importTypeCostBasis = document.getElementById('import-type-cost-basis');
+    
+    let accountId = null;
+    let importType = 'trades'; // default
+    
+    // Check if this is from the menu upload
+    if (event.target.id === 'menu-excel-upload') {
+        if (importAccountSelect) {
+            accountId = importAccountSelect.value;
+            if (!accountId) {
+                alert('Please select an account before importing.');
+                event.target.value = '';
+                return;
+            }
+        }
+        if (importTypeCostBasis && importTypeCostBasis.checked) {
+            importType = 'cost-basis';
+        }
+    }
+    
     const formData = new FormData();
     formData.append('file', file);
+    if (accountId) {
+        formData.append('account_id', accountId);
+    }
+    if (importType) {
+        formData.append('import_type', importType);
+    }
     
     try {
+        // Use the same endpoint for both types - backend will need to handle import_type parameter
         const response = await fetch('/api/import-excel', {
             method: 'POST',
             body: formData
@@ -3368,18 +4041,22 @@ async function handleExcelUpload(event) {
         console.log('Import result:', result);
         
         if (result.success) {
-            let message = `Successfully imported ${result.imported} trades.`;
+            let message = `Successfully imported ${result.imported} ${importType === 'cost-basis' ? 'cost basis entries' : 'trades'}.`;
             if (result.skipped > 0) {
-                message += `\n${result.skipped} duplicate trades skipped.`;
+                message += `\n${result.skipped} duplicate entries skipped.`;
             }
             if (result.errors && result.errors.length > 0) {
                 console.error('Import errors:', result.errors);
                 message += '\n\nErrors:\n' + result.errors.join('\n');
             }
             alert(message);
-            // Reload trades table
-            await loadTrades();
-            await loadSummary();
+            // Reload data
+            if (importType === 'cost-basis') {
+                await loadCostBasis();
+            } else {
+                await loadTrades();
+                await loadSummary();
+            }
         } else {
             console.error('Import failed:', result.error);
             alert('Error importing Excel file: ' + result.error);
@@ -3391,6 +4068,14 @@ async function handleExcelUpload(event) {
     
     // Reset file input
     event.target.value = '';
+    
+    // Close dropdown menu if from menu upload
+    if (event.target.id === 'menu-excel-upload') {
+        const dropdown = bootstrap.Dropdown.getInstance(document.getElementById('header-menu-toggle'));
+        if (dropdown) {
+            dropdown.hide();
+        }
+    }
 }
 
 // Add event listener for Excel upload
@@ -3400,4 +4085,38 @@ document.addEventListener('DOMContentLoaded', function() {
         excelUpload.addEventListener('change', handleExcelUpload);
     }
 });
+
+// ============================================================================
+// COST BASIS IMPORT FUNCTION (Placeholder - to be implemented)
+// ============================================================================
+
+async function handleCostBasisUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    // Get account ID from menu
+    const importAccountSelect = document.getElementById('import-account-select');
+    let accountId = null;
+    
+    if (event.target.id === 'menu-excel-upload') {
+        if (importAccountSelect) {
+            accountId = importAccountSelect.value;
+            if (!accountId) {
+                alert('Please select an account before importing.');
+                event.target.value = '';
+                return;
+            }
+        }
+    }
+    
+    // TODO: Implement cost basis import logic
+    alert('Cost Basis import functionality will be implemented soon. For now, please use the Trades import.');
+    event.target.value = '';
+    
+    // Close the dropdown after import attempt
+    const dropdown = bootstrap.Dropdown.getInstance(document.getElementById('header-menu-toggle'));
+    if (dropdown) {
+        dropdown.hide();
+    }
+}
 

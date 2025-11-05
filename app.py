@@ -764,6 +764,41 @@ def create_commission():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/commissions/<int:commission_id>', methods=['PUT'])
+def update_commission(commission_id):
+    try:
+        data = request.get_json()
+        commission_rate = float(data.get('commission_rate'))
+        effective_date = data.get('effective_date')
+        notes = data.get('notes', '')
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE commissions 
+            SET commission_rate = ?, effective_date = ?, notes = ?
+            WHERE id = ?
+        ''', (commission_rate, effective_date, notes, commission_id))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/commissions/<int:commission_id>', methods=['DELETE'])
+def delete_commission(commission_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM commissions WHERE id = ?', (commission_id,))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/cash-flows', methods=['POST'])
 def create_cash_flow():
     try:
@@ -796,17 +831,47 @@ def create_cash_flow():
 @app.route('/api/trades', methods=['GET'])
 def get_trades():
     try:
+        account_id = request.args.get('account_id', type=int)
+        ticker = request.args.get('ticker', '')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Join with symbols table to get ticker and company name, and join with trade_types to get type_name
-        cursor.execute('''
-            SELECT st.*, s.ticker, s.company_name, tt.type_name
+        # Build query with account and ticker filters
+        query = '''
+            SELECT st.*, s.ticker, s.company_name, tt.type_name, a.account_name
             FROM trades st 
             JOIN tickers s ON st.ticker_id = s.id 
             LEFT JOIN trade_types tt ON st.trade_type_id = tt.id
-            ORDER BY st.created_at DESC
-        ''')
+            LEFT JOIN accounts a ON st.account_id = a.id
+            WHERE 1=1
+        '''
+        params = []
+        
+        if account_id:
+            query += ' AND st.account_id = ?'
+            params.append(account_id)
+        
+        if ticker:
+            query += ' AND s.ticker = ?'
+            params.append(ticker.upper())
+        
+        if start_date:
+            query += ' AND st.trade_date >= ?'
+            params.append(start_date)
+        
+        if end_date:
+            query += ' AND st.trade_date <= ?'
+            params.append(end_date)
+        
+        # Sort by trade_date first (newest first), then by account (Rule One first)
+        query += ''' ORDER BY st.trade_date DESC, 
+                     CASE WHEN a.account_name = 'Rule One' THEN 0 ELSE 1 END,
+                     a.account_name'''
+        
+        cursor.execute(query, params)
         trades = cursor.fetchall()
         conn.close()
         
@@ -1693,43 +1758,65 @@ def get_cost_basis():
         conn = get_db_connection()
         cursor = conn.cursor()
         
+        # Get account_id filter if provided
+        account_id = request.args.get('account_id', type=int)
+        
         # Query cost_basis table directly instead of trades table
         if ticker:
-            cursor.execute('''
-                SELECT cb.*, t.ticker, tr.trade_status as status
+            query = '''
+                SELECT cb.*, t.ticker, tr.trade_status as status, tr.account_id, a.account_name
                 FROM cost_basis cb
                 JOIN tickers t ON cb.ticker_id = t.id
                 LEFT JOIN trades tr ON cb.trade_id = tr.id
+                LEFT JOIN accounts a ON tr.account_id = a.id
                 WHERE t.ticker = ? AND t.ticker IS NOT NULL AND t.ticker != ""
-                ORDER BY cb.transaction_date ASC
-            ''', (ticker,))
+            '''
+            params = [ticker]
+            if account_id:
+                query += ' AND tr.account_id = ?'
+                params.append(account_id)
+            query += ' ORDER BY cb.transaction_date ASC'
+            cursor.execute(query, params)
         else:
-            cursor.execute('''
-                SELECT cb.*, t.ticker, tr.trade_status as status
+            query = '''
+                SELECT cb.*, t.ticker, tr.trade_status as status, tr.account_id, a.account_name
                 FROM cost_basis cb
                 JOIN tickers t ON cb.ticker_id = t.id
                 LEFT JOIN trades tr ON cb.trade_id = tr.id
+                LEFT JOIN accounts a ON tr.account_id = a.id
                 WHERE t.ticker IS NOT NULL AND t.ticker != ""
-                ORDER BY t.ticker, cb.transaction_date ASC
-            ''')
+            '''
+            params = []
+            if account_id:
+                query += ' AND tr.account_id = ?'
+                params.append(account_id)
+            query += ' ORDER BY t.ticker, cb.transaction_date ASC'
+            cursor.execute(query, params)
         
         cost_basis_entries = cursor.fetchall()
         
         # Convert to list of dicts for processing
         entries = [dict(entry) for entry in cost_basis_entries]
         
-        # Group entries by ticker
+        # Group entries by ticker and account
         ticker_groups = {}
         for entry in entries:
             ticker = entry['ticker']
-            if ticker not in ticker_groups:
-                ticker_groups[ticker] = {
-                    'trades': []
+            account_id = entry.get('account_id')
+            account_name = entry.get('account_name', 'Unknown')
+            # Create a unique key for ticker + account combination
+            key = f"{ticker}_{account_id}"
+            if key not in ticker_groups:
+                ticker_groups[key] = {
+                    'trades': [],
+                    'account_id': account_id,
+                    'account_name': account_name
                 }
-            ticker_groups[ticker]['trades'].append(entry)
+            ticker_groups[key]['trades'].append(entry)
         
         result = []
-        for ticker, ticker_data in ticker_groups.items():
+        for key, ticker_data in ticker_groups.items():
+            ticker = ticker_data['trades'][0]['ticker'] if ticker_data['trades'] else ''
             entries_list = ticker_data['trades']
             
             # Get company name from database first (cached)
@@ -1804,6 +1891,8 @@ def get_cost_basis():
             result.append({
                 'ticker': ticker,
                 'company_name': company_name,
+                'account_id': ticker_data.get('account_id'),
+                'account_name': ticker_data.get('account_name'),
                 'total_shares': total_shares,
                 'total_cost_basis': total_cost_basis,
                 'total_cost_basis_per_share': total_cost_basis_per_share,
@@ -1819,6 +1908,8 @@ def get_cost_basis():
 @app.route('/api/summary')
 def get_summary():
     try:
+        account_id = request.args.get('account_id', type=int)
+        ticker = request.args.get('ticker', '')
         start_date = request.args.get('start_date', '')
         end_date = request.args.get('end_date', '')
         
@@ -1836,6 +1927,14 @@ def get_summary():
         '''
         params = []
         
+        if account_id:
+            query += ' AND st.account_id = ?'
+            params.append(account_id)
+        
+        if ticker:
+            query += ' AND s.ticker = ?'
+            params.append(ticker.upper())
+        
         if start_date:
             query += ' AND st.trade_date >= ?'
             params.append(start_date)
@@ -1849,18 +1948,33 @@ def get_summary():
         
         # Calculate total_net_credit from cash_flows where transaction_type='OPTIONS'
         cash_flow_query = '''
-            SELECT SUM(amount) as total_net_credit
-            FROM cash_flows
-            WHERE transaction_type = 'OPTIONS'
+            SELECT SUM(cf.amount) as total_net_credit
+            FROM cash_flows cf
+            WHERE cf.transaction_type = 'OPTIONS'
         '''
         cash_flow_params = []
         
+        if ticker:
+            cash_flow_query += '''
+                AND cf.trade_id IN (
+                    SELECT st.id 
+                    FROM trades st 
+                    JOIN tickers s ON st.ticker_id = s.id 
+                    WHERE s.ticker = ?
+                )
+            '''
+            cash_flow_params.append(ticker.upper())
+        
+        if account_id:
+            cash_flow_query += ' AND cf.account_id = ?'
+            cash_flow_params.append(account_id)
+        
         if start_date:
-            cash_flow_query += ' AND transaction_date >= ?'
+            cash_flow_query += ' AND cf.transaction_date >= ?'
             cash_flow_params.append(start_date)
         
         if end_date:
-            cash_flow_query += ' AND transaction_date <= ?'
+            cash_flow_query += ' AND cf.transaction_date <= ?'
             cash_flow_params.append(end_date)
         
         cursor.execute(cash_flow_query, cash_flow_params)
@@ -2353,6 +2467,11 @@ def import_excel():
         if file.filename == '':
             return jsonify({'success': False, 'error': 'No file selected'}), 400
         
+        # Get account_id from request (default to 9 for backward compatibility)
+        account_id = request.form.get('account_id', type=int)
+        if not account_id:
+            account_id = 9  # Default to Rule One account
+        
         # No limit on number of trades - import all
         
         # Save uploaded file temporarily
@@ -2674,15 +2793,19 @@ def import_excel():
             conn = get_db_connection()
             cursor = conn.cursor()
             
-            # Reset trades and cost_basis tables before importing
-            cursor.execute('DELETE FROM cost_basis')
-            cursor.execute('DELETE FROM trades')
+            # Reset trades and cost_basis tables for the selected account only before importing
+            # This prevents deleting data from other accounts
+            cursor.execute('''
+                DELETE FROM cost_basis 
+                WHERE trade_id IN (SELECT id FROM trades WHERE account_id = ?)
+            ''', (account_id,))
+            cursor.execute('DELETE FROM trades WHERE account_id = ?', (account_id,))
             conn.commit()
-            print("Reset trades and cost_basis tables before import", flush=True)
+            print(f"Reset trades and cost_basis tables for account {account_id} before import", flush=True)
             
-            # Check for duplicates against existing trades (will be empty after reset)
+            # Check for duplicates against existing trades from the selected account only
             try:
-                existing = pd.read_sql("SELECT * FROM trades", conn)
+                existing = pd.read_sql("SELECT * FROM trades WHERE account_id = ?", conn, params=(account_id,))
                 # Get ticker names for comparison
                 existing_tickers = pd.read_sql("SELECT * FROM tickers", conn)
                 if not existing_tickers.empty:
@@ -2826,14 +2949,14 @@ def import_excel():
                          credit_debit, total_premium, days_to_expiration, current_price, 
                          strike_price, trade_status, trade_type, price_per_share, total_amount)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (9, ticker_id, trade_date, expiration_date, num_of_contracts,
+                    ''', (account_id, ticker_id, trade_date, expiration_date, num_of_contracts,
                           credit_debit, total_premium, days_to_expiration, current_price,
                           strike_price, trade_status, trade_type, current_price, total_premium))
                     
                     trade_id = cursor.lastrowid
                     
                     # Create cost basis entry for options trades
-                    create_options_cost_basis_entry(cursor, 9, ticker_id, trade_id, trade_date, trade_type, 
+                    create_options_cost_basis_entry(cursor, account_id, ticker_id, trade_id, trade_date, trade_type, 
                                                     num_of_contracts, credit_debit, strike_price, expiration_date)
                     
                     imported_count += 1
