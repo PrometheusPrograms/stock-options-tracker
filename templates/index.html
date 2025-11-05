@@ -331,14 +331,31 @@
             background-color: rgba(0, 0, 0, 0.05);
         }
         
-        /* Ensure both import type buttons are always visible */
+        /* Ensure both import type buttons are always visible and same size */
         #import-submenu .btn-group {
             display: flex !important;
+            gap: 0.5rem !important;
         }
         
         #import-submenu .btn-group label {
             display: block !important;
             flex: 1 1 auto;
+            width: 50% !important;
+            min-width: 50% !important;
+            max-width: 50% !important;
+            padding: 0.25rem 0.5rem !important;
+            text-align: center !important;
+            border-radius: 0.375rem !important;
+        }
+        
+        /* Ensure first button (Trades) has rounded corners on left */
+        #import-submenu .btn-group label[for="import-type-trades"] {
+            border-radius: 0.375rem !important;
+        }
+        
+        /* Ensure second button (Cost Basis) has rounded corners on right */
+        #import-submenu .btn-group label[for="import-type-cost-basis"] {
+            border-radius: 0.375rem !important;
         }
         
         /* Ensure Trades and Cost Basis buttons are visually distinct when selected */
@@ -451,14 +468,15 @@
                                 </li>
                                 <li class="px-3 py-2">
                                     <label class="form-label small mb-1">Type:</label>
-                                    <div class="btn-group w-100" role="group">
+                                    <div class="btn-group w-100" role="group" style="gap: 0.5rem;">
                                         <input type="radio" class="btn-check" name="import-type" id="import-type-trades" value="trades">
-                                        <label class="btn btn-outline-primary btn-sm" for="import-type-trades">Trades</label>
+                                        <label class="btn btn-outline-primary btn-sm" for="import-type-trades" style="border-radius: 0.375rem !important;">Trades</label>
                                         <input type="radio" class="btn-check" name="import-type" id="import-type-cost-basis" value="cost-basis">
-                                        <label class="btn btn-outline-primary btn-sm" for="import-type-cost-basis">Cost Basis</label>
+                                        <label class="btn btn-outline-primary btn-sm" for="import-type-cost-basis" style="border-radius: 0.375rem !important;">Cost Basis</label>
                                     </div>
                                 </li>
                                 <li class="px-3 py-2">
+                                    <label class="form-label small mb-1">Import:</label>
                                     <label for="menu-excel-upload" class="btn btn-primary btn-sm w-100 mb-0" style="cursor: pointer;">
                                         <i class="fas fa-upload me-1"></i>Choose File
                                     </label>
@@ -1332,7 +1350,7 @@
     <!-- Alert Container -->
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}?v=366"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=372"></script>
     
     <script>
         // Global variable to track current section

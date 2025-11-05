@@ -2681,8 +2681,19 @@ function setupUniversalControls() {
             });
         }
         
-        // Handle hover to keep submenu open
+        // Function to reset radio button selections
+        function resetImportTypeSelection() {
+            if (importTypeTrades) {
+                importTypeTrades.checked = false;
+            }
+            if (importTypeCostBasis) {
+                importTypeCostBasis.checked = false;
+            }
+        }
+        
+        // Handle hover to keep submenu open (but don't close on mouseleave)
         if (parent) {
+            // Keep submenu open when hovering over parent or submenu
             parent.addEventListener('mouseenter', function() {
                 if (closeTimeout) {
                     clearTimeout(closeTimeout);
@@ -2691,23 +2702,6 @@ function setupUniversalControls() {
                 parent.classList.add('show');
             });
             
-            parent.addEventListener('mouseleave', function(e) {
-                // Only close if mouse is not moving to the submenu
-                const relatedTarget = e.relatedTarget;
-                if (relatedTarget && (importSubmenu.contains(relatedTarget) || parent.contains(relatedTarget))) {
-                    return; // Don't close if moving to submenu
-                }
-                
-                // Add a small delay before closing to allow mouse to move to submenu
-                closeTimeout = setTimeout(function() {
-                    const isHovering = parent.matches(':hover') || importSubmenu.matches(':hover');
-                    if (!isHovering) {
-                        parent.classList.remove('show');
-                    }
-                }, 200);
-            });
-            
-            // Keep submenu open when hovering over it
             importSubmenu.addEventListener('mouseenter', function() {
                 if (closeTimeout) {
                     clearTimeout(closeTimeout);
@@ -2716,18 +2710,7 @@ function setupUniversalControls() {
                 parent.classList.add('show');
             });
             
-            importSubmenu.addEventListener('mouseleave', function(e) {
-                const relatedTarget = e.relatedTarget;
-                if (relatedTarget && parent.contains(relatedTarget)) {
-                    return;
-                }
-                closeTimeout = setTimeout(function() {
-                    const isHovering = parent.matches(':hover') || importSubmenu.matches(':hover');
-                    if (!isHovering) {
-                        parent.classList.remove('show');
-                    }
-                }, 200);
-            });
+            // Don't close on mouseleave - only close on click outside
         }
         
         importSubmenuToggle.addEventListener('click', function(e) {
@@ -2735,27 +2718,74 @@ function setupUniversalControls() {
             e.stopPropagation();
             if (parent) {
                 const isOpening = !parent.classList.contains('show');
-                parent.classList.toggle('show');
-                
-                // When opening import submenu, ensure Trades is selected
                 if (isOpening) {
-                    if (importTypeTrades) {
-                        importTypeTrades.checked = true;
-                        // Trigger change event to update visual state
-                        importTypeTrades.dispatchEvent(new Event('change'));
-                    }
+                    // Reset selection when opening
+                    resetImportTypeSelection();
                 }
+                parent.classList.toggle('show');
             }
         });
         
-        // Close submenu when clicking outside
-        document.addEventListener('click', function(e) {
-            if (!importSubmenu.contains(e.target) && !importSubmenuToggle.contains(e.target) && !parent.contains(e.target)) {
-                if (parent) {
-                    parent.classList.remove('show');
+        // Close import menu when mouse enters other hamburger menu items
+        const headerMenuDropdown = document.getElementById('header-menu-dropdown');
+        if (headerMenuDropdown && parent) {
+            // Get all direct child <li> elements
+            const allMenuItems = Array.from(headerMenuDropdown.children);
+            
+            allMenuItems.forEach(li => {
+                // Skip the import submenu itself, dividers, and text items
+                if (li.classList.contains('dropdown-submenu') || 
+                    li.classList.contains('dropdown-divider') ||
+                    li.classList.contains('dropdown-item-text')) {
+                    return;
                 }
+                
+                // Add mouseenter listener to the li element itself
+                li.addEventListener('mouseenter', function() {
+                    if (parent && parent.classList.contains('show')) {
+                        parent.classList.remove('show');
+                        resetImportTypeSelection(); // Reset when closing
+                    }
+                });
+                
+                // Also add to any child dropdown-item elements for extra coverage
+                const childItems = li.querySelectorAll('.dropdown-item');
+                childItems.forEach(item => {
+                    if (item.id !== 'import-submenu-toggle') {
+                        item.addEventListener('mouseenter', function() {
+                            if (parent && parent.classList.contains('show')) {
+                                parent.classList.remove('show');
+                                resetImportTypeSelection(); // Reset when closing
+                            }
+                        });
+                    }
+                });
+            });
+        }
+        
+        // Reset selection when clicking outside the import menu
+        // Use a single document click listener to avoid duplicates
+        let clickOutsideHandler = function(e) {
+            // Check if click is outside the import menu and its toggle
+            if (parent && !importSubmenu.contains(e.target) && 
+                !importSubmenuToggle.contains(e.target) && 
+                !parent.contains(e.target) &&
+                e.target.id !== 'menu-excel-upload' && // Don't close when clicking file input label
+                e.target.closest('label[for="menu-excel-upload"]') === null) { // Don't close when clicking label
+                parent.classList.remove('show');
+                resetImportTypeSelection(); // Reset when closing
             }
-        });
+        };
+        document.addEventListener('click', clickOutsideHandler);
+        
+        // Reset selection when main hamburger menu closes
+        const headerMenuToggle = document.getElementById('header-menu-toggle');
+        if (headerMenuToggle) {
+            // Listen for Bootstrap dropdown hide event
+            headerMenuToggle.addEventListener('hidden.bs.dropdown', function() {
+                resetImportTypeSelection(); // Reset when main menu closes
+            });
+        }
     }
     
     // Setup menu Excel upload
@@ -2776,6 +2806,19 @@ function setupUniversalControls() {
             } else {
                 // Call trades import function (existing)
                 handleExcelUpload(event);
+            }
+            
+            // Close the import menu after file is selected
+            const importSubmenuToggle = document.getElementById('import-submenu-toggle');
+            const importSubmenu = document.getElementById('import-submenu');
+            if (importSubmenuToggle && importSubmenu) {
+                const parent = importSubmenuToggle.closest('.dropdown-submenu');
+                if (parent) {
+                    parent.classList.remove('show');
+                    // Reset radio button selections
+                    if (importTypeTrades) importTypeTrades.checked = false;
+                    if (importTypeCostBasis) importTypeCostBasis.checked = false;
+                }
             }
         });
     }
