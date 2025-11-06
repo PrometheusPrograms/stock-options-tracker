@@ -73,7 +73,7 @@ def apply_migration(conn, migration_file):
                 print(f"⚠ Skipping migration {migration_number}: commission_paid column doesn't exist (already uses commission_per_share)")
                 cursor.execute('INSERT INTO schema_migrations (version) VALUES (?)', (migration_number,))
                 conn.commit()
-                return
+                return conn  # Return connection to maintain consistency
         
         # For migration 002, explicitly drop views BEFORE executing the migration SQL
         # This ensures views are fully dropped before the table rename operation
@@ -320,10 +320,18 @@ def run_migrations():
         
     except Exception as e:
         print(f"Migration error: {e}")
-        conn.rollback()
+        if conn:
+            try:
+                conn.rollback()
+            except:
+                pass
         raise
     finally:
-        conn.close()
+        if conn:
+            try:
+                conn.close()
+            except:
+                pass
 
 if __name__ == '__main__':
     run_migrations()
