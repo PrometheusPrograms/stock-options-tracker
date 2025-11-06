@@ -9,6 +9,16 @@ import pandas as pd
 import io
 import zipfile
 import logging
+import math
+from decimal import Decimal, ROUND_HALF_UP
+from migrations.migrate import run_migrations
+from db_helper import init_db_helper, get_db_helper
+
+def round_standard(value, decimals=2):
+    """Round to nearest value, always rounding 0.5 up (standard rounding)"""
+    if value is None:
+        return None
+    return float(Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
 # Load environment variables
 load_dotenv()
@@ -28,10 +38,38 @@ logging.basicConfig(
 # Database configuration
 DATABASE = 'trades.db'
 
+# Initialize database helper
+init_db_helper(DATABASE)
+
+# Run migrations on app startup (runs once when app starts)
+_migrations_run = False
+def ensure_migrations():
+    """Ensure database migrations have been run"""
+    global _migrations_run
+    if not _migrations_run:
+        try:
+            run_migrations()
+            _migrations_run = True
+        except Exception as e:
+            logging.warning(f"Migration error: {e}")
+            logging.info("Falling back to init_db() for initial setup...")
+            init_db()
+            _migrations_run = True
+
+# Run migrations on first request
+@app.before_request
+def run_migrations_on_startup():
+    """Run database migrations before first request"""
+    if not _migrations_run:
+        ensure_migrations()
+
 def get_db_connection():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """
+    Get database connection (backward compatibility)
+    
+    Note: Prefer using get_db_helper() for new code
+    """
+    return get_db_helper().get_raw_connection()
 
 def create_views(cursor):
     """Create SQL views to simplify reporting queries"""
@@ -53,7 +91,7 @@ def create_views(cursor):
             t.strike_price,
             t.trade_status,
             t.trade_type,
-            t.commission_paid,
+            t.commission_per_share,
             t.created_at,
             t.strike_price - t.credit_debit AS net_credit_per_share
         FROM trades t
@@ -153,13 +191,17 @@ def init_db():
             total_premium REAL NOT NULL,
             days_to_expiration INTEGER NOT NULL,
             current_price REAL NOT NULL,
-            strike_price REAL NOT NULL,
+            strike_price NUMERIC(12,2) NOT NULL,
             trade_status TEXT DEFAULT 'open',
             trade_type TEXT NOT NULL,
-            commission_paid REAL DEFAULT 0,
+            commission_per_share REAL DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             price_per_share REAL DEFAULT 0,
             total_amount REAL DEFAULT 0,
+            net_credit_per_share NUMERIC(12,5) DEFAULT 0,
+            risk_capital_per_share REAL DEFAULT 0,
+            margin_percent REAL DEFAULT 100.0,
+            ARORC NUMERIC(10,4) DEFAULT NULL,
             FOREIGN KEY (ticker_id) REFERENCES tickers(id),
             FOREIGN KEY (account_id) REFERENCES accounts(id)
         )
@@ -285,77 +327,50 @@ def init_db():
             # Commit the changes
             conn.commit()
     
-    # Migration: Rename status to trade_status if table exists with old schema
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades'")
+    # Cleanup: Remove any leftover trades_new table from incomplete migrations
+    # This should not happen if migrations run properly, but we clean up just in case
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades_new'")
     if cursor.fetchone():
-        # Check if the column is named 'status' instead of 'trade_status'
-        cursor.execute("PRAGMA table_info(trades)")
-        columns = [row[1] for row in cursor.fetchall()]
-        
-        if ('status' in columns and 'trade_status' not in columns) or \
-           ('premium' in columns and 'credit_debit' not in columns) or \
-           ('commission' in columns and 'commission_paid' not in columns):
-            print("Renaming 'status' column to 'trade_status' in trades table...")
-            # SQLite doesn't support RENAME COLUMN in older versions, so we need to:
-            # 1. Drop views that depend on trades table
-            # 2. Create new table with new schema
-            # 3. Copy data
-            # 4. Drop old table
-            # 5. Rename new table
-            # 6. Recreate views
+        print("⚠ Warning: Found leftover trades_new table from incomplete migration. Cleaning up...")
+        try:
+            # Check if trades table exists and has data
+            cursor.execute("SELECT COUNT(*) as count FROM trades")
+            trades_count = cursor.fetchone()['count']
             
-            try:
+            # Check if trades_new has data
+            cursor.execute("SELECT COUNT(*) as count FROM trades_new")
+            trades_new_count = cursor.fetchone()['count']
+            
+            if trades_count == 0 and trades_new_count > 0:
+                # trades is empty but trades_new has data - complete the migration
+                print("Completing incomplete migration: trades is empty, trades_new has data")
                 cursor.execute('DROP VIEW IF EXISTS v_trade_summary')
                 cursor.execute('DROP VIEW IF EXISTS v_cost_basis_summary')
                 cursor.execute('DROP VIEW IF EXISTS v_cash_flow_summary')
-            except:
-                pass
-            
-            cursor.execute('''
-                CREATE TABLE trades_new (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    account_id INTEGER DEFAULT 9,
-                    ticker_id INTEGER NOT NULL,
-                    trade_date TEXT NOT NULL,
-                    expiration_date TEXT NOT NULL,
-                    num_of_contracts INTEGER NOT NULL,
-                    credit_debit REAL NOT NULL,
-                    total_premium REAL NOT NULL,
-                    days_to_expiration INTEGER NOT NULL,
-                    current_price REAL NOT NULL,
-                    strike_price REAL NOT NULL,
-                    trade_status TEXT DEFAULT 'open',
-                    trade_type TEXT NOT NULL,
-                    commission_paid REAL DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    price_per_share REAL DEFAULT 0,
-                    total_amount REAL DEFAULT 0,
-                    margin_capital REAL DEFAULT 0,
-                    FOREIGN KEY (ticker_id) REFERENCES tickers(id),
-                    FOREIGN KEY (account_id) REFERENCES accounts(id)
-                )
-            ''')
-            
-            # Copy data from old table to new table
-            cursor.execute('''
-                INSERT INTO trades_new (id, account_id, ticker_id, trade_date, expiration_date, num_of_contracts, 
-                                      credit_debit, total_premium, days_to_expiration, current_price, strike_price, 
-                                      trade_status, trade_type, commission_paid, created_at, price_per_share, total_amount, margin_capital)
-                SELECT id, account_id, ticker_id, trade_date, expiration_date, num_of_contracts,
-                       COALESCE(premium, 0) as credit_debit, total_premium, days_to_expiration, current_price, strike_price,
-                       COALESCE(status, 'open') as trade_status, trade_type, COALESCE(commission, 0) as commission_paid, created_at, price_per_share, total_amount, margin_capital
-                FROM trades
-            ''')
-            
-            # Drop old table and rename new one
-            cursor.execute('DROP TABLE trades')
-            cursor.execute('ALTER TABLE trades_new RENAME TO trades')
-            
-            # Recreate views
-            create_views(cursor)
-            
-            conn.commit()
-            print("Successfully renamed 'status' to 'trade_status'")
+                cursor.execute('DROP TABLE trades')
+                cursor.execute('ALTER TABLE trades_new RENAME TO trades')
+                create_views(cursor)
+                conn.commit()
+                print("✓ Completed migration: renamed trades_new to trades")
+            elif trades_count > 0 and trades_new_count > 0:
+                # Both tables have data - this is a problem, keep trades and drop trades_new
+                print("⚠ Both trades and trades_new have data. Keeping trades, dropping trades_new")
+                cursor.execute('DROP TABLE trades_new')
+                conn.commit()
+                print("✓ Cleaned up trades_new table")
+            else:
+                # trades_new is empty or both are empty - just drop trades_new
+                cursor.execute('DROP TABLE trades_new')
+                conn.commit()
+                print("✓ Cleaned up empty trades_new table")
+        except Exception as e:
+            print(f"⚠ Error cleaning up trades_new: {e}")
+            # Don't fail the entire init if cleanup fails
+            pass
+    
+    # Note: Schema migrations (status->trade_status, premium->credit_debit, commission_paid->commission_per_share)
+    # are now handled by the migration system (migrations/migrate.py) and should not be done here.
+    # The migration system runs automatically on app startup.
 
     # Create commissions table
     cursor.execute('''
@@ -505,12 +520,10 @@ def index():
 @app.route('/api/accounts', methods=['GET'])
 def get_accounts():
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT * FROM accounts ORDER BY account_name')
-        accounts = cursor.fetchall()
-        conn.close()
-        return jsonify([dict(a) for a in accounts])
+        # Using new database helper
+        db = get_db_helper()
+        accounts = db.get_accounts()
+        return jsonify(accounts)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -540,14 +553,10 @@ def create_account():
 @app.route('/api/trade-types', methods=['GET'])
 def get_trade_types():
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT * FROM trade_types ORDER BY category, type_name')
-        types = cursor.fetchall()
-        conn.close()
-        
-        return jsonify([dict(t) for t in types])
+        # Using new database helper
+        db = get_db_helper()
+        types = db.execute_query('SELECT * FROM trade_types ORDER BY category, type_name')
+        return jsonify(types)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -741,6 +750,107 @@ def get_commissions():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+def update_trades_for_commission(account_id, effective_date, commission_rate):
+    """
+    Update all trades where trade_date >= effective_date for the given account.
+    For each trade, determines the correct commission rate to use (the one with the latest
+    effective_date <= trade_date), then recalculates commission_per_share, net_credit_per_share,
+    risk_capital_per_share, margin_capital, and ARORC for affected trades.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Find all trades that need to be updated (trade_date >= effective_date)
+        cursor.execute('''
+            SELECT id, credit_debit, strike_price, trade_type, num_of_contracts,
+                   days_to_expiration, margin_percent, trade_date
+            FROM trades
+            WHERE account_id = ? AND trade_date >= ?
+        ''', (account_id, effective_date))
+        
+        trades_to_update = cursor.fetchall()
+        updated_count = 0
+        
+        for trade in trades_to_update:
+            trade_id = trade['id']
+            credit_debit = trade['credit_debit']
+            strike_price = trade['strike_price']
+            trade_type = trade['trade_type']
+            num_of_contracts = trade['num_of_contracts']
+            days_to_expiration = trade['days_to_expiration']
+            # sqlite3.Row doesn't have .get(), use dictionary-style access with None check
+            margin_percent = trade['margin_percent'] if trade['margin_percent'] is not None else 100.0
+            trade_date = trade['trade_date']
+            
+            # Get the correct commission rate for this trade (the one with the latest effective_date <= trade_date)
+            cursor.execute('''
+                SELECT commission_rate
+                FROM commissions
+                WHERE account_id = ? AND effective_date <= ?
+                ORDER BY effective_date DESC
+                LIMIT 1
+            ''', (account_id, trade_date))
+            
+            commission_row = cursor.fetchone()
+            if commission_row:
+                # Use the commission rate that applies to this trade
+                trade_commission_rate = commission_row['commission_rate']
+            else:
+                # No commission found, use 0.0 as default
+                trade_commission_rate = 0.0
+            
+            # Recalculate net_credit_per_share (rounded to 5 decimal places for storage, displayed as 2 decimals)
+            net_credit_per_share = round_standard((credit_debit - trade_commission_rate), 5)
+            
+            # Recalculate risk_capital_per_share for ROCT PUT and RULE ONE PUT trades (rounded to nearest hundredth, always rounding 0.5 up)
+            risk_capital_per_share = None
+            if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+                risk_capital_per_share = round_standard((strike_price - net_credit_per_share), 2)
+            
+            # Recalculate margin_capital
+            # Use unrounded risk_capital_per_share for margin_capital calculation
+            margin_capital = None
+            if trade_type not in ['BTO', 'STC'] and strike_price > 0:
+                if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+                    # Use unrounded risk_capital_per_share for margin_capital calculation
+                    risk_capital_unrounded = strike_price - net_credit_per_share
+                    margin_capital = num_of_contracts * 100 * risk_capital_unrounded
+                else:
+                    margin_capital = (strike_price - net_credit_per_share) * num_of_contracts * 100
+            
+            # Calculate ARORC for ROCT PUT and RULE ONE PUT trades
+            # margin_percent is stored as a percentage (100 = 100%), so divide by 100 to get decimal multiplier
+            # Use unrounded risk_capital_per_share for ARORC calculation
+            arorc = None
+            if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+                # Calculate unrounded risk_capital_per_share for ARORC calculation
+                risk_capital_unrounded = strike_price - net_credit_per_share
+                if risk_capital_unrounded > 0 and days_to_expiration > 0 and margin_percent > 0:
+                    # margin_percent is stored as percentage (100 = 100%), convert to decimal (divide by 100)
+                    denominator = risk_capital_unrounded * (margin_percent / 100.0)
+                    if denominator > 0:
+                        # Calculate ARORC as decimal, then convert to percentage and round to 1 decimal
+                        arorc_decimal = (365.0 / days_to_expiration) * (net_credit_per_share / denominator)
+                        arorc = round_standard(arorc_decimal * 100.0, 1)
+            
+            # Update the trade
+            cursor.execute('''
+                UPDATE trades 
+                SET commission_per_share = ?,
+                    net_credit_per_share = ?,
+                    risk_capital_per_share = ?,
+                    margin_capital = ?,
+                    ARORC = ?
+                WHERE id = ?
+            ''', (trade_commission_rate, net_credit_per_share, risk_capital_per_share, margin_capital, arorc, trade_id))
+            updated_count += 1
+        
+        conn.commit()
+        return updated_count
+    finally:
+        conn.close()
+
 @app.route('/api/commissions', methods=['POST'])
 def create_commission():
     try:
@@ -760,8 +870,15 @@ def create_commission():
         conn.commit()
         conn.close()
         
-        return jsonify({'success': True})
+        # Update all trades where trade_date >= effective_date
+        updated_count = update_trades_for_commission(account_id, effective_date, commission_rate)
+        print(f'Updated {updated_count} trades for new commission rate')
+        
+        return jsonify({'success': True, 'trades_updated': updated_count})
     except Exception as e:
+        import traceback
+        print(f'Error creating commission: {e}')
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/commissions/<int:commission_id>', methods=['PUT'])
@@ -774,6 +891,17 @@ def update_commission(commission_id):
         
         conn = get_db_connection()
         cursor = conn.cursor()
+        
+        # Get the commission record to get account_id
+        cursor.execute('SELECT account_id FROM commissions WHERE id = ?', (commission_id,))
+        commission = cursor.fetchone()
+        if not commission:
+            conn.close()
+            return jsonify({'error': 'Commission not found'}), 404
+        
+        account_id = commission['account_id']
+        
+        # Update the commission record
         cursor.execute('''
             UPDATE commissions 
             SET commission_rate = ?, effective_date = ?, notes = ?
@@ -782,8 +910,15 @@ def update_commission(commission_id):
         conn.commit()
         conn.close()
         
-        return jsonify({'success': True})
+        # Update all trades where trade_date >= effective_date
+        updated_count = update_trades_for_commission(account_id, effective_date, commission_rate)
+        print(f'Updated {updated_count} trades for updated commission rate')
+        
+        return jsonify({'success': True, 'trades_updated': updated_count})
     except Exception as e:
+        import traceback
+        print(f'Error updating commission: {e}')
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/commissions/<int:commission_id>', methods=['DELETE'])
@@ -791,12 +926,139 @@ def delete_commission(commission_id):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+        
+        # Get the commission record before deleting it (need account_id and effective_date)
+        cursor.execute('SELECT account_id, effective_date FROM commissions WHERE id = ?', (commission_id,))
+        commission = cursor.fetchone()
+        
+        if not commission:
+            conn.close()
+            return jsonify({'error': 'Commission not found'}), 404
+        
+        account_id = commission['account_id']
+        effective_date = commission['effective_date']
+        
+        # Delete the commission record
         cursor.execute('DELETE FROM commissions WHERE id = ?', (commission_id,))
         conn.commit()
         conn.close()
         
-        return jsonify({'success': True})
+        # Update all trades where trade_date >= effective_date for this account
+        # This will recalculate commission_per_share, net_credit_per_share, risk_capital_per_share,
+        # margin_capital, and ARORC using the next available commission rate (or 0.0 if none)
+        updated_count = update_trades_for_commission(account_id, effective_date, None)
+        print(f'Updated {updated_count} trades after deleting commission rate')
+        
+        return jsonify({'success': True, 'trades_updated': updated_count})
     except Exception as e:
+        import traceback
+        print(f'Error deleting commission: {e}')
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/backfill-commissions', methods=['POST'])
+def backfill_commissions():
+    """
+    Backfill all trades with the correct commission rates based on their account_id and trade_date.
+    This updates all trades that have commission_per_share = 0 or need to be updated.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get all trades
+        cursor.execute('''
+            SELECT id, account_id, trade_date, credit_debit, strike_price, trade_type, 
+                   num_of_contracts, days_to_expiration, margin_percent
+            FROM trades
+            ORDER BY account_id, trade_date
+        ''')
+        
+        all_trades = cursor.fetchall()
+        updated_count = 0
+        
+        for trade in all_trades:
+            trade_id = trade['id']
+            account_id = trade['account_id']
+            trade_date = trade['trade_date']
+            credit_debit = trade['credit_debit']
+            strike_price = trade['strike_price']
+            trade_type = trade['trade_type']
+            num_of_contracts = trade['num_of_contracts']
+            days_to_expiration = trade['days_to_expiration']
+            margin_percent = trade['margin_percent'] if trade['margin_percent'] is not None else 100.0
+            
+            # Get the correct commission rate for this trade (the one with the latest effective_date <= trade_date)
+            cursor.execute('''
+                SELECT commission_rate
+                FROM commissions
+                WHERE account_id = ? AND effective_date <= ?
+                ORDER BY effective_date DESC
+                LIMIT 1
+            ''', (account_id, trade_date))
+            
+            commission_row = cursor.fetchone()
+            if commission_row:
+                # Use the commission rate that applies to this trade
+                trade_commission_rate = commission_row['commission_rate']
+            else:
+                # No commission found, use 0.0 as default
+                trade_commission_rate = 0.0
+            
+            # Recalculate net_credit_per_share (rounded to 5 decimal places for storage, displayed as 2 decimals)
+            net_credit_per_share = round_standard((credit_debit - trade_commission_rate), 5)
+            
+            # Recalculate risk_capital_per_share for ROCT PUT and RULE ONE PUT trades (rounded to nearest hundredth, always rounding 0.5 up)
+            risk_capital_per_share = None
+            if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+                risk_capital_per_share = round_standard((strike_price - net_credit_per_share), 2)
+            
+            # Recalculate margin_capital
+            # Use unrounded risk_capital_per_share for margin_capital calculation
+            margin_capital = None
+            if trade_type not in ['BTO', 'STC'] and strike_price > 0:
+                if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+                    # Use unrounded risk_capital_per_share for margin_capital calculation
+                    risk_capital_unrounded = strike_price - net_credit_per_share
+                    margin_capital = num_of_contracts * 100 * risk_capital_unrounded
+                else:
+                    margin_capital = (strike_price - net_credit_per_share) * num_of_contracts * 100
+            
+            # Calculate ARORC for ROCT PUT and RULE ONE PUT trades
+            # margin_percent is stored as a percentage (100 = 100%), so divide by 100 to get decimal multiplier
+            # Use unrounded risk_capital_per_share for ARORC calculation
+            arorc = None
+            if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+                # Calculate unrounded risk_capital_per_share for ARORC calculation
+                risk_capital_unrounded = strike_price - net_credit_per_share
+                if risk_capital_unrounded > 0 and days_to_expiration > 0 and margin_percent > 0:
+                    # margin_percent is stored as percentage (100 = 100%), convert to decimal (divide by 100)
+                    denominator = risk_capital_unrounded * (margin_percent / 100.0)
+                    if denominator > 0:
+                        # Calculate ARORC as decimal, then convert to percentage and round to 1 decimal
+                        arorc_decimal = (365.0 / days_to_expiration) * (net_credit_per_share / denominator)
+                        arorc = round_standard(arorc_decimal * 100.0, 1)
+            
+            # Update the trade
+            cursor.execute('''
+                UPDATE trades 
+                SET commission_per_share = ?,
+                    net_credit_per_share = ?,
+                    risk_capital_per_share = ?,
+                    margin_capital = ?,
+                    ARORC = ?
+                WHERE id = ?
+            ''', (trade_commission_rate, net_credit_per_share, risk_capital_per_share, margin_capital, arorc, trade_id))
+            updated_count += 1
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True, 'trades_updated': updated_count})
+    except Exception as e:
+        import traceback
+        print(f'Error backfilling commissions: {e}')
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/cash-flows', methods=['POST'])
@@ -836,49 +1098,18 @@ def get_trades():
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
         
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        # Using new database helper
+        db = get_db_helper()
+        trades = db.get_trades_filtered(
+            account_id=account_id,
+            ticker=ticker,
+            start_date=start_date,
+            end_date=end_date
+        )
         
-        # Build query with account and ticker filters
-        query = '''
-            SELECT st.*, s.ticker, s.company_name, tt.type_name, a.account_name
-            FROM trades st 
-            JOIN tickers s ON st.ticker_id = s.id 
-            LEFT JOIN trade_types tt ON st.trade_type_id = tt.id
-            LEFT JOIN accounts a ON st.account_id = a.id
-            WHERE 1=1
-        '''
-        params = []
-        
-        if account_id:
-            query += ' AND st.account_id = ?'
-            params.append(account_id)
-        
-        if ticker:
-            query += ' AND s.ticker = ?'
-            params.append(ticker.upper())
-        
-        if start_date:
-            query += ' AND st.trade_date >= ?'
-            params.append(start_date)
-        
-        if end_date:
-            query += ' AND st.trade_date <= ?'
-            params.append(end_date)
-        
-        # Sort by trade_date first (newest first), then by account (Rule One first)
-        query += ''' ORDER BY st.trade_date DESC, 
-                     CASE WHEN a.account_name = 'Rule One' THEN 0 ELSE 1 END,
-                     a.account_name'''
-        
-        cursor.execute(query, params)
-        trades = cursor.fetchall()
-        conn.close()
-        
+        # Add computed fields for backward compatibility
         trades_list = []
-        for trade in trades:
-            trade_dict = dict(trade)
-            # Add computed fields for backward compatibility
+        for trade_dict in trades:
             trade_dict['shares'] = trade_dict['num_of_contracts'] * 100 if trade_dict['trade_type'] not in ['BTO', 'STC'] else trade_dict['num_of_contracts']
             trades_list.append(trade_dict)
         
@@ -890,24 +1121,13 @@ def get_trades():
 @app.route('/api/trades/<int:trade_id>', methods=['GET'])
 def get_trade(trade_id):
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        # Using new database helper
+        db = get_db_helper()
+        trade_dict = db.get_trade(trade_id)
         
-        # Join with tickers table to get ticker and company name
-        cursor.execute('''
-            SELECT st.*, t.ticker, t.company_name 
-            FROM trades st 
-            JOIN tickers t ON st.ticker_id = t.id 
-            WHERE st.id = ?
-        ''', (trade_id,))
-        
-        trade = cursor.fetchone()
-        conn.close()
-        
-        if not trade:
+        if not trade_dict:
             return jsonify({'error': 'Trade not found'}), 404
         
-        trade_dict = dict(trade)
         # Add computed fields for backward compatibility
         trade_dict['shares'] = trade_dict['num_of_contracts'] * 100 if trade_dict['trade_type'] not in ['BTO', 'STC'] else trade_dict['num_of_contracts']
         
@@ -926,28 +1146,33 @@ def add_trade():
         num_of_contracts = int(data['num_of_contracts'])
         premium = float(data['premium'])
         current_price = float(data['currentPrice'])
-        strike_price = float(data.get('strikePrice', 0))
+        strike_price = round_standard(float(data.get('strikePrice', 0)), 2)
         trade_type = data.get('tradeType', 'ROCT PUT')
         account_id = data.get('accountId', 9)  # Default to Rule One
+        
+        # Store the base trade type for lookup (before modifying)
+        base_trade_type = trade_type
         
         # Modify trade type to include ticker for options trades
         if trade_type in ['ROCT PUT', 'ROCT CALL']:
             trade_type = f"{ticker} {trade_type}"
         
-        # Get or create symbol
+        # Get or create symbol (using new helper)
+        db = get_db_helper()
+        ticker_id = db.create_or_get_ticker(ticker, ticker)
+        
+        # Get trade_type_id from trade_types table
+        # Insert trade (using raw connection for complex transaction)
         conn = get_db_connection()
         cursor = conn.cursor()
+        cursor.execute('SELECT id FROM trade_types WHERE type_name = ?', (base_trade_type,))
+        trade_type_row = cursor.fetchone()
+        trade_type_id = trade_type_row['id'] if trade_type_row else None
         
-        # Check if symbol exists (case-insensitive)
-        cursor.execute('SELECT id FROM tickers WHERE UPPER(ticker) = UPPER(?)', (ticker,))
-        symbol_row = cursor.fetchone()
-        
-        if symbol_row:
-            ticker_id = symbol_row['id']
-        else:
-            # Create new symbol (store as uppercase)
-            cursor.execute('INSERT INTO tickers (ticker, company_name) VALUES (?, ?)', (ticker.upper(), ticker))
-            ticker_id = cursor.lastrowid
+        # Validate that trade_type_id exists
+        if trade_type_id is None:
+            conn.close()
+            return jsonify({'error': f'Invalid trade type: "{base_trade_type}" does not exist in trade_types table'}), 400
         
         # Calculate days to expiration
         trade_date_obj = datetime.strptime(trade_date, '%Y-%m-%d').date()
@@ -964,34 +1189,60 @@ def add_trade():
             price_per_share = 0
             total_amount = 0
         
-        # Get commission rate in effect at trade date
-        cursor.execute('''
-            SELECT commission_rate 
-            FROM commissions 
-            WHERE account_id = ? AND effective_date <= ?
-            ORDER BY effective_date DESC
-            LIMIT 1
-        ''', (account_id, trade_date))
+        # Get commission rate in effect at trade date (using new helper)
+        commission = db.get_commission_rate(account_id, trade_date)
         
-        commission_row = cursor.fetchone()
-        commission = commission_row['commission_rate'] if commission_row else 0.0
+        # Calculate net_credit_per_share = credit_debit - commission_per_share (rounded to 5 decimal places for storage, displayed as 2 decimals)
+        net_credit_per_share = round_standard((premium - commission), 5)
+        
+        # Calculate risk_capital_per_share for ROCT PUT and RULE ONE PUT trades (rounded to nearest hundredth, always rounding 0.5 up)
+        # risk_capital_per_share = strike_price - net_credit_per_share (only for ROCT PUT and RULE ONE PUT)
+        risk_capital_per_share = None
+        if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+            risk_capital_per_share = round_standard((strike_price - net_credit_per_share), 2)
         
         # Calculate margin_capital for options trades
+        # Use unrounded risk_capital_per_share for margin_capital calculation
         margin_capital = None
         if trade_type not in ['BTO', 'STC'] and strike_price > 0:
-            # Margin capital = (strike_price - (premium - commission)) * num_of_contracts * 100
-            margin_capital = (strike_price - (premium - commission)) * num_of_contracts * 100
+            # For ROCT PUT and RULE ONE PUT trades, use unrounded risk_capital_per_share
+            if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+                # Use unrounded risk_capital_per_share for margin_capital calculation
+                risk_capital_unrounded = strike_price - net_credit_per_share
+                margin_capital = num_of_contracts * 100 * risk_capital_unrounded
+            else:
+                # For other options trades, use the standard calculation
+                margin_capital = (strike_price - net_credit_per_share) * num_of_contracts * 100
         
-        # Insert trade
+        # Set default margin_percent to 100%
+        margin_percent = 100.0
+        
+        # Calculate ARORC for ROCT PUT and RULE ONE PUT trades
+        # ARORC = (365 / days_to_expiration) * (net_credit_per_share / (risk_capital_per_share * (margin_percent / 100)))
+        # margin_percent is stored as a percentage (100 = 100%), so divide by 100 to get decimal multiplier
+        # Use unrounded risk_capital_per_share for ARORC calculation
+        arorc = None
+        if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+            # Calculate unrounded risk_capital_per_share for ARORC calculation
+            risk_capital_unrounded = strike_price - net_credit_per_share
+            if risk_capital_unrounded > 0 and days_to_expiration > 0 and margin_percent > 0:
+                # margin_percent is stored as percentage (100 = 100%), convert to decimal (divide by 100)
+                denominator = risk_capital_unrounded * (margin_percent / 100.0)
+                if denominator > 0:
+                    # Calculate ARORC as decimal, then convert to percentage and round to 1 decimal
+                    arorc_decimal = (365.0 / days_to_expiration) * (net_credit_per_share / denominator)
+                    arorc = round_standard(arorc_decimal * 100.0, 1)
+        
+        # Insert trade (using raw connection for complex transaction)
         cursor.execute('''
             INSERT INTO trades 
             (account_id, ticker_id, trade_date, expiration_date, num_of_contracts, credit_debit, total_premium, 
              days_to_expiration, current_price, strike_price, trade_status, trade_type, 
-             price_per_share, total_amount, commission_paid, margin_capital)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             price_per_share, total_amount, commission_per_share, margin_capital, net_credit_per_share, risk_capital_per_share, margin_percent, ARORC, trade_type_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (account_id, ticker_id, trade_date, expiration_date, num_of_contracts, premium, total_premium,
               days_to_expiration, current_price, strike_price, 'open', trade_type,
-              price_per_share, total_amount, commission, margin_capital))
+              price_per_share, total_amount, commission, margin_capital, net_credit_per_share, risk_capital_per_share, margin_percent, arorc, trade_type_id))
         
         trade_id = cursor.lastrowid
         
@@ -1226,6 +1477,12 @@ def update_trade(trade_id):
         updates = []
         params = []
         
+        # Track if dates are being updated (needed for DTE recalculation)
+        trade_date_updated = False
+        expiration_date_updated = False
+        new_trade_date = None
+        new_expiration_date = None
+        
         if 'ticker' in data:
             ticker = data['ticker'].upper()
             # Get or create symbol (case-insensitive)
@@ -1243,18 +1500,44 @@ def update_trade(trade_id):
             params.append(ticker_id)
         
         if 'tradeDate' in data:
+            trade_date_updated = True
+            new_trade_date = data['tradeDate']
             updates.append('trade_date = ?')
-            params.append(data['tradeDate'])
+            params.append(new_trade_date)
         elif 'trade_date' in data:
+            trade_date_updated = True
+            new_trade_date = data['trade_date']
             updates.append('trade_date = ?')
-            params.append(data['trade_date'])
+            params.append(new_trade_date)
         
         if 'expirationDate' in data:
+            expiration_date_updated = True
+            new_expiration_date = data['expirationDate']
             updates.append('expiration_date = ?')
-            params.append(data['expirationDate'])
+            params.append(new_expiration_date)
         elif 'expiration_date' in data:
+            expiration_date_updated = True
+            new_expiration_date = data['expiration_date']
             updates.append('expiration_date = ?')
-            params.append(data['expiration_date'])
+            params.append(new_expiration_date)
+        
+        # Recalculate days_to_expiration if either date changed
+        days_to_expiration_updated = False
+        new_days_to_expiration = None
+        if trade_date_updated or expiration_date_updated:
+            # Use new dates if provided, otherwise use current trade dates
+            trade_date_for_dte = new_trade_date if trade_date_updated else trade['trade_date']
+            expiration_date_for_dte = new_expiration_date if expiration_date_updated else trade['expiration_date']
+            
+            # Calculate days to expiration
+            trade_date_obj = datetime.strptime(trade_date_for_dte, '%Y-%m-%d').date()
+            expiration = datetime.strptime(expiration_date_for_dte, '%Y-%m-%d').date()
+            days_to_expiration = (expiration - trade_date_obj).days
+            days_to_expiration_updated = True
+            new_days_to_expiration = days_to_expiration
+            
+            updates.append('days_to_expiration = ?')
+            params.append(days_to_expiration)
         
         if 'num_of_contracts' in data:
             num_contracts = int(data['num_of_contracts'])
@@ -1266,6 +1549,22 @@ def update_trade(trade_id):
             new_total_premium = current_credit_debit * num_contracts
             updates.append('total_premium = ?')
             params.append(new_total_premium)
+            # Recalculate margin_capital when num_of_contracts changes
+            current_trade_type = data.get('tradeType') or trade['trade_type']
+            current_strike = float(data.get('strikePrice') or trade['strike_price'])
+            current_risk_capital = trade.get('risk_capital_per_share')
+            if current_risk_capital is not None and ('ROCT PUT' in current_trade_type or 'RULE ONE PUT' in current_trade_type or ('PUT' in current_trade_type and ('ROCT' in current_trade_type or 'RULE ONE' in current_trade_type))):
+                # For ROCT PUT and RULE ONE PUT trades, use risk_capital_per_share
+                new_margin_capital = num_contracts * 100 * current_risk_capital
+                updates.append('margin_capital = ?')
+                params.append(new_margin_capital)
+            elif current_trade_type not in ['BTO', 'STC'] and current_strike > 0:
+                # For other options trades, use standard calculation
+                current_commission = trade.get('commission_per_share', 0)
+                current_net_credit = current_credit_debit - current_commission
+                new_margin_capital = (current_strike - current_net_credit) * num_contracts * 100
+                updates.append('margin_capital = ?')
+                params.append(new_margin_capital)
         
         if 'premium' in data or 'creditDebit' in data:
             credit_debit = float(data.get('premium') or data.get('creditDebit'))
@@ -1276,18 +1575,206 @@ def update_trade(trade_id):
             new_total_premium = credit_debit * current_num_contracts
             updates.append('total_premium = ?')
             params.append(new_total_premium)
+            # Recalculate net_credit_per_share and risk_capital_per_share (net_credit rounded to 5 decimals, risk_capital to 2 decimals)
+            current_commission = trade.get('commission_per_share', 0)
+            new_net_credit = round_standard((credit_debit - current_commission), 5)
+            updates.append('net_credit_per_share = ?')
+            params.append(new_net_credit)
+            # Recalculate risk_capital_per_share for ROCT PUT and RULE ONE PUT trades
+            current_trade_type = data.get('tradeType') or trade['trade_type']
+            current_strike = float(data.get('strikePrice') or trade['strike_price'])
+            if 'ROCT PUT' in current_trade_type or 'RULE ONE PUT' in current_trade_type or ('PUT' in current_trade_type and ('ROCT' in current_trade_type or 'RULE ONE' in current_trade_type)):
+                new_risk_capital = round_standard((current_strike - new_net_credit), 2)
+                updates.append('risk_capital_per_share = ?')
+                params.append(new_risk_capital)
+                # Recalculate margin_capital for ROCT PUT and RULE ONE PUT trades
+                # Use unrounded risk_capital_per_share for margin_capital calculation
+                current_num_contracts = trade['num_of_contracts']
+                risk_capital_unrounded = current_strike - new_net_credit
+                new_margin_capital = current_num_contracts * 100 * risk_capital_unrounded
+                updates.append('margin_capital = ?')
+                params.append(new_margin_capital)
+            else:
+                updates.append('risk_capital_per_share = ?')
+                params.append(None)
+                # For other options trades, recalculate margin_capital using standard formula
+                if current_trade_type not in ['BTO', 'STC'] and current_strike > 0:
+                    current_num_contracts = trade['num_of_contracts']
+                    new_margin_capital = (current_strike - new_net_credit) * current_num_contracts * 100
+                    updates.append('margin_capital = ?')
+                    params.append(new_margin_capital)
         
         if 'currentPrice' in data:
             updates.append('current_price = ?')
             params.append(float(data['currentPrice']))
         
         if 'strikePrice' in data:
+            strike_price = round_standard(float(data['strikePrice']), 2)
             updates.append('strike_price = ?')
-            params.append(float(data['strikePrice']))
+            params.append(strike_price)
+            # Recalculate risk_capital_per_share for ROCT PUT and RULE ONE PUT trades when strike changes (rounded to nearest hundredth)
+            current_trade_type = data.get('tradeType') or trade['trade_type']
+            current_credit_debit = float(data.get('premium') or data.get('creditDebit') or trade['credit_debit'])
+            current_commission = trade.get('commission_per_share', 0)
+            current_net_credit = round_standard((current_credit_debit - current_commission), 5)
+            if 'ROCT PUT' in current_trade_type or 'RULE ONE PUT' in current_trade_type or ('PUT' in current_trade_type and ('ROCT' in current_trade_type or 'RULE ONE' in current_trade_type)):
+                new_risk_capital = round_standard((strike_price - current_net_credit), 2)
+                updates.append('risk_capital_per_share = ?')
+                params.append(new_risk_capital)
+                # Recalculate margin_capital for ROCT PUT and RULE ONE PUT trades
+                current_num_contracts = trade['num_of_contracts']
+                new_margin_capital = current_num_contracts * 100 * new_risk_capital
+                updates.append('margin_capital = ?')
+                params.append(new_margin_capital)
+            else:
+                # For other options trades, recalculate margin_capital using standard formula
+                if current_trade_type not in ['BTO', 'STC'] and strike_price > 0:
+                    current_num_contracts = trade['num_of_contracts']
+                    new_margin_capital = (strike_price - current_net_credit) * current_num_contracts * 100
+                    updates.append('margin_capital = ?')
+                    params.append(new_margin_capital)
         
         if 'tradeType' in data:
+            new_trade_type = data['tradeType']
+            
+            # Extract base trade type (before ticker prefix for options)
+            base_trade_type = new_trade_type
+            if 'ROCT PUT' in new_trade_type or 'ROCT CALL' in new_trade_type:
+                # Extract base type (e.g., "ROCT PUT" from "AAPL ROCT PUT")
+                if 'ROCT PUT' in new_trade_type:
+                    base_trade_type = 'ROCT PUT'
+                elif 'ROCT CALL' in new_trade_type:
+                    base_trade_type = 'ROCT CALL'
+            
+            # Validate that trade_type_id exists for the new trade type
+            cursor.execute('SELECT id FROM trade_types WHERE type_name = ?', (base_trade_type,))
+            trade_type_row = cursor.fetchone()
+            new_trade_type_id = trade_type_row['id'] if trade_type_row else None
+            
+            if new_trade_type_id is None:
+                conn.close()
+                return jsonify({'error': f'Invalid trade type: "{base_trade_type}" does not exist in trade_types table'}), 400
+            
+            # Update both trade_type and trade_type_id
             updates.append('trade_type = ?')
-            params.append(data['tradeType'])
+            params.append(new_trade_type)
+            updates.append('trade_type_id = ?')
+            params.append(new_trade_type_id)
+            
+            # Recalculate risk_capital_per_share based on new trade type (rounded to nearest hundredth)
+            current_credit_debit = float(data.get('premium') or data.get('creditDebit') or trade['credit_debit'])
+            current_commission = trade.get('commission_per_share', 0)
+            current_net_credit = round_standard((current_credit_debit - current_commission), 5)
+            current_strike = float(data.get('strikePrice') or trade['strike_price'])
+            if 'ROCT PUT' in new_trade_type or 'RULE ONE PUT' in new_trade_type or ('PUT' in new_trade_type and ('ROCT' in new_trade_type or 'RULE ONE' in new_trade_type)):
+                new_risk_capital = round_standard((current_strike - current_net_credit), 2)
+                updates.append('risk_capital_per_share = ?')
+                params.append(new_risk_capital)
+                # Recalculate margin_capital for ROCT PUT and RULE ONE PUT trades
+                current_num_contracts = trade['num_of_contracts']
+                new_margin_capital = current_num_contracts * 100 * new_risk_capital
+                updates.append('margin_capital = ?')
+                params.append(new_margin_capital)
+            else:
+                updates.append('risk_capital_per_share = ?')
+                params.append(None)
+                # For other options trades, recalculate margin_capital using standard formula
+                if new_trade_type not in ['BTO', 'STC'] and current_strike > 0:
+                    current_num_contracts = trade['num_of_contracts']
+                    new_margin_capital = (current_strike - current_net_credit) * current_num_contracts * 100
+                    updates.append('margin_capital = ?')
+                    params.append(new_margin_capital)
+                else:
+                    updates.append('margin_capital = ?')
+                    params.append(None)
+        
+        # Recalculate net_credit_per_share and risk_capital_per_share if commission_per_share changes
+        if 'commission_per_share' in data or 'commissionPerShare' in data:
+            commission = float(data.get('commission_per_share') or data.get('commissionPerShare'))
+            updates.append('commission_per_share = ?')
+            params.append(commission)
+            # Recalculate net_credit_per_share (rounded to 5 decimal places for storage, displayed as 2 decimals)
+            current_credit_debit = float(data.get('premium') or data.get('creditDebit') or trade['credit_debit'])
+            new_net_credit = round_standard((current_credit_debit - commission), 5)
+            updates.append('net_credit_per_share = ?')
+            params.append(new_net_credit)
+            # Recalculate risk_capital_per_share for ROCT PUT and RULE ONE PUT trades (rounded to nearest hundredth)
+            current_trade_type = data.get('tradeType') or trade['trade_type']
+            current_strike = float(data.get('strikePrice') or trade['strike_price'])
+            if 'ROCT PUT' in current_trade_type or 'RULE ONE PUT' in current_trade_type or ('PUT' in current_trade_type and ('ROCT' in current_trade_type or 'RULE ONE' in current_trade_type)):
+                new_risk_capital = round_standard((current_strike - new_net_credit), 2)
+                updates.append('risk_capital_per_share = ?')
+                params.append(new_risk_capital)
+                # Recalculate margin_capital for ROCT PUT and RULE ONE PUT trades
+                # Use unrounded risk_capital_per_share for margin_capital calculation
+                current_num_contracts = trade['num_of_contracts']
+                risk_capital_unrounded = current_strike - new_net_credit
+                new_margin_capital = current_num_contracts * 100 * risk_capital_unrounded
+                updates.append('margin_capital = ?')
+                params.append(new_margin_capital)
+            else:
+                # For other options trades, recalculate margin_capital using standard formula
+                if current_trade_type not in ['BTO', 'STC'] and current_strike > 0:
+                    current_num_contracts = trade['num_of_contracts']
+                    new_margin_capital = (current_strike - new_net_credit) * current_num_contracts * 100
+                    updates.append('margin_capital = ?')
+                    params.append(new_margin_capital)
+        
+        # Recalculate ARORC for ROCT PUT and RULE ONE PUT trades
+        # ARORC = (365 / days_to_expiration) * (net_credit_per_share / (risk_capital_per_share * margin_percent))
+        # Get current values for ARORC calculation
+        current_trade_type = data.get('tradeType') or trade['trade_type']
+        current_days_to_expiration = new_days_to_expiration if days_to_expiration_updated else trade['days_to_expiration']
+        current_net_credit = None
+        current_risk_capital = None
+        current_margin_percent = trade.get('margin_percent', 100.0)
+        
+        # Determine current net_credit_per_share (rounded to 5 decimal places for storage, displayed as 2 decimals)
+        if 'premium' in data or 'creditDebit' in data:
+            current_credit_debit = float(data.get('premium') or data.get('creditDebit'))
+            current_commission = trade.get('commission_per_share', 0)
+            current_net_credit = round_standard((current_credit_debit - current_commission), 5)
+        elif 'commission_per_share' in data or 'commissionPerShare' in data:
+            current_credit_debit = float(data.get('premium') or data.get('creditDebit') or trade['credit_debit'])
+            commission = float(data.get('commission_per_share') or data.get('commissionPerShare'))
+            current_net_credit = round_standard((current_credit_debit - commission), 5)
+        else:
+            current_net_credit = trade.get('net_credit_per_share', 0)
+        
+        # Determine current risk_capital_per_share (rounded to nearest hundredth) for storage
+        # But use unrounded value for ARORC calculation
+        current_risk_capital_for_storage = None
+        current_risk_capital_unrounded = None
+        if 'ROCT PUT' in current_trade_type or 'RULE ONE PUT' in current_trade_type or ('PUT' in current_trade_type and ('ROCT' in current_trade_type or 'RULE ONE' in current_trade_type)):
+            # Check if risk_capital_per_share was updated
+            if 'strikePrice' in data or 'premium' in data or 'creditDebit' in data or 'commission_per_share' in data or 'commissionPerShare' in data or 'tradeType' in data:
+                current_strike = float(data.get('strikePrice') or trade['strike_price'])
+                current_risk_capital_for_storage = round_standard((current_strike - current_net_credit), 2)
+                # Use unrounded value for ARORC calculation
+                current_risk_capital_unrounded = current_strike - current_net_credit
+            else:
+                current_risk_capital_for_storage = trade.get('risk_capital_per_share')
+                # Calculate unrounded value for ARORC calculation
+                current_strike = float(data.get('strikePrice') or trade['strike_price'])
+                current_risk_capital_unrounded = current_strike - current_net_credit
+        
+        # Calculate ARORC if all required values are available
+        # margin_percent is stored as a percentage (100 = 100%), so divide by 100 to get decimal multiplier
+        # Use unrounded risk_capital_per_share for ARORC calculation
+        new_arorc = None
+        if 'ROCT PUT' in current_trade_type or 'RULE ONE PUT' in current_trade_type or ('PUT' in current_trade_type and ('ROCT' in current_trade_type or 'RULE ONE' in current_trade_type)):
+            if current_risk_capital_unrounded is not None and current_risk_capital_unrounded > 0 and current_days_to_expiration > 0 and current_margin_percent > 0 and current_net_credit is not None:
+                # margin_percent is stored as percentage (100 = 100%), convert to decimal (divide by 100)
+                denominator = current_risk_capital_unrounded * (current_margin_percent / 100.0)
+                if denominator > 0:
+                    # Calculate ARORC as decimal, then convert to percentage and round to 1 decimal
+                    arorc_decimal = (365.0 / current_days_to_expiration) * (current_net_credit / denominator)
+                    new_arorc = round_standard(arorc_decimal * 100.0, 1)
+        
+        # Add ARORC update if calculated
+        if new_arorc is not None or ('ROCT PUT' not in current_trade_type and 'RULE ONE PUT' not in current_trade_type and not ('PUT' in current_trade_type and ('ROCT' in current_trade_type or 'RULE ONE' in current_trade_type))):
+            updates.append('ARORC = ?')
+            params.append(new_arorc)
         
         if updates:
             params.append(trade_id)
@@ -1501,16 +1988,177 @@ def update_trade_field(trade_id):
         if field not in valid_fields:
             return jsonify({'error': 'Invalid field'}), 400
         
+        # Get current trade to recalculate dependent fields
+        cursor.execute('SELECT * FROM trades WHERE id = ?', (trade_id,))
+        trade_row = cursor.fetchone()
+        
+        if not trade_row:
+            return jsonify({'error': 'Trade not found'}), 404
+        
+        # Convert Row to dict for easier access
+        trade = dict(trade_row)
+        
+        updates = []
+        params = []
+        
+        # Convert value to appropriate type
+        if field == 'num_of_contracts':
+            value = int(value)
+        elif field == 'credit_debit':
+            value = float(value)
+        elif field == 'strike_price':
+            value = round_standard(float(value), 2)
+        elif field == 'trade_status':
+            value = str(value)
+        
         # Update the field
-        cursor.execute(f'UPDATE trades SET {field} = ? WHERE id = ?', (value, trade_id))
+        updates.append(f'{field} = ?')
+        params.append(value)
+        
+        # Recalculate dependent fields based on what changed
+        if field == 'num_of_contracts':
+            # Recalculate total_premium
+            current_credit_debit = trade['credit_debit']
+            new_total_premium = current_credit_debit * value
+            updates.append('total_premium = ?')
+            params.append(new_total_premium)
+            
+            # Recalculate margin_capital
+            # Use unrounded risk_capital_per_share for margin_capital calculation
+            trade_type = trade['trade_type']
+            current_strike = trade['strike_price']
+            
+            if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+                # Calculate unrounded risk_capital_per_share for margin_capital
+                current_commission = trade.get('commission_per_share', 0)
+                current_net_credit = round_standard((current_credit_debit - current_commission), 5)
+                risk_capital_unrounded = current_strike - current_net_credit
+                new_margin_capital = value * 100 * risk_capital_unrounded
+                updates.append('margin_capital = ?')
+                params.append(new_margin_capital)
+            elif trade_type not in ['BTO', 'STC'] and current_strike > 0:
+                current_commission = trade.get('commission_per_share', 0)
+                current_net_credit = trade.get('net_credit_per_share', current_credit_debit - current_commission)
+                new_margin_capital = (current_strike - current_net_credit) * value * 100
+                updates.append('margin_capital = ?')
+                params.append(new_margin_capital)
+        
+        elif field == 'credit_debit':
+            # Recalculate total_premium
+            current_num_contracts = trade['num_of_contracts']
+            new_total_premium = value * current_num_contracts
+            updates.append('total_premium = ?')
+            params.append(new_total_premium)
+            
+            # Recalculate net_credit_per_share (rounded to 5 decimal places)
+            current_commission = trade.get('commission_per_share', 0)
+            new_net_credit = round_standard((value - current_commission), 5)
+            updates.append('net_credit_per_share = ?')
+            params.append(new_net_credit)
+            
+            # Recalculate risk_capital_per_share for ROCT PUT and RULE ONE PUT trades
+            trade_type = trade['trade_type']
+            current_strike = trade['strike_price']
+            new_risk_capital = None  # Initialize for ARORC calculation
+            
+            if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+                new_risk_capital = round_standard((current_strike - new_net_credit), 2)
+                updates.append('risk_capital_per_share = ?')
+                params.append(new_risk_capital)
+                
+                # Recalculate margin_capital
+                new_margin_capital = current_num_contracts * 100 * new_risk_capital
+                updates.append('margin_capital = ?')
+                params.append(new_margin_capital)
+            else:
+                updates.append('risk_capital_per_share = ?')
+                params.append(None)
+                
+                # For other options trades, recalculate margin_capital
+                if trade_type not in ['BTO', 'STC'] and current_strike > 0:
+                    new_margin_capital = (current_strike - new_net_credit) * current_num_contracts * 100
+                    updates.append('margin_capital = ?')
+                    params.append(new_margin_capital)
+            
+            # Recalculate ARORC for ROCT PUT and RULE ONE PUT trades
+            # margin_percent is stored as a percentage (100 = 100%), so divide by 100 to get decimal multiplier
+            # Use unrounded risk_capital_per_share for ARORC calculation
+            if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+                days_to_expiration = trade['days_to_expiration']
+                margin_percent = trade.get('margin_percent', 100.0)
+                
+                # Calculate unrounded risk_capital_per_share for ARORC calculation
+                risk_capital_unrounded = current_strike - new_net_credit
+                if risk_capital_unrounded > 0 and days_to_expiration > 0 and margin_percent > 0:
+                    # margin_percent is stored as percentage (100 = 100%), convert to decimal (divide by 100)
+                    denominator = risk_capital_unrounded * (margin_percent / 100.0)
+                    if denominator > 0:
+                        # Calculate ARORC as decimal, then convert to percentage and round to 1 decimal
+                        arorc_decimal = (365.0 / days_to_expiration) * (new_net_credit / denominator)
+                        new_arorc = round_standard(arorc_decimal * 100.0, 1)
+                        updates.append('ARORC = ?')
+                        params.append(new_arorc)
+        
+        elif field == 'strike_price':
+            # Recalculate risk_capital_per_share for ROCT PUT and RULE ONE PUT trades
+            trade_type = trade['trade_type']
+            current_credit_debit = trade['credit_debit']
+            current_commission = trade.get('commission_per_share', 0)
+            current_net_credit = round_standard((current_credit_debit - current_commission), 5)
+            
+            if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+                new_risk_capital = round_standard((value - current_net_credit), 2)
+                updates.append('risk_capital_per_share = ?')
+                params.append(new_risk_capital)
+                
+                # Recalculate margin_capital
+                # Use unrounded risk_capital_per_share for margin_capital calculation
+                current_num_contracts = trade['num_of_contracts']
+                risk_capital_unrounded = value - current_net_credit
+                new_margin_capital = current_num_contracts * 100 * risk_capital_unrounded
+                updates.append('margin_capital = ?')
+                params.append(new_margin_capital)
+                
+                # Recalculate ARORC
+                # margin_percent is stored as a percentage (100 = 100%), so divide by 100 to get decimal multiplier
+                # Use unrounded risk_capital_per_share for ARORC calculation
+                days_to_expiration = trade['days_to_expiration']
+                margin_percent = trade.get('margin_percent', 100.0)
+                
+                # Calculate unrounded risk_capital_per_share for ARORC calculation
+                risk_capital_unrounded = value - current_net_credit
+                if risk_capital_unrounded > 0 and days_to_expiration > 0 and margin_percent > 0:
+                    # margin_percent is stored as percentage (100 = 100%), convert to decimal (divide by 100)
+                    denominator = risk_capital_unrounded * (margin_percent / 100.0)
+                    if denominator > 0:
+                        # Calculate ARORC as decimal, then convert to percentage and round to 1 decimal
+                        arorc_decimal = (365.0 / days_to_expiration) * (current_net_credit / denominator)
+                        new_arorc = round_standard(arorc_decimal * 100.0, 1)
+                        updates.append('ARORC = ?')
+                        params.append(new_arorc)
+            else:
+                # For other options trades, recalculate margin_capital
+                if trade_type not in ['BTO', 'STC'] and value > 0:
+                    current_num_contracts = trade['num_of_contracts']
+                    new_margin_capital = (value - current_net_credit) * current_num_contracts * 100
+                    updates.append('margin_capital = ?')
+                    params.append(new_margin_capital)
+        
+        # Execute update
+        if updates:
+            params.append(trade_id)
+            query = f"UPDATE trades SET {', '.join(updates)} WHERE id = ?"
+            cursor.execute(query, params)
         
         conn.commit()
         conn.close()
         
         return jsonify({'success': True})
     except Exception as e:
+        import traceback
         print(f'Error updating trade field: {e}')
-        return jsonify({'error': 'Failed to update trade field'}), 500
+        print(f'Traceback: {traceback.format_exc()}')
+        return jsonify({'error': f'Failed to update trade field: {str(e)}'}), 500
 
 @app.route('/api/company-search')
 def company_search():
@@ -1898,6 +2546,19 @@ def get_cost_basis():
                 'total_cost_basis_per_share': total_cost_basis_per_share,
                 'trades': mapped_trades
             })
+        
+        # Sort result based on whether ticker is selected
+        if ticker:
+            # When ticker is selected: Rule One account (id=9) first
+            result.sort(key=lambda x: (
+                0 if x.get('account_id') == 9 else 1  # Rule One (id=9) comes first
+            ))
+        else:
+            # When no ticker is selected: Rule One account (id=9) first, then by ticker alphabetically
+            result.sort(key=lambda x: (
+                0 if x.get('account_id') == 9 else 1,  # Rule One (id=9) comes first
+                x.get('ticker', '').upper()  # Then sort by ticker alphabetically
+            ))
         
         conn.close()
         return jsonify(result)
@@ -2325,6 +2986,19 @@ def webhook_deploy():
         if result.returncode == 0:
             print(f"✓ Reset to origin/main: {result.stdout}")
             print(f"Deployment successful: {result.stdout}")
+            
+            # Install/update Python packages from requirements.txt
+            print("Installing/updating Python packages...")
+            install_result = subprocess.run(
+                ['pip3', 'install', '--user', '-r', 'requirements.txt'],
+                cwd=project_dir,
+                capture_output=True,
+                text=True
+            )
+            if install_result.returncode == 0:
+                print("✓ Packages installed/updated")
+            else:
+                print(f"Warning: Package installation had issues: {install_result.stderr}")
             
             # Reload WSGI application (for PythonAnywhere)
             wsgi_file = '/var/www/stockoptionstracker_pythonanywhere_com_wsgi.py'
@@ -2877,7 +3551,7 @@ def import_excel():
                     
                     num_of_contracts = int(row['num_of_contracts']) if pd.notna(row['num_of_contracts']) else 0
                     credit_debit = float(row['credit_debit']) if pd.notna(row['credit_debit']) else 0
-                    strike_price = float(row['strike_price']) if pd.notna(row['strike_price']) else 0
+                    strike_price = round_standard(float(row['strike_price']) if pd.notna(row['strike_price']) else 0, 2)
                     current_price = float(row['current_price']) if pd.notna(row['current_price']) else 0
                     
                     # Read trade_status from row 64 (required, no default)
@@ -2942,16 +3616,82 @@ def import_excel():
                     # Calculate total_premium
                     total_premium = credit_debit * num_of_contracts
                     
+                    # Get commission rate in effect at trade date
+                    cursor.execute('''
+                        SELECT commission_rate 
+                        FROM commissions 
+                        WHERE account_id = ? AND effective_date <= ?
+                        ORDER BY effective_date DESC
+                        LIMIT 1
+                    ''', (account_id, trade_date))
+                    commission_row = cursor.fetchone()
+                    commission = commission_row['commission_rate'] if commission_row else 0.0
+                    
+                    # Calculate net_credit_per_share = credit_debit - commission_per_share (rounded to 5 decimal places for storage, displayed as 2 decimals)
+                    net_credit_per_share = round_standard((credit_debit - commission), 5)
+                    
+                    # Calculate risk_capital_per_share for ROCT PUT and RULE ONE PUT trades (rounded to nearest hundredth, always rounding 0.5 up)
+                    risk_capital_per_share = None
+                    if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+                        risk_capital_per_share = round_standard((strike_price - net_credit_per_share), 2)
+                    
+                    # Calculate margin_capital for options trades
+                    # Use unrounded risk_capital_per_share for margin_capital calculation
+                    margin_capital = None
+                    if trade_type not in ['BTO', 'STC'] and strike_price > 0:
+                        # For ROCT PUT and RULE ONE PUT trades, use unrounded risk_capital_per_share
+                        if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+                            # Use unrounded risk_capital_per_share for margin_capital calculation
+                            risk_capital_unrounded = strike_price - net_credit_per_share
+                            margin_capital = num_of_contracts * 100 * risk_capital_unrounded
+                        else:
+                            # For other options trades, use the standard calculation
+                            margin_capital = (strike_price - net_credit_per_share) * num_of_contracts * 100
+                    
+                    # Set default margin_percent to 100%
+                    margin_percent = 100.0
+                    
+                    # Calculate ARORC for ROCT PUT and RULE ONE PUT trades
+                    # ARORC = (365 / days_to_expiration) * (net_credit_per_share / (risk_capital_per_share * (margin_percent / 100)))
+                    # margin_percent is stored as a percentage (100 = 100%), so divide by 100 to get decimal multiplier
+                    # Use unrounded risk_capital_per_share for ARORC calculation
+                    arorc = None
+                    if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+                        # Calculate unrounded risk_capital_per_share for ARORC calculation
+                        risk_capital_unrounded = strike_price - net_credit_per_share
+                        if risk_capital_unrounded > 0 and days_to_expiration > 0 and margin_percent > 0:
+                            # margin_percent is stored as percentage (100 = 100%), convert to decimal (divide by 100)
+                            denominator = risk_capital_unrounded * (margin_percent / 100.0)
+                            if denominator > 0:
+                                # Calculate ARORC as decimal, then convert to percentage and round to 1 decimal
+                                arorc_decimal = (365.0 / days_to_expiration) * (net_credit_per_share / denominator)
+                                arorc = round_standard(arorc_decimal * 100.0, 1)
+                    
+                    # Get trade_type_id from trade_types table
+                    # Extract base trade type (remove ticker prefix if present)
+                    base_trade_type = trade_type
+                    if ' ' in trade_type:
+                        # Check if it starts with a ticker (4-5 uppercase letters followed by space)
+                        parts = trade_type.split(' ', 1)
+                        if len(parts) == 2 and len(parts[0]) <= 5 and parts[0].isupper():
+                            base_trade_type = parts[1]  # Use the part after the ticker
+                    
+                    cursor.execute('SELECT id FROM trade_types WHERE type_name = ?', (base_trade_type,))
+                    trade_type_row = cursor.fetchone()
+                    trade_type_id = trade_type_row['id'] if trade_type_row else None
+                    
                     # Insert trade
                     cursor.execute('''
                         INSERT INTO trades 
                         (account_id, ticker_id, trade_date, expiration_date, num_of_contracts, 
                          credit_debit, total_premium, days_to_expiration, current_price, 
-                         strike_price, trade_status, trade_type, price_per_share, total_amount)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         strike_price, trade_status, trade_type, price_per_share, total_amount,
+                         commission_per_share, net_credit_per_share, risk_capital_per_share, margin_capital, margin_percent, ARORC, trade_type_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (account_id, ticker_id, trade_date, expiration_date, num_of_contracts,
                           credit_debit, total_premium, days_to_expiration, current_price,
-                          strike_price, trade_status, trade_type, current_price, total_premium))
+                          strike_price, trade_status, trade_type, current_price, total_premium,
+                          commission, net_credit_per_share, risk_capital_per_share, margin_capital, margin_percent, arorc, trade_type_id))
                     
                     trade_id = cursor.lastrowid
                     
@@ -2988,5 +3728,12 @@ def import_excel():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':
-    init_db()
+    # Run migrations first to ensure schema is up to date
+    try:
+        run_migrations()
+    except Exception as e:
+        print(f"Migration error: {e}")
+        print("Falling back to init_db() for initial setup...")
+        init_db()
+    
     app.run(debug=True, port=5005)

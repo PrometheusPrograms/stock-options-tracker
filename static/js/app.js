@@ -145,10 +145,17 @@ async function submitTradeForm(formType, action = 'addAndClose') {
     // Map form field names to backend field names
     if (formType === 'roctPut' || formType === 'roctCall') {
         // Transform options trade field names
-        data.ticker = data.underlying || data.ticker;
+        data.ticker = (data.underlying || data.ticker || '').toUpperCase();
         data.premium = data.creditDebit || data.premium;
         data.currentPrice = data.price || data.currentPrice;
-        data.tradeType = formType.toUpperCase();
+        // Set trade type with proper spacing
+        if (formType === 'roctPut') {
+            data.tradeType = 'ROCT PUT';
+        } else if (formType === 'roctCall') {
+            data.tradeType = 'ROCT CALL';
+        } else {
+            data.tradeType = formType.toUpperCase();
+        }
         
         // Convert dates from display format to YYYY-MM-DD format
         if (data.tradeDate) {
@@ -160,7 +167,7 @@ async function submitTradeForm(formType, action = 'addAndClose') {
         }
     } else if (formType === 'bto' || formType === 'stc') {
         // Map BTO/STC fields to backend expected format
-        data.ticker = data.underlying || data.ticker;
+        data.ticker = (data.underlying || data.ticker || '').toUpperCase();
         data.premium = data.purchasePrice || data.salePrice || data.premium;
         data.currentPrice = data.purchasePrice || data.salePrice || data.currentPrice;
         data.num_of_contracts = data.shares || data.num_of_contracts;
@@ -174,6 +181,10 @@ async function submitTradeForm(formType, action = 'addAndClose') {
         data.tradeType = formType.toUpperCase();
     } else {
         data.tradeType = formType;
+        // Ensure ticker is uppercase if present
+        if (data.ticker) {
+            data.ticker = data.ticker.toUpperCase();
+        }
     }
     
     try {
@@ -273,7 +284,7 @@ function setupAutocomplete(inputId, suggestionsId, onSelectCallback) {
     suggestions.addEventListener('click', function(e) {
         const item = e.target.closest('.suggestion-item');
         if (item) {
-            const symbol = item.dataset.symbol;
+            const symbol = item.dataset.symbol.toUpperCase();
             const name = item.dataset.name;
             input.value = symbol;
             suggestions.style.display = 'none';
@@ -305,7 +316,7 @@ function setupAutocomplete(inputId, suggestionsId, onSelectCallback) {
         } else if (e.key === 'Enter') {
             e.preventDefault();
             if (current) {
-                const symbol = current.dataset.symbol;
+                const symbol = current.dataset.symbol.toUpperCase();
                 const name = current.dataset.name;
                 input.value = symbol;
                 suggestions.style.display = 'none';
@@ -468,8 +479,22 @@ function setupExpirationDateCalculation(tradeDateId, expirationDateId) {
 function calculateDaysToExpiration(expirationDate, tradeDate) {
     if (!expirationDate || !tradeDate) return 0;
     
-    const expDate = new Date(expirationDate);
-    const tradeDateObj = new Date(tradeDate);
+    // Parse dates from DD-MMM-YY format to YYYY-MM-DD format first
+    const parsedExpirationDate = parseDateInput(expirationDate);
+    const parsedTradeDate = parseDateInput(tradeDate);
+    
+    if (!parsedExpirationDate || !parsedTradeDate) return 0;
+    
+    // Create Date objects from parsed dates (YYYY-MM-DD format)
+    const expDate = new Date(parsedExpirationDate + 'T00:00:00');
+    const tradeDateObj = new Date(parsedTradeDate + 'T00:00:00');
+    
+    // Check if dates are valid
+    if (isNaN(expDate.getTime()) || isNaN(tradeDateObj.getTime())) {
+        console.warn('Invalid dates for DTE calculation:', { expirationDate, tradeDate, parsedExpirationDate, parsedTradeDate });
+        return 0;
+    }
+    
     const diffTime = expDate - tradeDateObj;
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     
@@ -554,6 +579,47 @@ function setupDTECalculation(tradeDateId, expirationDateId, dteId) {
 
 function calculateARORC(rorc, dte) {
     return dte !== 0 ? (365 / dte) * rorc : 0;
+}
+
+// Calculate ARORC for ROCT PUT form
+function calculateROCTPutARORC() {
+    const strikePriceField = document.getElementById('roct-put-strike-price');
+    const creditDebitField = document.getElementById('roct-put-credit-debit');
+    const dteField = document.getElementById('roct-put-dte');
+    const arorcField = document.getElementById('roct-put-arorc');
+    
+    if (!strikePriceField || !creditDebitField || !dteField || !arorcField) {
+        return;
+    }
+    
+    const strikePrice = parseFloat(strikePriceField.value) || 0;
+    const creditDebit = parseFloat(creditDebitField.value) || 0;
+    const dte = parseFloat(dteField.value) || 0;
+    
+    // Calculate ARORC: (365 / DTE) * (net_credit_per_share / (risk_capital_per_share * margin_percent)) * 100
+    // For preview, we'll use credit_debit directly (commission will be calculated on backend)
+    // risk_capital_per_share = strike_price - net_credit_per_share
+    // net_credit_per_share ≈ credit_debit (approximation for preview)
+    // margin_percent = 100.0
+    
+    if (dte > 0 && strikePrice > 0 && creditDebit > 0) {
+        const netCreditPerShare = creditDebit; // Approximation - backend will calculate with commission
+        const riskCapitalPerShare = strikePrice - netCreditPerShare;
+        const marginPercent = 100.0; // Stored as percentage (100 = 100%)
+        
+        if (riskCapitalPerShare > 0) {
+            // margin_percent is stored as percentage (100 = 100%), convert to decimal (divide by 100)
+            const denominator = riskCapitalPerShare * (marginPercent / 100.0);
+            // Calculate ARORC as decimal, then convert to percentage and round to 1 decimal
+            const arorcDecimal = (365.0 / dte) * (netCreditPerShare / denominator);
+            const arorcPercentage = arorcDecimal * 100.0;
+            arorcField.value = parseFloat(arorcPercentage.toFixed(1));
+        } else {
+            arorcField.value = '';
+        }
+    } else {
+        arorcField.value = '';
+    }
 }
 
 // ============================================================================
@@ -1277,6 +1343,37 @@ async function updateTradeDate(tradeId, field, inputValue) {
     }
 }
 
+function convertToUppercase(inputElement) {
+    // Convert the input value to uppercase
+    if (inputElement && inputElement.value) {
+        inputElement.value = inputElement.value.toUpperCase();
+    }
+}
+
+function handleNumberInputFocus(inputElement) {
+    // Store the original value before clearing
+    if (!inputElement.dataset.originalValue) {
+        inputElement.dataset.originalValue = inputElement.value;
+    }
+    
+    // Clear the input
+    inputElement.value = '';
+}
+
+function handleNumberInputBlur(inputElement) {
+    const currentValue = inputElement.value.trim();
+    
+    // If empty, restore the original value
+    if (!currentValue) {
+        inputElement.value = inputElement.dataset.originalValue || '';
+        delete inputElement.dataset.originalValue;
+        return;
+    }
+    
+    // Clear the original value flag since we have a new value
+    delete inputElement.dataset.originalValue;
+}
+
 function handleDateInputFocus(inputElement) {
     // Store the original value before clearing
     if (!inputElement.dataset.originalValue) {
@@ -1575,13 +1672,19 @@ function updateTradesTable() {
             let cellContent = '';
             
             // Calculate financial metrics once for all cases that need them
+            // Use commission_per_share from database (account-specific and trade-date-specific)
+            const tradeCommission = trade.commission_per_share !== null && trade.commission_per_share !== undefined ? trade.commission_per_share : 0.0;
             const premium = trade.credit_debit || trade.premium;
-            const netCreditPerShare = premium - commission; // Net Credit Per Share = Credit - Commission
+            // Use net_credit_per_share from database if available, otherwise calculate
+            const netCreditPerShare = trade.net_credit_per_share !== null && trade.net_credit_per_share !== undefined ? trade.net_credit_per_share : (premium - tradeCommission);
             const netCreditTotal = netCreditPerShare * (trade.num_of_contracts * 100); // Net Credit Total = Net Credit Per Share * Shares
-            const riskCapital = trade.strike_price - netCreditPerShare; // Risk Capital = Strike - Net Credit Per Share
-            const marginCapital = riskCapital * (trade.num_of_contracts * 100);
+            // Use risk_capital_per_share from database if available, otherwise calculate
+            const riskCapital = trade.risk_capital_per_share !== null && trade.risk_capital_per_share !== undefined ? trade.risk_capital_per_share : (trade.strike_price - netCreditPerShare); // Risk Capital = Strike - Net Credit Per Share
+            // Use margin_capital from database if available, otherwise calculate
+            const marginCapital = trade.margin_capital !== null && trade.margin_capital !== undefined ? trade.margin_capital : (riskCapital * (trade.num_of_contracts * 100));
             const rorc = riskCapital !== 0 ? (netCreditPerShare / riskCapital) * 100 : 0; // RORC = Net Credit Per Share / Risk Capital
-            const arorc = trade.days_to_expiration > 0 ? (365 / trade.days_to_expiration) * rorc : 0;
+            // Calculate ARORC as percentage (already in percentage format, round to 1 decimal)
+            const arorc = trade.days_to_expiration > 0 ? parseFloat(((365 / trade.days_to_expiration) * rorc).toFixed(1)) : 0;
             
             switch (fieldIndex) {
                 case 0: // Symbol/Type (back to first row)
@@ -1632,8 +1735,9 @@ function updateTradesTable() {
                 case 9: // Shares - Read-only (calculated from num_of_contracts)
                     cellContent = `<span class="text-center">${trade.num_of_contracts * 100}</span>`;
                     break;
-                case 10: // Commission
-                    cellContent = `<span class="text-center">$${commission.toLocaleString('en-US', {minimumFractionDigits: 5, maximumFractionDigits: 5})}</span>`;
+                case 10: // Commission - Use commission_per_share from database (account-specific and trade-date-specific)
+                    const tradeCommission = trade.commission_per_share !== null && trade.commission_per_share !== undefined ? trade.commission_per_share : 0.0;
+                    cellContent = `<span class="text-center">$${tradeCommission.toLocaleString('en-US', {minimumFractionDigits: 5, maximumFractionDigits: 5})}</span>`;
                     break;
                 case 11: // Net Credit Total = Net Credit Per Share * Shares
                     cellContent = `<strong class="text-center">$${netCreditTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong>`;
@@ -1647,8 +1751,15 @@ function updateTradesTable() {
                 case 14: // RORC = Net Credit Per Share / Risk Capital
                     cellContent = `<span class="text-center">${rorc.toFixed(2)}%</span>`;
                     break;
-                case 15: // ARORC = (365 / DTE) * RORC
-                    cellContent = `<span class="text-center">${arorc.toFixed(1)}%</span>`;
+                case 15: // ARORC - Use database value if available, otherwise calculate
+                    // Database stores ARORC as percentage (20.4 = 20.4%), display directly
+                    const dbARORC = trade.ARORC !== null && trade.ARORC !== undefined ? trade.ARORC : arorc;
+                    if (dbARORC !== null && dbARORC !== undefined && !isNaN(dbARORC)) {
+                        // ARORC is stored as percentage (e.g., 20.4 for 20.4%), display directly
+                        cellContent = `<span class="text-center">${parseFloat(dbARORC).toFixed(1)}%</span>`;
+                    } else {
+                        cellContent = `<span class="text-center">-</span>`;
+                    }
                     break;
                 case 16: // Status - Editable dropdown (case-insensitive)
                     const tradeStatusLower = trade.trade_status ? trade.trade_status.toLowerCase() : 'open';
@@ -1761,7 +1872,27 @@ function updateCostBasisTable(costBasisData) {
     // Check if a ticker is selected by checking window.symbolFilter
     const isTickerSelected = window.symbolFilter && window.symbolFilter.trim() !== '';
     
-    for (const tickerData of costBasisData) {
+    // Sort cost basis data based on whether ticker is selected
+    const sortedCostBasisData = [...costBasisData].sort((a, b) => {
+        const aIsRuleOne = a.account_id === 9;
+        const bIsRuleOne = b.account_id === 9;
+        
+        // Rule One account always comes first
+        if (aIsRuleOne && !bIsRuleOne) return -1;
+        if (!aIsRuleOne && bIsRuleOne) return 1;
+        
+        if (!isTickerSelected) {
+            // When no ticker is selected, sort by ticker alphabetically
+            const tickerA = (a.ticker || '').toUpperCase();
+            const tickerB = (b.ticker || '').toUpperCase();
+            return tickerA.localeCompare(tickerB);
+        } else {
+            // When ticker is selected, keep original order (already sorted by backend with Rule One first)
+            return 0;
+        }
+    });
+    
+    for (const tickerData of sortedCostBasisData) {
         const { ticker, company_name, account_id, account_name, total_shares, total_cost_basis, total_cost_basis_per_share, trades } = tickerData;
         const accountDisplay = account_name ? ` (${account_name})` : '';
         
@@ -2090,7 +2221,7 @@ function showAllSymbols(data = null) {
     if (targetContainers.length === 0) return;
     
     // Get all unique tickers from trades data - we already have this loaded!
-    const allTickers = [...new Set(trades.map(trade => trade.ticker))].filter(ticker => ticker && ticker.trim() !== '');
+    const allTickers = [...new Set(trades.map(trade => trade.ticker))].filter(ticker => ticker && ticker.trim() !== '').sort();
     
     if (allTickers.length === 0) {
         targetContainers.forEach(c => {
@@ -2122,10 +2253,10 @@ function showAllSymbols(data = null) {
     let symbolsHtml = '<div class="row">';
     allTickers.forEach(ticker => {
         symbolsHtml += `
-            <div class="col-md-1 col-sm-2 col-3 mb-2">
-                <div class="card h-100 symbol-card" onclick="selectCostBasisSymbol('${ticker}')" style="cursor: pointer;">
-                    <div class="card-body text-center p-1">
-                        <h6 class="card-title text-primary mb-0" style="font-size: 0.8rem;">${ticker}</h6>
+            <div class="col-auto mb-2">
+                <div class="card symbol-card" onclick="selectCostBasisSymbol('${ticker}')" style="cursor: pointer; min-width: fit-content;">
+                    <div class="card-body text-center p-2 d-flex align-items-center justify-content-center">
+                        <h6 class="card-title text-primary mb-0" style="font-size: 0.8rem; white-space: nowrap; margin: 0;">${ticker}</h6>
                     </div>
                 </div>
             </div>
@@ -2234,10 +2365,10 @@ async function updateTradeStatus(tradeId, newStatus) {
 
 async function updateTradeField(tradeId, field, value) {
     try {
-        const response = await fetch(`/api/trades/${tradeId}`, {
+        const response = await fetch(`/api/trades/${tradeId}/field`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ [field]: value })
+            body: JSON.stringify({ field: field, value: value })
         });
         
         const result = await response.json();
@@ -3746,6 +3877,15 @@ function openROCTPutModal(tradeData = null) {
         document.getElementById('roct-put-dte').value = tradeData.dte;
         document.getElementById('roct-put-strike-price').value = tradeData.strike_price;
         document.getElementById('roct-put-credit-debit').value = tradeData.credit_debit;
+        document.getElementById('roct-put-quantity').value = tradeData.num_of_contracts || 1;
+        
+        // Set ARORC if available (database stores as percentage, e.g., 20.4 = 20.4%)
+        if (tradeData.ARORC !== null && tradeData.ARORC !== undefined) {
+            document.getElementById('roct-put-arorc').value = parseFloat(tradeData.ARORC).toFixed(1);
+        } else {
+            // Calculate ARORC if not available
+            calculateROCTPutARORC();
+        }
         
         // Set editing state
         form.dataset.editingTradeId = tradeData.id;
@@ -3772,6 +3912,9 @@ function openROCTPutModal(tradeData = null) {
         expirationDate.setDate(today.getDate() + 8);
         document.getElementById('roct-put-expiration-date').value = formatDate(expirationDate.toISOString().split('T')[0]);
         
+        // Set default number of contracts to 1
+        document.getElementById('roct-put-quantity').value = 1;
+        
         // Clear editing state
         form.removeAttribute('data-editing-trade-id');
         form.removeAttribute('data-editing-ticker');
@@ -3782,8 +3925,33 @@ function openROCTPutModal(tradeData = null) {
     // Setup DTE calculation
     setupDTECalculation('roct-put-trade-date', 'roct-put-expiration-date', 'roct-put-dte');
     
+    // Add event listener to DTE field to calculate ARORC when it changes
+    const dteField = document.getElementById('roct-put-dte');
+    if (dteField) {
+        // Use a MutationObserver or input event to detect when DTE is updated
+        // Since DTE is readonly, we'll listen to the change event on the date fields
+        const tradeDateField = document.getElementById('roct-put-trade-date');
+        const expirationDateField = document.getElementById('roct-put-expiration-date');
+        if (tradeDateField) {
+            tradeDateField.addEventListener('change', function() {
+                setTimeout(calculateROCTPutARORC, 100);
+            });
+        }
+        if (expirationDateField) {
+            expirationDateField.addEventListener('change', function() {
+                setTimeout(calculateROCTPutARORC, 100);
+            });
+        }
+    }
+    
     // Setup autocomplete
     setupAutocomplete('roct-put-underlying', 'roct-put-underlying-suggestions');
+    
+    // Calculate ARORC after modal is shown
+    setTimeout(() => {
+        calculateROCTPutARORC();
+    }, 100);
+    
     
     const bootstrapModal = new bootstrap.Modal(modal);
     
