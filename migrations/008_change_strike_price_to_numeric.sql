@@ -97,3 +97,4 @@ LEFT JOIN accounts a ON t.account_id = a.id;
 PRAGMA foreign_keys = ON;
 
 
+

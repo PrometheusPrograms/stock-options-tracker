@@ -133,17 +133,40 @@
         
         /* Flex container for trades and cost basis */
         .trades-cost-container {
-            display: flex;
-            flex-wrap: nowrap;
-            width: 100%;
+            display: flex !important;
+            flex-wrap: nowrap !important;
+            width: 100% !important;
+            align-items: flex-start !important;
         }
         
         .transition-width {
             transition: width 0.3s ease-in-out;
         }
         
+        /* Trades column - horizontally collapsible */
+        #trades-column {
+            flex-shrink: 0;
+            transition: width 0.3s ease-in-out, flex 0.3s ease-in-out;
+            min-width: 0;
+        }
+        
+        #trades-column.collapse:not(.show) {
+            width: 0 !important;
+            min-width: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            overflow: hidden !important;
+            flex: 0 0 0 !important;
+        }
+        
+        /* Widths will be managed by JavaScript updateColumnWidths() */
+        /* CSS only handles the collapse state */
+        
+        /* Cost basis column - horizontally collapsible */
         #cost-basis-column {
             flex-shrink: 0;
+            transition: width 0.3s ease-in-out, flex 0.3s ease-in-out;
+            min-width: 0;
         }
         
         #cost-basis-column.collapse:not(.show) {
@@ -152,17 +175,11 @@
             padding: 0 !important;
             margin: 0 !important;
             overflow: hidden !important;
+            flex: 0 0 0 !important;
         }
         
         #cost-basis-column.show {
-            width: 33.333333% !important;
-            flex: 0 0 33.333333%;
             overflow: visible;
-        }
-        
-        #trades-column {
-            flex: 1 1 auto;
-            min-width: 0;
         }
         
         #trades-column .table-responsive {
@@ -172,7 +189,7 @@
         
         /* Floating toggle button for collapsed cost basis */
         .cost-basis-collapsed-toggle {
-            position: fixed;
+            position: absolute;
             right: 0;
             z-index: 1000;
             background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
@@ -191,6 +208,32 @@
             box-shadow: -4px 0 15px rgba(0,0,0,0.3);
         }
         
+        /* Make trades-cost-container position relative for absolute positioning of toggles */
+        .trades-cost-container {
+            position: relative;
+        }
+        
+        /* Floating toggle button for collapsed trades */
+        .trades-collapsed-toggle {
+            position: absolute;
+            left: 0;
+            z-index: 1000;
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            border: none;
+            padding: 1rem 0.5rem;
+            border-radius: 0 8px 8px 0;
+            cursor: pointer;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.2);
+            transition: all 0.3s ease;
+            animation: slideInFromLeft 0.3s ease;
+        }
+        
+        .trades-collapsed-toggle:hover {
+            left: 5px;
+            box-shadow: 4px 0 15px rgba(0,0,0,0.3);
+        }
+        
         @keyframes slideInFromRight {
             from {
                 right: -50px;
@@ -198,6 +241,17 @@
             }
             to {
                 right: 0;
+                opacity: 1;
+            }
+        }
+        
+        @keyframes slideInFromLeft {
+            from {
+                left: -50px;
+                opacity: 0;
+            }
+            to {
+                left: 0;
                 opacity: 1;
             }
         }
@@ -489,11 +543,14 @@
                     <ul class="dropdown-menu dropdown-menu-end" id="header-menu-dropdown" style="min-width: 250px;">
                         <li class="dropdown-item-text fw-bold">Menu</li>
                         <li><hr class="dropdown-divider"></li>
-                        <li class="dropdown-item" onclick="toggleCommissionSettings()">
-                            <i class="fas fa-percent me-2"></i>Commissions
+                        <li class="dropdown-item" onclick="toggleAccountsSettings()">
+                            <i class="fas fa-building me-2"></i>Accounts
                         </li>
                         <li class="dropdown-item" onclick="toggleBankrollSettings()">
                             <i class="fas fa-wallet me-2"></i>Bankroll
+                        </li>
+                        <li class="dropdown-item" onclick="toggleCommissionSettings()">
+                            <i class="fas fa-percent me-2"></i>Commissions
                         </li>
                         <li class="dropdown-submenu">
                             <a class="dropdown-item dropdown-toggle" href="#" role="button" id="import-submenu-toggle">
@@ -544,20 +601,20 @@
                 <div class="control-group">
                     <label>Quick Add:</label>
                     <div class="quick-add-buttons">
-                        <button class="btn btn-sm btn-light quick-add-btn" onclick="openROCTPutModal()">
-                            <i class="fas fa-plus me-1"></i>ROP
+                        <button class="btn btn-sm btn-light quick-add-btn" onclick="openBTOModal()">
+                            <i class="fas fa-plus me-1"></i>BTO
                         </button>
                         <button class="btn btn-sm btn-light quick-add-btn" onclick="openROCTCallModal()">
                             <i class="fas fa-plus me-1"></i>ROC
                         </button>
-                        <button class="btn btn-sm btn-light quick-add-btn" onclick="openROCTPutModal()">
-                            <i class="fas fa-plus me-1"></i>ROCT PUT
-                        </button>
                         <button class="btn btn-sm btn-light quick-add-btn" onclick="openROCTCallModal()">
                             <i class="fas fa-plus me-1"></i>ROCT CALL
                         </button>
-                        <button class="btn btn-sm btn-light quick-add-btn" onclick="openBTOModal()">
-                            <i class="fas fa-plus me-1"></i>BTO
+                        <button class="btn btn-sm btn-light quick-add-btn" onclick="openROCTPutModal()">
+                            <i class="fas fa-plus me-1"></i>ROCT PUT
+                        </button>
+                        <button class="btn btn-sm btn-light quick-add-btn" onclick="openROCTPutModal()">
+                            <i class="fas fa-plus me-1"></i>ROP
                         </button>
                         <button class="btn btn-sm btn-light quick-add-btn" onclick="openSTCModal()">
                             <i class="fas fa-plus me-1"></i>STC
@@ -664,6 +721,79 @@
                                 <div class="d-flex gap-2">
                                     <button type="submit" class="btn btn-sm btn-primary" id="commission-save-btn">Save</button>
                                     <button type="button" class="btn btn-sm btn-secondary" onclick="cancelCommissionForm()">Cancel</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Accounts Settings Modal -->
+        <div id="accounts-modal" class="modal fade" tabindex="-1">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Account Management</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h6 class="mb-0">Accounts</h6>
+                            <button type="button" class="btn btn-sm btn-primary" onclick="openNewAccountForm()">
+                                <i class="fas fa-plus me-1"></i>New Account
+                            </button>
+                        </div>
+                        
+                        <div id="accounts-table-container" class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                            <table class="table table-sm table-striped">
+                                <thead class="table-light sticky-top">
+                                    <tr>
+                                        <th>Default</th>
+                                        <th>Account Name</th>
+                                        <th>Account Type</th>
+                                        <th>Starting Balance</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="accounts-table-body">
+                                    <tr>
+                                        <td colspan="5" class="text-center text-muted">Loading accounts...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <!-- New/Edit Account Form (initially hidden) -->
+                        <div id="account-form-container" style="display: none; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #dee2e6;">
+                            <h6 id="account-form-title">New Account</h6>
+                            <form id="account-form">
+                                <input type="hidden" id="account-edit-id" value="">
+                                <div class="row">
+                                    <div class="col-md-4 mb-3">
+                                        <label for="account-name-input" class="form-label">Account Name</label>
+                                        <input type="text" class="form-control form-control-sm" id="account-name-input" required>
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <label for="account-type-input" class="form-label">Account Type</label>
+                                        <select class="form-select form-select-sm" id="account-type-input" required>
+                                            <option value="PRIMARY">PRIMARY</option>
+                                            <option value="INVESTMENT">INVESTMENT</option>
+                                            <option value="TRADING">TRADING</option>
+                                            <option value="RETIREMENT">RETIREMENT</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-4 mb-3">
+                                        <label for="account-starting-balance-input" class="form-label">Starting Balance</label>
+                                        <input type="text" class="form-control form-control-sm" id="account-starting-balance-input" placeholder="$0.00" required>
+                                    </div>
+                                </div>
+                                <div class="d-flex gap-2">
+                                    <button type="submit" class="btn btn-sm btn-primary" id="account-save-btn">Save</button>
+                                    <button type="button" class="btn btn-sm btn-secondary" onclick="cancelAccountForm()">Cancel</button>
                                 </div>
                             </form>
                         </div>
@@ -866,41 +996,52 @@
         </div>
         </div>
 
+        <!-- Collapsed Sections Toggle Card (shown when both sections are collapsed) -->
+        <div class="container-fluid px-0" id="collapsed-sections-card" style="display: none; margin-top: 2.25rem;">
+            <div class="card section-card">
+                <div class="card-header bg-success text-white compact">
+                    <h5 class="mb-0 section-title" style="font-size: 1.875rem; font-weight: bold;">
+                        <i class="fas fa-bars me-2"></i>
+                        Expand Sections
+                    </h5>
+                </div>
+                <div class="card-body d-flex justify-content-between align-items-center" style="min-height: 80px;">
+                    <button class="btn btn-lg btn-success" id="trades-collapsed-card-toggle" onclick="toggleTrades()">
+                        <i class="fas fa-chevron-right me-2" id="trades-collapsed-card-icon"></i>
+                        Trades
+                    </button>
+                    <button class="btn btn-lg btn-success" id="cost-basis-collapsed-card-toggle" onclick="toggleCostBasis()">
+                        <i class="fas fa-chevron-left me-2" id="cost-basis-collapsed-card-icon"></i>
+                        Cost Basis
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Trades and Cost Basis Section -->
         <div class="container-fluid px-0">
             <div class="trades-cost-container mb-5" style="margin-top: 2.25rem;">
-                <!-- Trades Card (on the left) -->
-                <div id="trades-column" class="transition-width me-3">
+                <!-- Floating Toggle Button for Collapsed Cost Basis -->
+                <button class="cost-basis-collapsed-toggle" id="cost-basis-floating-toggle" onclick="toggleCostBasis()" style="display: none;">
+                    <i class="fas fa-chevron-left fa-lg" id="cost-basis-floating-toggle-icon"></i>
+                </button>
+                
+                <!-- Floating Toggle Button for Collapsed Trades -->
+                <button class="trades-collapsed-toggle" id="trades-floating-toggle" onclick="toggleTrades()" style="display: none;">
+                    <i class="fas fa-chevron-right fa-lg" id="trades-floating-toggle-icon"></i>
+                </button>
+                <!-- Trades Card (on the left, horizontally collapsible) -->
+                <div id="trades-column" class="collapse show flex-shrink-0 transition-width me-3">
                     <div class="card section-card" id="trades" style="width: 100%;">
-                    <div class="card-header bg-success text-white compact">
-                        <div class="d-flex align-items-center justify-content-between">
-                            <div class="d-flex align-items-center">
-                                <i class="fas fa-chevron-down section-toggle-icon" id="tradesToggleIcon" data-bs-toggle="collapse" data-bs-target="#tradesCollapse" aria-expanded="true" aria-controls="tradesCollapse"></i>
-                                <h5 class="mb-0 section-title" style="font-size: 1.875rem; font-weight: bold;">
-                                    <i class="fas fa-chart-line me-2"></i>
-                                    Trades
-                                </h5>
-                                <!-- Old controls hidden - now in universal control bar -->
-                                <div class="d-flex align-items-center ms-3" style="gap: 2px; display: none !important;">
-                                    <label for="excel-upload" class="btn btn-sm btn-light mb-0 me-2" style="cursor: pointer;">
-                                        <i class="fas fa-file-excel me-1"></i>Import Excel
-                                    </label>
-                                    <input type="file" id="excel-upload" name="file" accept=".xlsx,.xls,.xlsm" style="display: none;">
-                                    <input type="text" class="form-control form-control-sm" id="symbol-filter" placeholder="Type symbol..." autocomplete="off" style="width: 180px;">
-                                    <div id="symbol-suggestions" class="dropdown-menu filter-suggestions"></div>
-                                    <button id="clear-symbol" class="btn btn-sm btn-outline-light clear-button" onclick="clearSymbolFilter()" style="display: none;">
-                                        <i class="fas fa-times"></i>
-                                    </button>
-                                    <div class="d-flex align-items-center" style="gap: 1px;">
-                                        <button id="jump-to-cost-basis" class="btn btn-sm btn-outline-light" onclick="jumpToCostBasis()" title="Jump to Cost Basis">
-                                            <i class="fas fa-arrow-down"></i>
-                                        </button>
-                                        <button class="btn btn-sm btn-outline-light" onclick="scrollToTop()" title="Jump to Dashboard">
-                                            <i class="fas fa-level-up-alt"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
+                    <div class="card-header bg-success text-white compact d-flex justify-content-between align-items-center">
+                        <div class="d-flex align-items-center">
+                            <button class="btn btn-sm btn-light me-3" id="trades-toggle-btn" onclick="toggleTrades()">
+                                <i class="fas fa-chevron-left" id="trades-toggle-icon"></i>
+                            </button>
+                            <h5 class="mb-0 section-title" style="font-size: 1.875rem; font-weight: bold;">
+                                <i class="fas fa-chart-line me-2"></i>
+                                Trades
+                            </h5>
                             <!-- Status Filter -->
                             <div class="d-flex align-items-center ms-3" style="gap: 1px;">
                                 <label for="status-filter" class="form-label mb-0 me-1 text-white">Status:</label>
@@ -915,49 +1056,9 @@
                             </div>
                         </div>
                     </div>
-                <div class="collapse show" id="tradesCollapse">
                     <div class="card-body">
                         <div class="dashboard-content-container">
                             <div class="row">
-                                <!-- Old Add Trade box hidden - now in universal control bar -->
-                                <div class="col-md-1" style="display: none;">
-                                    <div class="card shadow-sm border-0">
-                                        <div class="card-header bg-primary text-white">
-                                            <h6 class="mb-0" style="font-size: 0.75rem;">
-                                                <i class="fas fa-plus-circle me-1"></i>
-                                                Add Trade
-                                            </h6>
-                                        </div>
-                                        <div class="card-body p-1">
-                                            <div class="d-grid gap-1">
-                                                <button class="btn btn-outline-primary btn-sm" onclick="openBTOModal()">
-                                                    BTO
-                                                </button>
-                                                <button class="btn btn-outline-primary btn-sm" onclick="addTradeType('BTC')">
-                                                    BTC
-                                                </button>
-                                                <button class="btn btn-outline-primary btn-sm" onclick="openROCTCallModal()">
-                                                    ROC
-                                                </button>
-                                                <button class="btn btn-outline-primary btn-sm" onclick="openROCTPutModal()">
-                                                    ROP
-                                                </button>
-                                                <button class="btn btn-outline-primary btn-sm" onclick="openROCTCallModal()">
-                                                    ROCT CALL
-                                                </button>
-                                                <button class="btn btn-outline-primary btn-sm" onclick="openROCTPutModal()">
-                                                    ROCT PUT
-                                                </button>
-                                                <button class="btn btn-outline-primary btn-sm" onclick="openSTCModal()">
-                                                    STC
-                                                </button>
-                                                <button class="btn btn-outline-primary btn-sm" onclick="addTradeType('STO')">
-                                                    STO
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
                                 <!-- Trades Table -->
                                 <div class="col-12">
                                     <div class="table-responsive">
@@ -969,7 +1070,6 @@
                             </div>
                         </div>
                     </div>
-                </div>
                     </div>
                 </div>
                 
@@ -977,9 +1077,12 @@
                 <div id="cost-basis-column" class="collapse show flex-shrink-0 transition-width">
                     <div class="card section-card" style="width: 100%;">
                         <div class="card-header bg-success text-white compact d-flex justify-content-between align-items-center">
-                            <div>
-                                <i class="fas fa-calculator me-2"></i>
-                                <span>Cost Basis</span>
+                            <div class="d-flex align-items-center">
+                                <div style="width: 2.5rem; margin-right: 1rem;"></div>
+                                <h5 class="mb-0 section-title" style="font-size: 1.875rem; font-weight: bold;">
+                                    <i class="fas fa-calculator me-2"></i>
+                                    Cost Basis
+                                </h5>
                             </div>
                             <button class="btn btn-sm btn-light" id="cost-basis-toggle-btn" onclick="toggleCostBasis()">
                                 <i class="fas fa-chevron-right" id="cost-basis-toggle-icon"></i>
@@ -989,58 +1092,6 @@
                             <!-- Cost basis content will be inserted here -->
                         </div>
                     </div>
-                </div>
-            </div>
-        </div>
-        </div>
-        
-        <!-- Floating Toggle Button for Collapsed Cost Basis -->
-        <button class="cost-basis-collapsed-toggle" id="cost-basis-floating-toggle" onclick="toggleCostBasis()" style="display: none;">
-            <i class="fas fa-chevron-left fa-lg" id="cost-basis-floating-toggle-icon"></i>
-        </button>
-
-        <!-- Cost Basis Section (Hidden - now inline with trades) -->
-        <div class="container-fluid px-0" style="display: none;">
-            <div class="row mb-5" style="margin-top: 2.25rem;">
-                <div class="col-12">
-                    <div class="card section-card" id="cost-basis" style="width: 100%;">
-                    <div class="card-header bg-success text-white compact">
-                        <div class="d-flex align-items-center justify-content-between">
-                            <div class="d-flex align-items-center">
-                                <i class="fas fa-chevron-down section-toggle-icon" id="costBasisToggleIcon" data-bs-toggle="collapse" data-bs-target="#costBasisCollapse" aria-expanded="true" aria-controls="costBasisCollapse"></i>
-                                <h5 class="mb-0 section-title" style="font-size: 1.875rem; font-weight: bold;">
-                                    <i class="fas fa-calculator me-2"></i>
-                                    Cost Basis
-                                </h5>
-                                <!-- Old controls hidden - now in universal control bar -->
-                                <div class="d-flex align-items-center ms-3" style="gap: 2px; display: none !important;">
-                                    <input type="text" class="form-control form-control-sm" id="cost-basis-symbol-filter" placeholder="Type symbol..." style="width: 220px;" autocomplete="off">
-                                    <div id="cost-basis-symbol-suggestions" class="dropdown-menu" style="display: none;"></div>
-                                    <button id="clear-cost-basis-symbol" class="btn btn-sm btn-outline-light" style="display: none;" onclick="clearCostBasisSymbolFilter()">
-                                        <i class="fas fa-times"></i>
-                                    </button>
-                                    <button id="jump-to-trades" class="btn btn-sm btn-outline-light" onclick="jumpToTradesTop()" title="Jump to Trades">
-                                        <i class="fas fa-arrow-up"></i>
-                                    </button>
-                                    <button class="btn btn-sm btn-outline-light" onclick="scrollToTop()" title="Jump to Dashboard">
-                                        <i class="fas fa-level-up-alt"></i>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                <div class="collapse show" id="costBasisCollapse">
-                    <div class="card-body">
-                        <div class="dashboard-content-container">
-                            <div class="row">
-                                <!-- Cost Basis Table (Full width like dashboard) -->
-                                <div class="col-12">
-                                    <div id="cost-basis-table-container"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
                 </div>
             </div>
         </div>

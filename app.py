@@ -200,15 +200,32 @@ def init_db():
             account_type TEXT DEFAULT 'PRIMARY',
             start_date TEXT,
             starting_balance REAL DEFAULT 0.0,
+            is_default BOOLEAN DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
+    # Add is_default column if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE accounts ADD COLUMN is_default BOOLEAN DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
     # Insert default accounts if they don't exist
     cursor.execute('''
-        INSERT OR IGNORE INTO accounts (account_name, account_type) 
-        VALUES ('Rule One', 'INVESTMENT')
+        INSERT OR IGNORE INTO accounts (account_name, account_type, is_default) 
+        VALUES ('Rule One', 'INVESTMENT', 1)
     ''')
+    
+    # Ensure at least one account is set as default
+    cursor.execute('SELECT COUNT(*) as count FROM accounts WHERE is_default = 1')
+    default_count = cursor.fetchone()['count']
+    if default_count == 0:
+        # Set the first account (or Rule One if it exists) as default
+        cursor.execute('SELECT id FROM accounts ORDER BY id LIMIT 1')
+        first_account = cursor.fetchone()
+        if first_account:
+            cursor.execute('UPDATE accounts SET is_default = 1 WHERE id = ?', (first_account['id'],))
     
     # Delete any "Main Account" entries
     cursor.execute('DELETE FROM accounts WHERE account_name = "Main Account"')
@@ -603,6 +620,128 @@ def create_account():
         
         return jsonify({'success': True, 'account_id': account_id})
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/accounts/<int:account_id>', methods=['PUT'])
+def update_account(account_id):
+    try:
+        data = request.get_json()
+        account_name = data.get('account_name')
+        account_type = data.get('account_type')
+        starting_balance = data.get('starting_balance')
+        is_default = data.get('is_default')
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Check if account exists
+        cursor.execute('SELECT id FROM accounts WHERE id = ?', (account_id,))
+        account = cursor.fetchone()
+        if not account:
+            conn.close()
+            return jsonify({'error': 'Account not found'}), 404
+        
+        # If setting this account as default, unset all other defaults
+        if is_default:
+            cursor.execute('UPDATE accounts SET is_default = 0 WHERE id != ?', (account_id,))
+        
+        # Update the account
+        if is_default is not None:
+            cursor.execute('''
+                UPDATE accounts 
+                SET account_name = ?, account_type = ?, starting_balance = ?, is_default = ?
+                WHERE id = ?
+            ''', (account_name, account_type, starting_balance, 1 if is_default else 0, account_id))
+        else:
+            cursor.execute('''
+                UPDATE accounts 
+                SET account_name = ?, account_type = ?, starting_balance = ?
+                WHERE id = ?
+            ''', (account_name, account_type, starting_balance, account_id))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/accounts/<int:account_id>/set-default', methods=['PUT'])
+def set_default_account(account_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Check if account exists
+        cursor.execute('SELECT id FROM accounts WHERE id = ?', (account_id,))
+        account = cursor.fetchone()
+        if not account:
+            conn.close()
+            return jsonify({'error': 'Account not found'}), 404
+        
+        # Unset all other defaults
+        cursor.execute('UPDATE accounts SET is_default = 0')
+        
+        # Set this account as default
+        cursor.execute('UPDATE accounts SET is_default = 1 WHERE id = ?', (account_id,))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/accounts/<int:account_id>', methods=['DELETE'])
+def delete_account(account_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Check if account exists
+        cursor.execute('SELECT id FROM accounts WHERE id = ?', (account_id,))
+        account = cursor.fetchone()
+        if not account:
+            conn.close()
+            return jsonify({'error': 'Account not found'}), 404
+        
+        # Check if account is referenced in trades
+        cursor.execute('SELECT COUNT(*) as count FROM trades WHERE account_id = ?', (account_id,))
+        trades_count = cursor.fetchone()['count']
+        
+        # Check if account is referenced in cost_basis
+        cursor.execute('SELECT COUNT(*) as count FROM cost_basis WHERE account_id = ?', (account_id,))
+        cost_basis_count = cursor.fetchone()['count']
+        
+        # Check if account is referenced in cash_flows
+        cursor.execute('SELECT COUNT(*) as count FROM cash_flows WHERE account_id = ?', (account_id,))
+        cash_flows_count = cursor.fetchone()['count']
+        
+        # Check if account is referenced in commissions
+        cursor.execute('SELECT COUNT(*) as count FROM commissions WHERE account_id = ?', (account_id,))
+        commissions_count = cursor.fetchone()['count']
+        
+        total_references = trades_count + cost_basis_count + cash_flows_count + commissions_count
+        
+        if total_references > 0:
+            conn.close()
+            return jsonify({
+                'error': f'Cannot delete account. It is referenced in {trades_count} trade(s), {cost_basis_count} cost basis entry(ies), {cash_flows_count} cash flow(s), and {commissions_count} commission(s).'
+            }), 400
+        
+        # Delete the account
+        cursor.execute('DELETE FROM accounts WHERE id = ?', (account_id,))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/trade-types', methods=['GET'])
@@ -2467,7 +2606,7 @@ def get_cost_basis():
         # Query cost_basis table directly instead of trades table
         if ticker:
             query = '''
-                SELECT cb.*, t.ticker, tr.trade_status as status, tr.account_id, a.account_name
+                SELECT cb.*, t.ticker, tr.trade_status as status, tr.trade_type, tr.account_id, a.account_name
                 FROM cost_basis cb
                 JOIN tickers t ON cb.ticker_id = t.id
                 LEFT JOIN trades tr ON cb.trade_id = tr.id
@@ -2482,7 +2621,7 @@ def get_cost_basis():
             cursor.execute(query, params)
         else:
             query = '''
-                SELECT cb.*, t.ticker, tr.trade_status as status, tr.account_id, a.account_name
+                SELECT cb.*, t.ticker, tr.trade_status as status, tr.trade_type, tr.account_id, a.account_name
                 FROM cost_basis cb
                 JOIN tickers t ON cb.ticker_id = t.id
                 LEFT JOIN trades tr ON cb.trade_id = tr.id
@@ -2575,7 +2714,8 @@ def get_cost_basis():
                     'running_basis': entry.get('running_basis'),
                     'running_basis_per_share': entry.get('basis_per_share'),
                     'running_shares': entry.get('running_shares'),
-                    'status': entry.get('status')  # From linked trade
+                    'trade_status': entry.get('status'),  # From linked trade
+                    'trade_type': entry.get('trade_type')  # From linked trade
                 }
                 mapped_trades.append(trade)
             

@@ -419,7 +419,7 @@ body {
 /* Table Components */
 .table-fixed {
     table-layout: fixed;
-    width: 100%;
+    /* width will be set dynamically by JavaScript */
 }
 
 .table-fixed td {
@@ -752,6 +752,46 @@ h1 {
     padding: 0.5rem 0.75rem;
 }
 
+/* Cost Basis Table Borders */
+#cost-basis-table-container .table,
+#cost-basis-inline-container .table {
+    border: 1px solid #dee2e6;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+
+#cost-basis-table-container .table th,
+#cost-basis-inline-container .table th {
+    border: 1px solid #dee2e6;
+    border-bottom: 2px solid #dee2e6;
+}
+
+#cost-basis-table-container .table td,
+#cost-basis-inline-container .table td {
+    border: 1px solid #dee2e6;
+}
+
+#cost-basis-table-container .table thead th,
+#cost-basis-inline-container .table thead th {
+    border-top: 1px solid #dee2e6;
+}
+
+/* Cost Basis Table Fixed Height - Show 10 rows (height set dynamically via JS) */
+#cost-basis-table-container .table-responsive,
+#cost-basis-inline-container .table-responsive {
+    overflow-y: auto;
+    overflow-x: auto;
+}
+
+/* Ensure table header stays visible when scrolling */
+#cost-basis-table-container .table thead,
+#cost-basis-inline-container .table thead {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background-color: #212529; /* Match table-dark background */
+}
+
 /* Number Styling */
 .text-danger {
     color: var(--danger-color) !important;
@@ -784,6 +824,21 @@ h1 {
 #trades-table-main {
     font-size: 0.875rem; /* Smaller font */
     min-width: 800px; /* Force horizontal scrolling */
+    width: auto !important; /* Let JavaScript set the width */
+    max-width: none !important; /* Allow table to be as wide as needed */
+    table-layout: fixed !important; /* Ensure fixed layout */
+}
+
+/* Ensure table container doesn't force table to stretch */
+.table-responsive {
+    overflow-x: auto;
+    overflow-y: visible;
+}
+
+/* Prevent table from stretching in responsive container */
+.table-responsive > .table-fixed {
+    width: auto !important;
+    min-width: auto !important;
 }
 
 /* Make first column sticky */
