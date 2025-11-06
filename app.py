@@ -18,7 +18,9 @@ def round_standard(value, decimals=2):
     """Round to nearest value, always rounding 0.5 up (standard rounding)"""
     if value is None:
         return None
-    return float(Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+    # Create a dynamic quantize string based on the number of decimals
+    quantize_str = '1.' + '0' * decimals
+    return float(Decimal(str(value)).quantize(Decimal(quantize_str), rounding=ROUND_HALF_UP))
 
 # Load environment variables
 load_dotenv()
