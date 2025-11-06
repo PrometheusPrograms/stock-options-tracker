@@ -20,7 +20,52 @@ except ImportError:
         logging.warning("Migrations module not available, skipping migrations")
         pass
 
-from db_helper import init_db_helper, get_db_helper
+# Import db_helper with fallback if not available
+try:
+    from db_helper import init_db_helper, get_db_helper
+    _db_helper_available = True
+except ImportError as e:
+    # Fallback if db_helper module is not available
+    logging.error(f"db_helper module not available: {e}")
+    logging.error("Please ensure db_helper.py is in the same directory as app.py")
+    _db_helper_available = False
+    
+    # Create a minimal fallback that will fail gracefully when used
+    class DummyDBHelper:
+        def __init__(self):
+            self.database_path = None
+        
+        def get_raw_connection(self):
+            raise RuntimeError("db_helper module not available. Please pull latest changes from git.")
+        
+        def get_commission_rate(self, *args, **kwargs):
+            return 0.0  # Return default commission rate
+        
+        def get_accounts(self):
+            return []
+        
+        def get_trades_filtered(self, *args, **kwargs):
+            return []
+        
+        def get_trade(self, *args, **kwargs):
+            return None
+        
+        def create_or_get_ticker(self, *args, **kwargs):
+            raise RuntimeError("db_helper module not available. Please pull latest changes from git.")
+        
+        def execute_query(self, *args, **kwargs):
+            return []
+    
+    _dummy_db_helper = DummyDBHelper()
+    
+    def init_db_helper(database_path):
+        logging.warning("db_helper not available - using dummy helper. App may not work correctly.")
+        _dummy_db_helper.database_path = database_path
+    
+    def get_db_helper():
+        if not _db_helper_available:
+            logging.warning("db_helper not available - returning dummy helper. Please pull latest changes from git.")
+        return _dummy_db_helper
 
 def round_standard(value, decimals=2):
     """Round to nearest value, always rounding 0.5 up (standard rounding)"""
