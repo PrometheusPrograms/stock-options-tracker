@@ -605,9 +605,14 @@ body {
     border-color: var(--primary-color);
 }
 
+.symbol-card {
+    min-width: fit-content;
+}
+
 .symbol-card .card-title {
     font-weight: 600;
     margin-bottom: 0.5rem;
+    white-space: nowrap;
 }
 
 /* Icon Styling */
