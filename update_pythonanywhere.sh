@@ -17,7 +17,13 @@ if git stash list | grep -q "Stash local trades.db changes"; then
     git stash drop
 fi
 
+# Install/update Python packages from requirements.txt
+echo ""
+echo "Installing/updating Python packages..."
+pip3 install --user -r requirements.txt
+
 echo "✓ Code updated successfully"
+echo "✓ Packages installed/updated"
 echo ""
 echo "Next steps:"
 echo "1. Restart your web app in the Web tab"
