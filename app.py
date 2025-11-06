@@ -11,7 +11,15 @@ import zipfile
 import logging
 import math
 from decimal import Decimal, ROUND_HALF_UP
-from migrations.migrate import run_migrations
+# Import migrations with fallback if not available
+try:
+    from migrations.migrate import run_migrations
+except ImportError:
+    # Fallback if migrations module is not available
+    def run_migrations():
+        logging.warning("Migrations module not available, skipping migrations")
+        pass
+
 from db_helper import init_db_helper, get_db_helper
 
 def round_standard(value, decimals=2):
