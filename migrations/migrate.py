@@ -33,6 +33,18 @@ def apply_migration(conn, migration_file):
     migration_number = int(Path(migration_file).stem.split('_')[0])
     cursor = conn.cursor()
     
+    # Special handling for migration 011: ALTER TABLE ADD COLUMN might fail if column exists
+    if migration_number == 11:
+        # Check if is_default column already exists
+        cursor.execute("PRAGMA table_info(accounts)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'is_default' in columns:
+            # Column already exists, skip migration but mark as applied
+            print(f"⚠ Skipping migration {migration_number}: is_default column already exists")
+            cursor.execute('INSERT INTO schema_migrations (version) VALUES (?)', (migration_number,))
+            conn.commit()
+            return conn
+    
     # Safety check: Clean up any leftover trades_new table before starting migration
     # This prevents issues if a previous migration failed partway
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades_new'")
