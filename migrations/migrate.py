@@ -240,6 +240,11 @@ def apply_migration(conn, migration_file):
                     cursor.executescript(before_rename)
                     conn.commit()  # Commit before rename
                     
+                    # Verify trades_new was created before trying to rename
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades_new'")
+                    if not cursor.fetchone():
+                        raise Exception("trades_new table was not created successfully - possible write error")
+                    
                     # Execute the rename operation (from rename_part)
                     # Extract just the ALTER TABLE statement
                     if 'ALTER TABLE trades_new RENAME TO trades' in rename_part:
@@ -254,6 +259,16 @@ def apply_migration(conn, migration_file):
                     cursor.executescript(views_part)
                     conn.commit()  # Commit view recreation
                 except Exception as e:
+                    # If migration fails, check if trades_new was created and clean it up
+                    try:
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades_new'")
+                        if cursor.fetchone():
+                            print(f"⚠ Migration {migration_number} failed. Cleaning up trades_new table...")
+                            cursor.execute('DROP TABLE IF EXISTS trades_new')
+                            conn.commit()
+                    except Exception as cleanup_error:
+                        print(f"⚠ Error during cleanup: {cleanup_error}")
+                    # Re-raise the original error
                     raise
             else:
                 # Can't split, fall back to normal execution
@@ -273,11 +288,15 @@ def apply_migration(conn, migration_file):
             cursor.executescript(sql)
         except Exception as e:
             # If migration fails, check if trades_new was created and clean it up
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades_new'")
-            if cursor.fetchone():
-                print(f"⚠ Migration {migration_number} failed. Cleaning up trades_new table...")
-                cursor.execute('DROP TABLE IF EXISTS trades_new')
-                conn.rollback()
+            try:
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades_new'")
+                if cursor.fetchone():
+                    print(f"⚠ Migration {migration_number} failed. Cleaning up trades_new table...")
+                    cursor.execute('DROP TABLE IF EXISTS trades_new')
+                    conn.commit()
+            except Exception as cleanup_error:
+                print(f"⚠ Error during cleanup: {cleanup_error}")
+            # Re-raise the original error
             raise
     
     # Safety check: After migration, ensure trades_new doesn't exist (it should have been renamed)
