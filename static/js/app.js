@@ -204,6 +204,10 @@ async function submitTradeForm(formType, action = 'addAndClose') {
         if (result.success) {
             const wasFromCostBasis = modal.dataset.fromCostBasis === 'true';
             
+            // Capture ticker information before resetting modal state
+            const editingTicker = modal.dataset.editingTicker || null;
+            const tradeTicker = data.ticker || editingTicker || null;
+            
             if (action === 'addAndClose' || action === 'save' || wasFromCostBasis) {
                 const modalInstance = bootstrap.Modal.getInstance(modal);
                 modalInstance.hide();
@@ -219,16 +223,52 @@ async function submitTradeForm(formType, action = 'addAndClose') {
             modal.dataset.fromCostBasis = '';
             modal.dataset.editingTicker = '';
             
-            // Reload data
+            // Determine which ticker to show in cost basis and set filter if needed
+            let tickerToShow = null;
+            let filterWasSet = false;
+            if (wasFromCostBasis) {
+                // If opened from cost basis, use the editing ticker or selected ticker
+                tickerToShow = editingTicker || selectedTicker || window.symbolFilter || null;
+            } else {
+                // If opened from quick add, check if there's a currently selected ticker in cost basis
+                const currentTicker = window.symbolFilter || null;
+                if (currentTicker && tradeTicker && currentTicker.toUpperCase() === tradeTicker.toUpperCase()) {
+                    // If the trade is for the currently selected ticker, preserve the view
+                    tickerToShow = currentTicker;
+                } else if (tradeTicker) {
+                    // If there's a ticker in the trade data, show that ticker's details
+                    tickerToShow = tradeTicker;
+                    
+                    // If no symbol filter is currently set, check if cost basis table is showing a specific ticker
+                    if (!currentTicker || currentTicker.trim() === '') {
+                        // Try to get the ticker from the cost basis table if it's showing details
+                        const costBasisTicker = getTickerFromCostBasisTable();
+                        if (costBasisTicker) {
+                            // Set the universal ticker filter to the ticker displayed in cost basis table
+                            setUniversalTickerFilterSilent(costBasisTicker);
+                            tickerToShow = costBasisTicker;
+                            filterWasSet = true;
+                        } else {
+                            // If no ticker found in cost basis table, use the trade ticker and set filter
+                            setUniversalTickerFilterSilent(tradeTicker);
+                            filterWasSet = true;
+                        }
+                    } else {
+                        // Filter is already set, just update it silently
+                        setUniversalTickerFilterSilent(tradeTicker);
+                        filterWasSet = true;
+                    }
+                } else {
+                    // Otherwise, show all symbols
+                    tickerToShow = null;
+                }
+            }
+            
+            // Reload data after filter is set (if it was set)
+            // This ensures trades and dashboard use the new filter
             await loadTrades();
             loadSummary();
-            
-            if (wasFromCostBasis) {
-                const editingTicker = modal.dataset.editingTicker || selectedTicker;
-                await loadCostBasis(editingTicker);
-            } else {
-                await loadCostBasis();
-            }
+            await loadCostBasis(tickerToShow);
         } else {
             alert(`Failed to ${editingTradeId ? 'update' : 'add'} ${formType} trade: ` + result.error);
         }
@@ -1153,6 +1193,13 @@ async function updateBankroll(statusFilter = null) {
 async function loadCostBasis(ticker = null) {
     console.log('loadCostBasis called with ticker:', ticker);
     try {
+        // Set window.symbolFilter to match the ticker parameter so updateCostBasisTable knows a ticker is selected
+        if (ticker) {
+            window.symbolFilter = ticker;
+        } else {
+            window.symbolFilter = '';
+        }
+        
         // Get account filter
         const accountFilter = document.getElementById('universal-account-filter')?.value || '';
         
@@ -1454,6 +1501,100 @@ function getTodayInDDMMMYY() {
     return `${day}-${month}-${year}`;
 }
 
+function handleDateInputBlurForRollField(inputElement, tradeId) {
+    // First call the standard blur handler to format the date
+    handleDateInputBlur(inputElement);
+    
+    // Then parse the formatted date and auto-save
+    const formattedValue = inputElement.value;
+    if (formattedValue) {
+        // Parse DD-MMM-YY format to YYYY-MM-DD for database
+        const parsedDate = parseDateInput(formattedValue);
+        if (parsedDate) {
+            // Get the field name from the input element
+            const field = inputElement.dataset.field || 'expiration_date';
+            
+            // Auto-save the parsed date
+            autoSaveTradeField(tradeId, field, parsedDate);
+            
+            // Update DTE cell if expiration_date or trade_date changed
+            if (field === 'expiration_date') {
+                updateDTECell(tradeId, parsedDate);
+            } else if (field === 'trade_date') {
+                // When trade_date changes, we need to recalculate DTE using the current expiration_date
+                // The trade object in memory should already be updated with the new trade_date
+                const trade = trades.find(t => t.id === tradeId);
+                if (trade && trade.expiration_date) {
+                    // Use the updated trade_date from memory (which was just updated)
+                    updateDTECell(tradeId, trade.expiration_date);
+                }
+            }
+        }
+    }
+}
+
+function updateDTECell(tradeId, expirationDate) {
+    // Find the trade in memory
+    const trade = trades.find(t => t.id === tradeId);
+    if (!trade) return;
+    
+    // Calculate new DTE
+    const tradeDate = trade.trade_date;
+    if (tradeDate && expirationDate) {
+        const newDTE = calculateDaysToExpiration(expirationDate, tradeDate);
+        
+        // Update trade in memory
+        trade.days_to_expiration = newDTE;
+        trade.expiration_date = expirationDate;
+        
+        // The table is transposed: rows are fields, columns are trades
+        // DTE is fieldIndex 6, so we need to find row index 6 (0-based)
+        // Then find the column for this trade_id
+        
+        const tbody = document.getElementById('trades-table');
+        if (!tbody) return;
+        
+        const rows = tbody.querySelectorAll('tr');
+        if (rows.length <= 6) return; // DTE row doesn't exist
+        
+        // DTE row is at index 6 (fieldIndex 6)
+        const dteRow = rows[6];
+        if (!dteRow) return;
+        
+        // Find the column index for this trade
+        // The first column (index 0) is the field name, so trade columns start at index 1
+        // We need to find which column (td) corresponds to this trade_id
+        let tradeColumnIndex = -1;
+        
+        // Look for an input with this trade_id in any row to find the column index
+        for (let i = 0; i < rows.length; i++) {
+            const cells = rows[i].querySelectorAll('td');
+            // Skip the first cell (field name) and check data cells
+            for (let j = 1; j < cells.length; j++) {
+                const input = cells[j].querySelector(`input[data-trade-id="${tradeId}"]`);
+                if (input) {
+                    tradeColumnIndex = j; // j is already the correct index (includes field name column)
+                    break;
+                }
+            }
+            if (tradeColumnIndex !== -1) break;
+        }
+        
+        if (tradeColumnIndex !== -1) {
+            const cells = dteRow.querySelectorAll('td');
+            if (cells[tradeColumnIndex]) {
+                const dteCell = cells[tradeColumnIndex];
+                const span = dteCell.querySelector('span.text-center');
+                if (span) {
+                    span.textContent = newDTE;
+                } else {
+                    dteCell.textContent = newDTE;
+                }
+            }
+        }
+    }
+}
+
 
 function getTodayInMMDDYY() {
     const today = new Date();
@@ -1492,20 +1633,163 @@ function updateTradesTable() {
         filteredTrades = filteredTrades.filter(trade => trade.ticker === window.symbolFilter);
     }
     
+    // First, identify related trades using trade_parent_id BEFORE sorting
+    // Trades are related if one has trade_parent_id pointing to the other
+    // Handle chains of related trades: A -> B -> C -> D should all be grouped together
+    const processedChildTrades = new Set();
+    const parentTradeMap = new Map(); // Maps parent trade id to child trade
+    const childToParentMap = new Map(); // Maps child trade id to parent trade id
+    const tradeChainMap = new Map(); // Maps original trade id to array of all related trades in chain
+    
+    // Build chains of related trades
+    // First, build parent-child relationships
+    // Use a map that can store multiple children per parent (for chains)
+    // Exclude expired trades from chains - they shouldn't be part of roll chains
+    const parentToChildrenMap = new Map(); // Maps parent trade id to array of child trades
+    
+    filteredTrades.forEach(trade => {
+        // If this trade has a parent, find the parent trade
+        if (trade.trade_parent_id) {
+            const parentTrade = filteredTrades.find(t => t.id === trade.trade_parent_id);
+            if (parentTrade && !processedChildTrades.has(trade.id)) {
+                // Store in parentTradeMap for backward compatibility (single child)
+                parentTradeMap.set(parentTrade.id, trade);
+                // Also store in parentToChildrenMap (multiple children)
+                if (!parentToChildrenMap.has(parentTrade.id)) {
+                    parentToChildrenMap.set(parentTrade.id, []);
+                }
+                parentToChildrenMap.get(parentTrade.id).push(trade);
+                childToParentMap.set(trade.id, parentTrade.id);
+                processedChildTrades.add(trade.id);
+            }
+        }
+    });
+    
+    // Build chains: find all chains of related trades
+    // A chain can start from any trade and follow its descendants
+    // Reset processedChildTrades for chain building (we'll rebuild it)
+    processedChildTrades.clear();
+    
+    // First, find all trades that are part of a chain (have a parent or have children)
+    const tradesInChains = new Set();
+    filteredTrades.forEach(trade => {
+        if (trade.trade_parent_id || parentTradeMap.has(trade.id)) {
+            tradesInChains.add(trade.id);
+        }
+    });
+    
+    // Build chains: find all chains of related trades
+    // For each trade that has a parent, find the root of its chain and build the full chain
+    // Exclude expired trades from chains - they shouldn't be part of roll chains
+    filteredTrades.forEach(trade => {
+        // Skip if already processed as part of another chain
+        if (processedChildTrades.has(trade.id)) {
+            return;
+        }
+        
+        // Find the root trade (the one with no parent in this chain)
+        // If this trade has no parent, it might be the root, or it might be an orphan
+        let rootTrade = trade;
+        const visited = new Set();
+        
+        // Walk up to find the root
+        while (rootTrade.trade_parent_id) {
+            if (visited.has(rootTrade.id)) {
+                break; // Avoid infinite loops
+            }
+            visited.add(rootTrade.id);
+            
+            const parentTrade = filteredTrades.find(t => t.id === rootTrade.trade_parent_id);
+            if (!parentTrade) {
+                break; // Parent not found in filtered trades
+            }
+            rootTrade = parentTrade;
+        }
+        
+        // Skip if root is already processed (part of another chain)
+        if (processedChildTrades.has(rootTrade.id) && rootTrade.id !== trade.id) {
+            return;
+        }
+        
+        // Build chain starting from root trade
+        const chain = [rootTrade];
+        let currentTrade = rootTrade;
+        const chainVisited = new Set([rootTrade.id]);
+        
+        // Follow the chain of child trades
+        // Use parentToChildrenMap to get all children, then follow the chain
+        while (parentToChildrenMap.has(currentTrade.id)) {
+            const children = parentToChildrenMap.get(currentTrade.id);
+            // For chains, we want the first child (chronologically by trade_date)
+            // Sort children by trade_date to get the next in sequence
+            const sortedChildren = children.sort((a, b) => {
+                const aDate = new Date(a.trade_date || a.created_at);
+                const bDate = new Date(b.trade_date || b.created_at);
+                return aDate - bDate;
+            });
+            
+            // Get the first child that hasn't been visited
+            const childTrade = sortedChildren.find(child => !chainVisited.has(child.id));
+            if (!childTrade) {
+                break; // No more children to add
+            }
+            
+            // Check if child trade is already in a chain (avoid duplicates)
+            if (chainVisited.has(childTrade.id)) {
+                break;
+            }
+            chain.push(childTrade);
+            chainVisited.add(childTrade.id);
+            currentTrade = childTrade;
+        }
+        
+        // Also check if there are any trades that should be part of this chain
+        // (e.g., trades that have the last trade in the chain as their parent)
+        // Exclude expired trades
+        if (chain.length > 0) {
+            const lastTradeInChain = chain[chain.length - 1];
+            // Check if any other trades have this trade as their parent
+            filteredTrades.forEach(t => {
+                if (t.trade_parent_id === lastTradeInChain.id && !chainVisited.has(t.id)) {
+                    chain.push(t);
+                    chainVisited.add(t.id);
+                }
+            });
+        }
+        
+        // Only store chains with more than one trade
+        if (chain.length > 1) {
+            // Use the first trade in the chain as the key
+            tradeChainMap.set(chain[0].id, chain);
+            console.log(`Built chain starting from trade ${chain[0].id} (${chain[0].ticker} ${chain[0].trade_date}):`, chain.map(t => `${t.id} (${t.trade_date})`).join(' -> '));
+            // Mark all trades in the chain as processed (except the first)
+            chain.slice(1).forEach(childTrade => {
+                processedChildTrades.add(childTrade.id);
+            });
+        }
+    });
+    
     // Sort trades if sort column is specified
+    // For child trades (with trade_parent_id), use their parent trade's date for sorting so they stay grouped
     if (sortColumn === 'trade_date') {
         filteredTrades.sort((a, b) => {
+            // If either trade is a child trade, use its parent trade's date for sorting
+            const aParentId = childToParentMap.get(a.id);
+            const aTradeForSort = aParentId ? filteredTrades.find(t => t.id === aParentId) : a;
+            const bParentId = childToParentMap.get(b.id);
+            const bTradeForSort = bParentId ? filteredTrades.find(t => t.id === bParentId) : b;
+            
             // Primary sort: trade_date (when trade was executed)
-            const aTradeDate = new Date(a.trade_date || a.created_at);
-            const bTradeDate = new Date(b.trade_date || b.created_at);
+            const aTradeDate = new Date(aTradeForSort.trade_date || aTradeForSort.created_at);
+            const bTradeDate = new Date(bTradeForSort.trade_date || bTradeForSort.created_at);
             
             // Secondary sort: ticker symbol (alphabetical)
-            const aTicker = (a.ticker || '').toUpperCase();
-            const bTicker = (b.ticker || '').toUpperCase();
+            const aTicker = (aTradeForSort.ticker || '').toUpperCase();
+            const bTicker = (bTradeForSort.ticker || '').toUpperCase();
             
             // Tertiary sort: account (Rule One first)
-            const aAccountName = a.account_name || '';
-            const bAccountName = b.account_name || '';
+            const aAccountName = aTradeForSort.account_name || '';
+            const bAccountName = bTradeForSort.account_name || '';
             const aAccountOrder = aAccountName === 'Rule One' ? 0 : 1;
             const bAccountOrder = bAccountName === 'Rule One' ? 0 : 1;
             
@@ -1547,15 +1831,22 @@ function updateTradesTable() {
         });
     } else if (sortColumn) {
         // Handle other sort columns
+        // For child trades (with trade_parent_id), use their parent trade for sorting
         filteredTrades.sort((a, b) => {
+            // If either trade is a child trade, use its parent trade for sorting
+            const aParentId = childToParentMap.get(a.id);
+            const aTradeForSort = aParentId ? filteredTrades.find(t => t.id === aParentId) : a;
+            const bParentId = childToParentMap.get(b.id);
+            const bTradeForSort = bParentId ? filteredTrades.find(t => t.id === bParentId) : b;
+            
             let aVal, bVal;
             
             if (sortColumn === 'expiration_date') {
-                aVal = new Date(a.expiration_date);
-                bVal = new Date(b.expiration_date);
+                aVal = new Date(aTradeForSort.expiration_date);
+                bVal = new Date(bTradeForSort.expiration_date);
             } else {
-                aVal = a[sortColumn];
-                bVal = b[sortColumn];
+                aVal = aTradeForSort[sortColumn];
+                bVal = bTradeForSort[sortColumn];
             }
             
             if (sortDirection === 'asc') {
@@ -1566,14 +1857,21 @@ function updateTradesTable() {
         });
     } else {
         // Default sort: newest trades on the right (reverse chronological order)
+        // For child trades (with trade_parent_id), use their parent trade for sorting
         filteredTrades.sort((a, b) => {
+            // If either trade is a child trade, use its parent trade for sorting
+            const aParentId = childToParentMap.get(a.id);
+            const aTradeForSort = aParentId ? filteredTrades.find(t => t.id === aParentId) : a;
+            const bParentId = childToParentMap.get(b.id);
+            const bTradeForSort = bParentId ? filteredTrades.find(t => t.id === bParentId) : b;
+            
             // Primary sort: created_at (when trade was added to system)
-            const aCreated = new Date(a.created_at);
-            const bCreated = new Date(b.created_at);
+            const aCreated = new Date(aTradeForSort.created_at);
+            const bCreated = new Date(bTradeForSort.created_at);
             
             // Secondary sort: trade_date (when trade was executed)
-            const aTradeDate = new Date(a.trade_date || a.created_at);
-            const bTradeDate = new Date(b.trade_date || b.created_at);
+            const aTradeDate = new Date(aTradeForSort.trade_date || aTradeForSort.created_at);
+            const bTradeDate = new Date(bTradeForSort.trade_date || bTradeForSort.created_at);
             
             // Sort oldest first (so newest appears rightmost in transposed table)
             if (aCreated.getTime() !== bCreated.getTime()) {
@@ -1586,22 +1884,51 @@ function updateTradesTable() {
     
     console.log('Sorted trades (oldest to newest):', filteredTrades.map(t => `${t.ticker} ${t.trade_type} (${t.created_at})`));
     
+    // Build grouped trades array: each entry is either a single trade, a chain, or [parent, child]
+    // Related trades (via trade_parent_id) will stay grouped together regardless of sort order
+    const groupedTrades = [];
+    
+    filteredTrades.forEach(trade => {
+        // Skip child trades (they'll be added with their parent/chain)
+        if (processedChildTrades.has(trade.id)) {
+            return;
+        }
+        
+        // Check if this trade is part of a chain (has multiple descendants)
+        const chain = tradeChainMap.get(trade.id);
+        if (chain && chain.length > 1) {
+            // Add all trades in the chain together
+            groupedTrades.push({ type: 'chain', trades: chain });
+        } else {
+            // Check if this trade has a child trade (via trade_parent_id) - single parent-child pair
+            const childTrade = parentTradeMap.get(trade.id);
+            if (childTrade) {
+                // Add both parent and child trade together
+                groupedTrades.push({ type: 'group', original: trade, roll: childTrade });
+            } else {
+                // Add single trade
+                groupedTrades.push({ type: 'single', trade: trade });
+            }
+        }
+    });
+    
     // Always show all trades but mark filtered ones as hidden
-    const allTrades = filteredTrades; // Use the sorted filteredTrades
+    const allTrades = filteredTrades; // Use the sorted filteredTrades for backward compatibility
     const visibleTrades = filteredTrades;
     
     // Create transposed table structure - no header row
     const fieldNames = [
         '', // Empty for symbol/type row (no label)
         'Account', // Account row
+        'Ticker', // Ticker row
         'Trade Date', // Trade Date row
-        'Price', // Moved Trade Price to third row and renamed
-        'Exp Date', // Moved Expiration to fourth row and renamed
-        'DTE', // Moved Days to Exp to fifth row and renamed
-        'Strike', // Moved Strike Price to sixth row and renamed
-        'Credit', // Moved Premium to seventh row and renamed
+        'Price', // Moved Trade Price to fourth row and renamed
+        'Exp Date', // Moved Expiration to fifth row and renamed
+        'DTE', // Moved Days to Exp to sixth row and renamed
+        'Strike', // Moved Strike Price to seventh row and renamed
+        'Credit', // Moved Premium to eighth row and renamed
         'Contracts', // New row - Contracts (num_of_contracts)
-        'Shares', // Moved Shares to ninth row
+        'Shares', // Moved Shares to tenth row
         'Commission', // New row - Commission per trade
         'Net Credit Total', // Renamed from Net Credit - Net Credit Per Share * Shares
         'Risk Capital', // New row - Risk Capital = Strike - Net Credit Per Share
@@ -1620,7 +1947,7 @@ function updateTradesTable() {
         const row = document.createElement('tr');
         
         // Special handling for Trade Date row - make it sortable
-        if (fieldIndex === 2 && fieldName === 'Trade Date') {
+        if (fieldIndex === 3 && fieldName === 'Trade Date') {
             const sortIcon = sortColumn === 'trade_date' 
                 ? (sortDirection === 'asc' ? '<i class="fas fa-sort-up"></i>' : '<i class="fas fa-sort-down"></i>')
                 : '<i class="fas fa-sort text-muted"></i>';
@@ -1635,24 +1962,88 @@ function updateTradesTable() {
         // Apply fixed row height - 30px
         row.style.height = '30px';
         
-        // Apply fixed column width for first column (field names) - 150px
+        // Apply fixed column width for first column (field names) - 105px (reduced from 150px for condensed layout)
         const firstCell = row.querySelector('td');
         if (firstCell) {
-            firstCell.style.width = '150px';
-            firstCell.style.minWidth = '150px';
-            firstCell.style.maxWidth = '150px';
+            firstCell.style.width = '105px';
+            firstCell.style.minWidth = '105px';
+            firstCell.style.maxWidth = '105px';
             firstCell.style.textAlign = 'center';
             firstCell.style.whiteSpace = 'normal';
             firstCell.style.wordWrap = 'break-word';
             firstCell.style.verticalAlign = 'middle';
-            firstCell.style.backgroundColor = 'transparent';
+            // Force white background with !important
+            firstCell.style.setProperty('background-color', '#ffffff', 'important');
+            firstCell.style.setProperty('background', '#ffffff', 'important');
+            // Force visible borders and high z-index to cover scrolling columns
+            firstCell.style.setProperty('border-left', '1px solid #dee2e6', 'important');
+            firstCell.style.setProperty('border-right', '2px solid #dee2e6', 'important');
+            firstCell.style.setProperty('border-top', '1px solid #dee2e6', 'important');
+            firstCell.style.setProperty('border-bottom', '1px solid #dee2e6', 'important');
+            firstCell.style.setProperty('border-style', 'solid', 'important');
+            firstCell.style.setProperty('position', 'sticky', 'important');
+            firstCell.style.setProperty('left', '0', 'important');
+            firstCell.style.setProperty('z-index', '100', 'important');
+            firstCell.style.setProperty('isolation', 'isolate', 'important');
+            firstCell.style.setProperty('overflow', 'visible', 'important');
+            firstCell.classList.add('trades-first-column');
+            
+            // Create overlay element to cover scrolling columns
+            // position: sticky works as a positioned ancestor for absolute children
+            const overlay = document.createElement('div');
+            overlay.style.position = 'absolute';
+            overlay.style.top = '0';
+            overlay.style.right = '-6px';
+            overlay.style.bottom = '0';
+            overlay.style.width = '6px';
+            overlay.style.backgroundColor = '#ffffff';
+            overlay.style.zIndex = '101';
+            overlay.style.pointerEvents = 'none';
+            firstCell.appendChild(overlay);
         }
         
         // Build cell HTML using array for better performance
         const cellHTMLs = [];
         
-        // Create columns for ALL trades (unlimited scalability)
-        allTrades.forEach((trade, tradeIndex) => {
+        // Add spacer column after the first column (field names) - make it sticky
+        cellHTMLs.push(`<td class="sticky-spacer-column" style="width: 14px; min-width: 14px; max-width: 14px; padding: 0; background-color: #f5f7fa; border-left: 2px solid #dee2e6 !important; border-right: none !important; border-top: none !important; border-bottom: none !important; position: sticky; left: 105px; z-index: 9;"></td>`);
+        
+        // Create columns for grouped trades with spacers
+        groupedTrades.forEach((group, groupIndex) => {
+            // Add spacer before each group (except the first) with a visual separator
+            if (groupIndex > 0) {
+                // Add a visible border/divider in the spacer column to separate groups
+                cellHTMLs.push(`<td style="width: 14px; min-width: 14px; max-width: 14px; padding: 0; background-color: #f5f7fa; border-left: 2px solid #dee2e6 !important; border-right: none !important; border-top: none !important; border-bottom: none !important;"></td>`);
+            }
+            
+            // Render trades in this group
+            // For grouped trades, sort by trade_date within the group
+            let tradesToRender;
+            if (group.type === 'chain') {
+                // Chain of related trades: A -> B -> C -> D
+                tradesToRender = group.trades;
+                // Sort by trade_date within the chain
+                tradesToRender.sort((a, b) => {
+                    const aDate = new Date(a.trade_date || a.created_at);
+                    const bDate = new Date(b.trade_date || b.created_at);
+                    return aDate - bDate; // Oldest first
+                });
+            } else if (group.type === 'group') {
+                tradesToRender = [group.original, group.roll];
+                // Sort by trade_date within the group
+                tradesToRender.sort((a, b) => {
+                    const aDate = new Date(a.trade_date || a.created_at);
+                    const bDate = new Date(b.trade_date || b.created_at);
+                    return aDate - bDate;
+                });
+            } else {
+                tradesToRender = [group.trade];
+            }
+            
+            // Track if this is the first trade in a group to add left border
+            let isFirstTradeInGroup = true;
+            
+            tradesToRender.forEach((trade) => {
             // Check if this trade should be visible based on filters
             const isVisible = visibleTrades.some(visibleTrade => visibleTrade.id === trade.id);
             const tradeType = trade.trade_type || 'ROCT PUT';
@@ -1688,11 +2079,14 @@ function updateTradesTable() {
             // Calculate ARORC as percentage (already in percentage format, round to 1 decimal)
             const arorc = trade.days_to_expiration > 0 ? parseFloat(((365 / trade.days_to_expiration) * rorc).toFixed(1)) : 0;
             
+            // Calculate today's date once for all cases
+            const todayDate = new Date();
+            const todayISO = todayDate.toISOString().split('T')[0];
+            
             switch (fieldIndex) {
                 case 0: // Symbol/Type (back to first row)
-                    const today = new Date();
                     const expirationDate = new Date(trade.expiration_date);
-                    const isExpired = trade.trade_status && trade.trade_status.toLowerCase() === 'open' && today > expirationDate;
+                    const isExpired = trade.trade_status && trade.trade_status.toLowerCase() === 'open' && todayDate > expirationDate;
                     // Use type_name from trade_types table if available, otherwise use trade.ticker + tradeType
                     const displayType = trade.type_name ? `${trade.ticker} ${trade.type_name}` : `${trade.ticker} ${tradeType}`;
                     cellContent = `<div style="text-align: center; white-space: normal; word-wrap: break-word; vertical-align: top;"><strong>${isExpired ? '<i class="fas fa-exclamation-triangle text-danger me-1" title="Expired"></i>' : ''}<span class="clickable-symbol" onclick="filterBySymbol('${trade.ticker}')" style="cursor: pointer; color: #007bff; text-decoration: underline;">${displayType}</span></strong></div>`;
@@ -1701,27 +2095,122 @@ function updateTradesTable() {
                     const accountName = trade.account_name || 'Unknown';
                     cellContent = `<span class="text-center">${accountName}</span>`;
                     break;
-                case 2: // Trade Date - Read-only
-                    const tradeDateDisplay = formatDate(trade.trade_date || trade.created_at);
-                    cellContent = `<span class="text-center">${tradeDateDisplay}</span>`;
+                case 2: // Ticker - Editable for all trades
+                    cellContent = `
+                        <input type="text" 
+                               class="form-control form-control-sm text-center" 
+                               value="${trade.ticker || ''}" 
+                               data-trade-id="${trade.id}" 
+                               data-field="ticker" 
+                               data-field-row="2"
+                               onfocus="this.select()"
+                               onkeydown="handleTabNavigation(event, ${trade.id}, 2)"
+                               oninput="autoSaveTradeField(${trade.id}, 'ticker', this.value.toUpperCase())"
+                               style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem; text-transform: uppercase;">
+                    `;
                     break;
-                case 3: // Price - Read-only
-                    cellContent = `<span class="text-center">$${parseFloat(trade.current_price || trade.price || 0).toFixed(2)}</span>`;
+                case 3: // Trade Date - Editable for all trades
+                    // Make editable with auto-save using DD-MMM-YY format like quick add modal
+                    const tradeDateValue = trade.trade_date ? formatDate(trade.trade_date) : getTodayInDDMMMYY();
+                    cellContent = `
+                        <input type="text" 
+                               class="form-control form-control-sm text-center no-ellipsis" 
+                               value="${tradeDateValue}" 
+                               placeholder="DD-MMM-YY"
+                               data-display-format="DD-MMM-YY"
+                               data-edit-format="MM/DD/YY"
+                               data-trade-id="${trade.id}" 
+                               data-field="trade_date" 
+                               data-field-row="3"
+                               onfocus="handleDateInputFocus(this)" 
+                               onkeydown="handleTabNavigation(event, ${trade.id}, 3)"
+                               onblur="handleDateInputBlurForRollField(this, ${trade.id})"
+                               style="width: 100px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem; text-overflow: clip !important; overflow: visible !important; white-space: normal !important;">
+                    `;
                     break;
-                case 4: // Exp Date - Read-only
-                    const expDateDisplay = formatDate(trade.expiration_date);
-                    cellContent = `<span class="text-center">${expDateDisplay}</span>`;
+                case 4: // Price - Editable for all trades
+                    // Make editable with auto-save for all trades
+                    cellContent = `
+                        <div style="position: relative; display: flex; align-items: center; justify-content: center;">
+                            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); font-size: 0.6125rem;">$</span>
+                            <input type="number" 
+                                   class="form-control form-control-sm text-center" 
+                                   value="${parseFloat(trade.current_price || trade.price || 0).toFixed(2)}" 
+                                   step="0.01"
+                                   min="0"
+                                   data-trade-id="${trade.id}" 
+                                   data-field="current_price" 
+                                   data-field-row="4"
+                                   onfocus="this.select()"
+                                   onkeydown="handleTabNavigation(event, ${trade.id}, 4)"
+                                   oninput="limitToTwoDecimals(this); autoSaveTradeField(${trade.id}, 'current_price', this.value)"
+                                   style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
+                        </div>
+                    `;
                     break;
-                case 5: // DTE (was Days to Exp) - Read-only (calculated)
+                case 5: // Exp Date - Editable for all trades
+                    // Make editable with auto-save using DD-MMM-YY format like quick add modal
+                    const expDateValue = trade.expiration_date ? formatDate(trade.expiration_date) : getTodayInDDMMMYY();
+                    cellContent = `
+                        <input type="text" 
+                               class="form-control form-control-sm text-center no-ellipsis" 
+                               value="${expDateValue}" 
+                               placeholder="DD-MMM-YY"
+                               data-display-format="DD-MMM-YY"
+                               data-edit-format="MM/DD/YY"
+                               data-trade-id="${trade.id}" 
+                               data-field="expiration_date" 
+                               data-field-row="5"
+                               onfocus="handleDateInputFocus(this)" 
+                               onkeydown="handleTabNavigation(event, ${trade.id}, 5)"
+                               onblur="handleDateInputBlurForRollField(this, ${trade.id})"
+                               style="width: 100px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem; text-overflow: clip !important; overflow: visible !important; white-space: normal !important;">
+                    `;
+                    break;
+                case 6: // DTE (was Days to Exp) - Read-only (calculated)
                     cellContent = `<span class="text-center">${trade.days_to_expiration || calculateDaysToExpiration(trade.expiration_date, trade.trade_date)}</span>`;
                     break;
-                case 6: // Strike - Read-only
-                    cellContent = `<span class="text-center">$${parseFloat(trade.strike_price || 0).toFixed(2)}</span>`;
+                case 7: // Strike - Editable for all trades
+                    // Make editable with auto-save for all trades
+                    cellContent = `
+                        <div style="position: relative; display: flex; align-items: center; justify-content: center;">
+                            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); font-size: 0.6125rem;">$</span>
+                            <input type="number" 
+                                   class="form-control form-control-sm text-center" 
+                                   value="${parseFloat(trade.strike_price || 0).toFixed(2)}" 
+                                   step="0.01"
+                                   min="0"
+                                   data-trade-id="${trade.id}" 
+                                   data-field="strike_price" 
+                                   data-field-row="7"
+                                   onfocus="this.select()"
+                                   onkeydown="handleTabNavigation(event, ${trade.id}, 7)"
+                                   oninput="limitToTwoDecimals(this); autoSaveTradeField(${trade.id}, 'strike_price', this.value)"
+                                   style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
+                        </div>
+                    `;
                     break;
-                case 7: // Credit - Read-only
-                    cellContent = `<span class="text-center">$${parseFloat(trade.credit_debit || trade.premium).toFixed(2)}</span>`;
+                case 8: // Credit - Editable for all trades
+                    // Make editable with auto-save for all trades
+                    cellContent = `
+                        <div style="position: relative; display: flex; align-items: center; justify-content: center;">
+                            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); font-size: 0.6125rem;">$</span>
+                            <input type="number" 
+                                   class="form-control form-control-sm text-center" 
+                                   value="${parseFloat(trade.credit_debit || trade.premium || 0).toFixed(2)}" 
+                                   step="0.01"
+                                   data-trade-id="${trade.id}" 
+                                   data-field="credit_debit" 
+                                   data-field-row="8"
+                                   onfocus="this.select()"
+                                   onkeydown="handleTabNavigation(event, ${trade.id}, 8)"
+                                   oninput="limitToTwoDecimals(this); autoSaveTradeField(${trade.id}, 'credit_debit', this.value)"
+                                   style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
+                        </div>
+                    `;
                     break;
-                case 8: // Contracts - Editable
+                case 9: // Contracts - Editable for all trades
+                    // Make editable with auto-save for all trades
                     cellContent = `
                         <input type="number" 
                                class="form-control form-control-sm text-center" 
@@ -1730,30 +2219,33 @@ function updateTradesTable() {
                                min="1"
                                data-trade-id="${trade.id}" 
                                data-field="num_of_contracts" 
-                               onchange="updateTradeField(${trade.id}, 'num_of_contracts', this.value)"
-                               style="width: 60px; display: inline-block;">
+                               data-field-row="9"
+                               onfocus="this.select()"
+                               onkeydown="handleTabNavigation(event, ${trade.id}, 9)"
+                               oninput="autoSaveTradeField(${trade.id}, 'num_of_contracts', this.value)"
+                               style="width: 60px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
                     `;
                     break;
-                case 9: // Shares - Read-only (calculated from num_of_contracts)
+                case 10: // Shares - Read-only (calculated from num_of_contracts)
                     cellContent = `<span class="text-center">${trade.num_of_contracts * 100}</span>`;
                     break;
-                case 10: // Commission - Use commission_per_share from database (account-specific and trade-date-specific)
+                case 11: // Commission - Use commission_per_share from database (account-specific and trade-date-specific)
                     const tradeCommission = trade.commission_per_share !== null && trade.commission_per_share !== undefined ? trade.commission_per_share : 0.0;
                     cellContent = `<span class="text-center">$${tradeCommission.toLocaleString('en-US', {minimumFractionDigits: 5, maximumFractionDigits: 5})}</span>`;
                     break;
-                case 11: // Net Credit Total = Net Credit Per Share * Shares
+                case 12: // Net Credit Total = Net Credit Per Share * Shares
                     cellContent = `<strong class="text-center">$${netCreditTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong>`;
                     break;
-                case 12: // Risk Capital = Strike - Net Credit Per Share
+                case 13: // Risk Capital = Strike - Net Credit Per Share
                     cellContent = `<span class="text-center">$${riskCapital.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>`;
                     break;
-                case 13: // Margin Capital = Risk Capital * Shares
+                case 14: // Margin Capital = Risk Capital * Shares
                     cellContent = `<span class="text-center">$${marginCapital.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>`;
                     break;
-                case 14: // RORC = Net Credit Per Share / Risk Capital
+                case 15: // RORC = Net Credit Per Share / Risk Capital
                     cellContent = `<span class="text-center">${rorc.toFixed(2)}%</span>`;
                     break;
-                case 15: // ARORC - Use database value if available, otherwise calculate
+                case 16: // ARORC - Use database value if available, otherwise calculate
                     // Database stores ARORC as percentage (20.4 = 20.4%), display directly
                     const dbARORC = trade.ARORC !== null && trade.ARORC !== undefined ? trade.ARORC : arorc;
                     if (dbARORC !== null && dbARORC !== undefined && !isNaN(dbARORC)) {
@@ -1763,21 +2255,19 @@ function updateTradesTable() {
                         cellContent = `<span class="text-center">-</span>`;
                     }
                     break;
-                case 16: // Status - Editable dropdown (case-insensitive)
+                case 17: // Status - Editable dropdown (case-insensitive)
                     const tradeStatusLower = trade.trade_status ? trade.trade_status.toLowerCase() : 'open';
                     cellContent = `
-                        <div class="text-center">
-                            <select class="form-select form-select-sm status-select" data-trade-id="${trade.id}" onchange="updateTradeStatus(${trade.id}, this.value)">
-                                <option value="open" ${tradeStatusLower === 'open' ? 'selected' : ''}>Open</option>
-                                <option value="closed" ${tradeStatusLower === 'closed' ? 'selected' : ''}>Closed</option>
-                                <option value="assigned" ${tradeStatusLower === 'assigned' ? 'selected' : ''}>Assigned</option>
-                                <option value="expired" ${tradeStatusLower === 'expired' ? 'selected' : ''}>Expired</option>
-                                <option value="roll" ${tradeStatusLower === 'roll' ? 'selected' : ''}>Roll</option>
-                            </select>
-                        </div>
+                        <select class="form-select form-select-sm status-select" data-trade-id="${trade.id}" onchange="updateTradeStatus(${trade.id}, this.value)" style="font-size: 0.6125rem; padding: 0.1rem 0.25rem; width: 100%; height: auto; line-height: 1.1; text-align: center; text-align-last: center;">
+                            <option value="assigned" ${tradeStatusLower === 'assigned' ? 'selected' : ''}>Assigned</option>
+                            <option value="closed" ${tradeStatusLower === 'closed' ? 'selected' : ''}>Closed</option>
+                            <option value="expired" ${tradeStatusLower === 'expired' ? 'selected' : ''}>Expired</option>
+                            <option value="open" ${tradeStatusLower === 'open' ? 'selected' : ''}>Open</option>
+                            <option value="roll" ${tradeStatusLower === 'roll' ? 'selected' : ''}>Roll</option>
+                        </select>
                     `;
                     break;
-                case 17: // Actions - Delete only
+                case 18: // Actions - Delete only
                     cellContent = `
                         <div class="text-center">
                             <button class="btn btn-sm btn-outline-danger" onclick="deleteTrade(${trade.id})" title="Delete Trade">
@@ -1792,16 +2282,28 @@ function updateTradesTable() {
                     break;
             }
             
-            // Apply fixed column width to data cells - 160px with visibility control
+            // Apply fixed column width to data cells - 112px (reduced from 160px for condensed layout) with visibility control
             const visibilityStyle = isVisible ? '' : 'display: none;';
-            // Top align for Symbol/Type column (fieldIndex 0), middle align for dates (1, 3)
+            // Top align for Symbol/Type column (fieldIndex 0), middle align for dates (1, 3), center for status (16)
             let verticalAlign = '';
+            let textAlign = '';
             if (fieldIndex === 0) {
                 verticalAlign = 'vertical-align: top;';
             } else if (fieldIndex === 1 || fieldIndex === 3) {
                 verticalAlign = 'vertical-align: middle;';
+            } else if (fieldIndex === 17) {
+                // Status column - center align
+                textAlign = 'text-align: center;';
+                verticalAlign = 'vertical-align: middle;';
             }
-            cellHTMLs.push(`<td style="${bgColor}; width: 160px; min-width: 160px; max-width: 160px; ${visibilityStyle} ${verticalAlign}">${cellContent}</td>`);
+            
+            // Add left border to first trade in each group to visually separate groups
+            const leftBorderStyle = isFirstTradeInGroup && groupIndex > 0 ? 'border-left: 2px solid #dee2e6 !important;' : '';
+            
+            cellHTMLs.push(`<td style="${bgColor}; width: 112px; min-width: 112px; max-width: 112px; ${visibilityStyle} ${verticalAlign} ${textAlign} ${leftBorderStyle}">${cellContent}</td>`);
+            
+            isFirstTradeInGroup = false;
+            });
         });
         
         // Set all cells at once for better performance
@@ -1846,8 +2348,8 @@ function setTableWidth() {
     const cells = firstRow.querySelectorAll('td');
     const totalColumns = cells.length - 1; // Subtract 1 for the field name column
     
-    // Calculate total width: 150px (field column) + (total columns × 160px)
-    const totalWidth = 150 + (totalColumns * 160);
+    // Calculate total width: 105px (field column) + (total columns × 112px) - reduced for condensed layout
+    const totalWidth = 105 + (totalColumns * 112);
     
     // Set both width and min-width to prevent stretching
     table.style.width = `${totalWidth}px`;
@@ -1908,44 +2410,44 @@ function updateCostBasisTable(costBasisData) {
             <div class="mb-4">
                 <!-- Ticker and Summary Cards in one row when no ticker selected -->
                 <div class="row mb-2 g-2 align-items-center">
-                    <div style="flex: 0 0 60px !important; width: 60px !important; min-width: 60px !important; max-width: 60px !important;">
-                        <div class="card bg-light cost-basis-ticker-card" style="cursor: pointer; width: 60px !important; height: 80px !important; min-width: 60px !important; max-width: 60px !important; overflow: hidden !important; box-sizing: border-box !important;" onclick="setUniversalTickerFilter('${ticker}')" title="Click to filter trades and cost basis by ${ticker}" onmouseover="this.style.backgroundColor='#e9ecef'" onmouseout="this.style.backgroundColor='#f8f9fa'">
-                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box;">
-                                <h6 class="text-primary mb-0" style="font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; padding: 0; width: 100%; display: block;">
+                    <div style="flex: 0 0 42px !important; width: 42px !important; min-width: 42px !important; max-width: 42px !important;">
+                        <div class="card bg-light cost-basis-ticker-card" style="cursor: pointer; width: 42px !important; height: 56px !important; min-width: 42px !important; max-width: 42px !important; overflow: hidden !important; box-sizing: border-box !important;" onclick="setUniversalTickerFilter('${ticker}')" title="Click to filter trades and cost basis by ${ticker}" onmouseover="this.style.backgroundColor='#e9ecef'" onmouseout="this.style.backgroundColor='#f8f9fa'">
+                            <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box; padding: 0.35rem !important;">
+                                <h6 class="text-primary mb-0" style="font-size: 0.6125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; padding: 0; width: 100%; display: block;">
                                     ${ticker}
                                 </h6>
                             </div>
                         </div>
                     </div>
-                    <div style="flex: 0 0 60px !important; width: 60px !important; min-width: 60px !important; max-width: 60px !important;">
-                        <div class="card bg-light" style="width: 60px !important; height: 80px !important; min-width: 60px !important; max-width: 60px !important; box-sizing: border-box !important;">
-                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box;">
-                                <h6 class="card-title mb-1" style="font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Shares</h6>
-                                <p class="card-text mb-0" style="font-size: 1.1rem; ${total_shares < 0 ? 'color: red;' : ''}">${total_shares < 0 ? `(${Math.abs(total_shares).toLocaleString()})` : total_shares.toLocaleString()}</p>
+                    <div style="flex: 0 0 42px !important; width: 42px !important; min-width: 42px !important; max-width: 42px !important;">
+                        <div class="card bg-light" style="width: 42px !important; height: 56px !important; min-width: 42px !important; max-width: 42px !important; box-sizing: border-box !important;">
+                            <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box; padding: 0.35rem !important;">
+                                <h6 class="card-title mb-1" style="font-size: 0.525rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Shares</h6>
+                                <p class="card-text mb-0" style="font-size: 0.77rem; ${total_shares < 0 ? 'color: red;' : ''}">${total_shares < 0 ? `(${Math.abs(total_shares).toLocaleString()})` : total_shares.toLocaleString()}</p>
                             </div>
                         </div>
                     </div>
-                    <div style="flex: 0 0 60px !important; width: 60px !important; min-width: 60px !important; max-width: 60px !important;">
-                        <div class="card bg-light" style="width: 60px !important; height: 80px !important; min-width: 60px !important; max-width: 60px !important; box-sizing: border-box !important;">
-                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box;">
-                                <h6 class="card-title mb-1" style="font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Cost Basis</h6>
-                                <p class="card-text mb-0" style="font-size: 1.1rem; ${total_cost_basis < 0 ? 'color: red;' : ''}">${total_cost_basis < 0 ? `($${Math.abs(total_cost_basis).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
+                    <div style="flex: 0 0 42px !important; width: 42px !important; min-width: 42px !important; max-width: 42px !important;">
+                        <div class="card bg-light" style="width: 42px !important; height: 56px !important; min-width: 42px !important; max-width: 42px !important; box-sizing: border-box !important;">
+                            <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box; padding: 0.35rem !important;">
+                                <h6 class="card-title mb-1" style="font-size: 0.525rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Cost Basis</h6>
+                                <p class="card-text mb-0" style="font-size: 0.77rem; ${total_cost_basis < 0 ? 'color: red;' : ''}">${total_cost_basis < 0 ? `($${Math.abs(total_cost_basis).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
                             </div>
                         </div>
                     </div>
-                    <div style="flex: 0 0 60px !important; width: 60px !important; min-width: 60px !important; max-width: 60px !important;">
-                        <div class="card bg-light" style="width: 60px !important; height: 80px !important; min-width: 60px !important; max-width: 60px !important; box-sizing: border-box !important;">
-                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box;">
-                                <h6 class="card-title mb-1" style="font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Cost Basis/Share</h6>
-                                <p class="card-text mb-0" style="font-size: 1.1rem; ${total_cost_basis_per_share < 0 ? 'color: red;' : ''}">${total_cost_basis_per_share < 0 ? `($${Math.abs(total_cost_basis_per_share).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis_per_share.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
+                    <div style="flex: 0 0 42px !important; width: 42px !important; min-width: 42px !important; max-width: 42px !important;">
+                        <div class="card bg-light" style="width: 42px !important; height: 56px !important; min-width: 42px !important; max-width: 42px !important; box-sizing: border-box !important;">
+                            <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box; padding: 0.35rem !important;">
+                                <h6 class="card-title mb-1" style="font-size: 0.525rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Cost Basis/Share</h6>
+                                <p class="card-text mb-0" style="font-size: 0.77rem; ${total_cost_basis_per_share < 0 ? 'color: red;' : ''}">${total_cost_basis_per_share < 0 ? `($${Math.abs(total_cost_basis_per_share).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis_per_share.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
                             </div>
                         </div>
                     </div>
-                    <div style="flex: 0 0 60px !important; width: 60px !important; min-width: 60px !important; max-width: 60px !important;">
-                        <div class="card bg-light" style="width: 60px !important; height: 80px !important; min-width: 60px !important; max-width: 60px !important; box-sizing: border-box !important;">
-                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box;">
-                                <h6 class="card-title mb-1" style="font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Trades</h6>
-                                <p class="card-text mb-0" style="font-size: 1.1rem;">${trades.length}</p>
+                    <div style="flex: 0 0 42px !important; width: 42px !important; min-width: 42px !important; max-width: 42px !important;">
+                        <div class="card bg-light" style="width: 42px !important; height: 56px !important; min-width: 42px !important; max-width: 42px !important; box-sizing: border-box !important;">
+                            <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box; padding: 0.35rem !important;">
+                                <h6 class="card-title mb-1" style="font-size: 0.525rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Trades</h6>
+                                <p class="card-text mb-0" style="font-size: 0.77rem;">${trades.length}</p>
                             </div>
                         </div>
                     </div>
@@ -1958,38 +2460,38 @@ function updateCostBasisTable(costBasisData) {
                 <!-- First row: Ticker and Company Name card when ticker is selected -->
                 <div class="row mb-2 g-2 align-items-center">
                     <div class="col-12">
-                        <div class="card bg-light" style="height: 80px;">
-                            <div class="card-body d-flex align-items-center justify-content-center p-2">
-                                <h6 class="mb-0 text-center" style="font-size: 1rem; font-weight: 600;">
+                        <div class="card bg-light" style="height: 56px;">
+                            <div class="card-body d-flex align-items-center justify-content-center" style="padding: 0.35rem !important;">
+                                <h6 class="mb-0 text-center" style="font-size: 0.49rem; font-weight: 600;">
                                     ${ticker} - ${company_name || ticker}${accountDisplay}
                                 </h6>
                             </div>
                         </div>
                     </div>
                 </div>
-                <!-- Summary Cards in second row - split evenly across full width -->
+                <!-- Summary Cards in second row - showing totals for this account -->
                 <div class="row mb-2 g-2 align-items-center">
                     <div class="col-md-4 col-sm-4 col-12">
-                        <div class="card bg-light" style="height: 80px;">
-                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%;">
-                                <h6 class="card-title mb-1" style="font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Shares</h6>
-                                <p class="card-text mb-0" style="font-size: 1.1rem; ${total_shares < 0 ? 'color: red;' : ''}">${total_shares < 0 ? `(${Math.abs(total_shares).toLocaleString()})` : total_shares.toLocaleString()}</p>
+                        <div class="card bg-light" style="height: 56px;">
+                            <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; padding: 0.35rem !important;">
+                                <h6 class="card-title mb-1" style="font-size: 0.525rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Shares</h6>
+                                <p class="card-text mb-0" style="font-size: 0.77rem; ${total_shares < 0 ? 'color: red;' : ''}">${total_shares < 0 ? `(${Math.abs(total_shares).toLocaleString()})` : total_shares.toLocaleString()}</p>
                             </div>
                         </div>
                     </div>
                     <div class="col-md-4 col-sm-4 col-12">
-                        <div class="card bg-light" style="height: 80px;">
-                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%;">
-                                <h6 class="card-title mb-1" style="font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Cost Basis</h6>
-                                <p class="card-text mb-0" style="font-size: 1.1rem; ${total_cost_basis < 0 ? 'color: red;' : ''}">${total_cost_basis < 0 ? `($${Math.abs(total_cost_basis).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
+                        <div class="card bg-light" style="height: 56px;">
+                            <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; padding: 0.35rem !important;">
+                                <h6 class="card-title mb-1" style="font-size: 0.525rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Total Cost Basis</h6>
+                                <p class="card-text mb-0" style="font-size: 0.77rem; ${total_cost_basis < 0 ? 'color: red;' : ''}">${total_cost_basis < 0 ? `($${Math.abs(total_cost_basis).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
                             </div>
                         </div>
                     </div>
                     <div class="col-md-4 col-sm-4 col-12">
-                        <div class="card bg-light" style="height: 80px;">
-                            <div class="card-body text-center p-2 d-flex flex-column justify-content-center" style="height: 100%;">
-                                <h6 class="card-title mb-1" style="font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Cost Basis/Share</h6>
-                                <p class="card-text mb-0" style="font-size: 1.1rem; ${total_cost_basis_per_share < 0 ? 'color: red;' : ''}">${total_cost_basis_per_share < 0 ? `($${Math.abs(total_cost_basis_per_share).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis_per_share.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
+                        <div class="card bg-light" style="height: 56px;">
+                            <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; padding: 0.35rem !important;">
+                                <h6 class="card-title mb-1" style="font-size: 0.525rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Cost Basis/Share</h6>
+                                <p class="card-text mb-0" style="font-size: 0.77rem; ${total_cost_basis_per_share < 0 ? 'color: red;' : ''}">${total_cost_basis_per_share < 0 ? `($${Math.abs(total_cost_basis_per_share).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis_per_share.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
                             </div>
                         </div>
                     </div>
@@ -2075,8 +2577,8 @@ function updateCostBasisTable(costBasisData) {
                 
                 html += `
                     <tr ${rowStyle}>
-                        <td class="text-center align-middle" style="white-space: nowrap; padding: 0.5rem 0.75rem;">${formatDate(trade.trade_date)}</td>
-                        <td class="text-start align-middle" style="width: 25%; word-wrap: break-word; overflow-wrap: break-word; padding: 0.5rem 0.75rem;">${trade.trade_description || ''}</td>
+                        <td class="text-center align-middle" style="white-space: nowrap; padding: 0.35rem 0.525rem;">${formatDate(trade.trade_date)}</td>
+                        <td class="text-start align-middle" style="width: 25%; word-wrap: break-word; overflow-wrap: break-word; padding: 0.35rem 0.525rem;">${trade.trade_description || ''}</td>
                         <td class="text-end align-middle ${sharesClass}" style="${isSharesZero ? 'color: transparent;' : ''}">${formatShares(trade.shares || 0)}</td>
                         <td class="text-end align-middle ${costClass}" style="${isCostZero ? 'color: transparent;' : ''}">${formatNumber(trade.cost_per_share || 0)}</td>
                         <td class="text-end align-middle ${amountClass}" style="${isAmountZero ? 'color: transparent;' : ''}">${formatNumber(trade.amount || 0)}</td>
@@ -2100,8 +2602,13 @@ function updateCostBasisTable(costBasisData) {
     });
     
     // Set dynamic height to show exactly 10 rows after table is rendered
+    // Use multiple timeouts to ensure DOM is fully rendered with dynamic row heights
     setTimeout(() => {
         setCostBasisTableHeight();
+        // Recalculate after a short delay to account for any dynamic content rendering
+        setTimeout(() => {
+            setCostBasisTableHeight();
+        }, 50);
     }, 0);
 }
 
@@ -2127,21 +2634,37 @@ function setCostBasisTableHeight() {
             // Get header height
             const headerHeight = thead.offsetHeight;
             
-            // Get first 10 rows (or all rows if less than 10)
+            // Get all rows
             const rows = Array.from(tbody.querySelectorAll('tr'));
+            
+            // If there are 10 or fewer rows, show all without scrolling
+            if (rows.length <= 10) {
+                tableResponsive.style.maxHeight = 'none';
+                tableResponsive.style.overflowY = 'visible';
+                return;
+            }
+            
+            // Get first 10 rows to measure
             const rowsToMeasure = rows.slice(0, 10);
             
             if (rowsToMeasure.length === 0) return;
             
             // Calculate total height of first 10 rows
+            // Use getBoundingClientRect for more accurate height measurement with dynamic row heights
             let totalRowsHeight = 0;
             rowsToMeasure.forEach(row => {
-                totalRowsHeight += row.offsetHeight;
+                const rect = row.getBoundingClientRect();
+                totalRowsHeight += rect.height;
             });
             
+            // Get header height using getBoundingClientRect for accuracy
+            const headerRect = thead.getBoundingClientRect();
+            
             // Set max-height to header height + height of 10 rows
-            const maxHeight = headerHeight + totalRowsHeight;
+            // Add a small buffer to account for any rounding or borders
+            const maxHeight = headerRect.height + totalRowsHeight + 1;
             tableResponsive.style.maxHeight = `${maxHeight}px`;
+            tableResponsive.style.overflowY = 'auto';
         });
     });
 }
@@ -2296,8 +2819,8 @@ function showAllSymbols(data = null) {
         symbolsHtml += `
             <div class="col-auto mb-2">
                 <div class="card symbol-card" onclick="selectCostBasisSymbol('${ticker}')" style="cursor: pointer; min-width: fit-content;">
-                    <div class="card-body text-center p-2 d-flex align-items-center justify-content-center">
-                        <h6 class="card-title text-primary mb-0" style="font-size: 0.8rem; white-space: nowrap; margin: 0;">${ticker}</h6>
+                    <div class="card-body text-center d-flex align-items-center justify-content-center" style="padding: 0.35rem !important;">
+                        <h6 class="card-title text-primary mb-0" style="font-size: 0.56rem; white-space: nowrap; margin: 0;">${ticker}</h6>
                     </div>
                 </div>
             </div>
@@ -2390,7 +2913,20 @@ async function updateTradeStatus(tradeId, newStatus) {
         const result = await response.json();
         
         if (result.success) {
-            await loadTrades();
+            // If a new trade was created (roll status), handle it specially
+            if (result.new_trade_id) {
+                // Reload trades to get the new trade
+                await loadTrades();
+                
+                // Find the new trade and make its fields editable
+                const newTrade = trades.find(t => t.id === result.new_trade_id);
+                if (newTrade) {
+                    // Make the new trade row editable
+                    makeTradeRowEditable(result.new_trade_id);
+                }
+            } else {
+                await loadTrades();
+            }
             loadSummary();
             // Reload cost basis with the selected ticker if one is set
             const selectedTicker = window.symbolFilter || document.getElementById('symbol-filter')?.value || '';
@@ -2404,7 +2940,108 @@ async function updateTradeStatus(tradeId, newStatus) {
     }
 }
 
-async function updateTradeField(tradeId, field, value) {
+// Auto-save with debouncing for rolled trades
+let autoSaveTimeouts = {};
+
+// Limit input to 2 decimal places
+function limitToTwoDecimals(input) {
+    const value = input.value;
+    // Check if value contains a decimal point
+    if (value.includes('.')) {
+        const parts = value.split('.');
+        // If there are more than 2 decimal places, limit to 2
+        if (parts[1] && parts[1].length > 2) {
+            // Get the cursor position before changing value
+            const cursorPos = input.selectionStart;
+            // Format to 2 decimal places
+            const formatted = parseFloat(value).toFixed(2);
+            input.value = formatted;
+            // Restore cursor position (adjust if needed)
+            const newCursorPos = Math.min(cursorPos - 1, formatted.length);
+            input.setSelectionRange(newCursorPos, newCursorPos);
+        }
+    }
+}
+
+// Prevent typing more than 2 decimal places on keypress
+function preventMoreThanTwoDecimals(event) {
+    const input = event.target;
+    const value = input.value;
+    const key = event.key;
+    const selectionStart = input.selectionStart;
+    const selectionEnd = input.selectionEnd;
+    
+    // Allow backspace, delete, tab, escape, enter, and arrow keys
+    if (['Backspace', 'Delete', 'Tab', 'Escape', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(key)) {
+        return true;
+    }
+    
+    // Allow Ctrl/Cmd + A, C, V, X, Z
+    if (event.ctrlKey || event.metaKey) {
+        return true;
+    }
+    
+    // Get the value that would result after this keypress
+    // Account for text selection that will be replaced
+    const beforeSelection = value.substring(0, selectionStart);
+    const afterSelection = value.substring(selectionEnd);
+    const newValue = beforeSelection + key + afterSelection;
+    
+    // If the key is a decimal point
+    if (key === '.') {
+        // Only allow if there's no decimal point already (in the new value)
+        if (newValue.includes('.')) {
+            // Check if the decimal point is in the part that's being replaced
+            const existingDecimal = value.includes('.');
+            if (existingDecimal && !(selectionStart <= value.indexOf('.') && selectionEnd > value.indexOf('.'))) {
+                event.preventDefault();
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    // If the key is a number
+    if (/[0-9]/.test(key)) {
+        // Check if we're trying to add a number after 2 decimal places
+        if (newValue.includes('.')) {
+            const parts = newValue.split('.');
+            // If there are already 2 decimal places after the decimal point, prevent typing more numbers
+            if (parts[1] && parts[1].length > 2) {
+                event.preventDefault();
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    // Allow minus sign for negative numbers (though we have min="0" for price and strike)
+    if (key === '-' && selectionStart === 0) {
+        return true;
+    }
+    
+    // Block all other characters
+    event.preventDefault();
+    return false;
+}
+
+function autoSaveTradeField(tradeId, field, value) {
+    // Clear existing timeout for this field
+    const timeoutKey = `${tradeId}_${field}`;
+    if (autoSaveTimeouts[timeoutKey]) {
+        clearTimeout(autoSaveTimeouts[timeoutKey]);
+    }
+    
+    // Set new timeout to save after 500ms of no typing
+    autoSaveTimeouts[timeoutKey] = setTimeout(() => {
+        // Ticker changes require full reload to update symbol/type display
+        const reloadTable = field === 'ticker';
+        updateTradeField(tradeId, field, value, reloadTable);
+        delete autoSaveTimeouts[timeoutKey];
+    }, 500);
+}
+
+async function updateTradeField(tradeId, field, value, reloadTable = true) {
     try {
         const response = await fetch(`/api/trades/${tradeId}/field`, {
             method: 'PUT',
@@ -2415,17 +3052,188 @@ async function updateTradeField(tradeId, field, value) {
         const result = await response.json();
         
         if (result.success) {
-            await loadTrades();
-            loadSummary();
-            // Reload cost basis with the selected ticker if one is set
-            const selectedTicker = window.symbolFilter || document.getElementById('symbol-filter')?.value || '';
-            await loadCostBasis(selectedTicker);
+            if (reloadTable) {
+                await loadTrades();
+                loadSummary();
+                // Reload cost basis with the selected ticker if one is set
+                const selectedTicker = window.symbolFilter || document.getElementById('symbol-filter')?.value || '';
+                await loadCostBasis(selectedTicker);
+            } else {
+                // Just update the trade in memory without reloading the table
+                const tradeIndex = trades.findIndex(t => t.id === tradeId);
+                if (tradeIndex !== -1) {
+                    // Update the trade object
+                    if (field === 'expiration_date') {
+                        trades[tradeIndex].expiration_date = value;
+                        // Recalculate DTE
+                        if (trades[tradeIndex].trade_date) {
+                            const newDTE = calculateDaysToExpiration(value, trades[tradeIndex].trade_date);
+                            trades[tradeIndex].days_to_expiration = newDTE;
+                            // Update DTE cell in the table
+                            updateDTECell(tradeId, value);
+                        }
+                    } else if (field === 'trade_date') {
+                        trades[tradeIndex].trade_date = value;
+                        // Recalculate DTE
+                        if (trades[tradeIndex].expiration_date) {
+                            const newDTE = calculateDaysToExpiration(trades[tradeIndex].expiration_date, value);
+                            trades[tradeIndex].days_to_expiration = newDTE;
+                            // Update DTE cell in the table
+                            updateDTECell(tradeId, trades[tradeIndex].expiration_date);
+                        }
+                    } else if (field === 'ticker') {
+                        trades[tradeIndex].ticker = value.toUpperCase();
+                        // Ticker change requires full reload to update symbol/type display
+                        loadTrades();
+                        loadSummary();
+                        const selectedTicker = window.symbolFilter || document.getElementById('symbol-filter')?.value || '';
+                        loadCostBasis(selectedTicker);
+                        return; // Exit early since we're reloading
+                    } else if (field === 'strike_price') {
+                        trades[tradeIndex].strike_price = parseFloat(value) || 0;
+                    } else if (field === 'credit_debit') {
+                        trades[tradeIndex].credit_debit = parseFloat(value) || 0;
+                    } else if (field === 'current_price') {
+                        trades[tradeIndex].current_price = parseFloat(value) || 0;
+                    } else if (field === 'num_of_contracts') {
+                        trades[tradeIndex].num_of_contracts = parseInt(value) || 1;
+                    }
+                    // Update the table cell without full reload
+                    updateTradeCell(tradeId, field, value);
+                }
+            }
         } else {
             alert('Failed to update trade field: ' + result.error);
         }
     } catch (error) {
         console.error('Error updating trade field:', error);
         alert('Error updating trade field: ' + error.message);
+    }
+}
+
+// Update a single cell in the table without full reload
+function updateTradeCell(tradeId, field, value) {
+    // Find all cells with this trade ID and field
+    const cells = document.querySelectorAll(`[data-trade-id="${tradeId}"][data-field="${field}"]`);
+    cells.forEach(cell => {
+        if (field === 'expiration_date') {
+            // Update date input (can be date or text type)
+            if (cell.tagName === 'INPUT') {
+                if (cell.type === 'date') {
+                    cell.value = formatDateForInput(value);
+                } else if (cell.type === 'text' && cell.dataset.displayFormat === 'DD-MMM-YY') {
+                    // Text input with DD-MMM-YY format
+                    cell.value = formatDate(value);
+                }
+            }
+            // Also update DTE cell when expiration date changes
+            const trade = trades.find(t => t.id === tradeId);
+            if (trade) {
+                updateDTECell(tradeId, value);
+            }
+        } else if (field === 'trade_date') {
+            // Update date input (can be date or text type)
+            if (cell.tagName === 'INPUT') {
+                if (cell.type === 'date') {
+                    cell.value = formatDateForInput(value);
+                } else if (cell.type === 'text' && cell.dataset.displayFormat === 'DD-MMM-YY') {
+                    // Text input with DD-MMM-YY format
+                    cell.value = formatDate(value);
+                }
+            }
+            // Also update DTE cell when trade date changes
+            // The trade object should already be updated with the new trade_date
+            const trade = trades.find(t => t.id === tradeId);
+            if (trade && trade.expiration_date) {
+                // Use the updated trade_date from memory (which was just updated)
+                updateDTECell(tradeId, trade.expiration_date);
+            }
+        } else if (field === 'ticker') {
+            // Update ticker input
+            if (cell.tagName === 'INPUT' && cell.type === 'text') {
+                cell.value = value.toUpperCase();
+            }
+        } else if (field === 'strike_price') {
+            // Update strike input
+            if (cell.tagName === 'INPUT' && cell.type === 'number') {
+                cell.value = parseFloat(value).toFixed(2);
+            }
+        } else if (field === 'credit_debit') {
+            // Update credit input
+            if (cell.tagName === 'INPUT' && cell.type === 'number') {
+                cell.value = parseFloat(value).toFixed(2);
+            }
+        } else if (field === 'current_price') {
+            // Update current price input
+            if (cell.tagName === 'INPUT' && cell.type === 'number') {
+                cell.value = parseFloat(value).toFixed(2);
+            }
+        } else if (field === 'num_of_contracts') {
+            // Update contracts input
+            if (cell.tagName === 'INPUT' && cell.type === 'number') {
+                cell.value = parseInt(value) || 1;
+            }
+        }
+    });
+    
+    // Update calculated fields (shares, DTE, etc.) in the same row
+    const trade = trades.find(t => t.id === tradeId);
+    if (trade) {
+        // Update shares cell (calculated from contracts)
+        const row = cells[0]?.closest('tr');
+        if (row) {
+            const sharesCell = row.querySelector('[data-field="shares"]') || 
+                             Array.from(row.cells).find(cell => cell.textContent.includes((trade.num_of_contracts * 100).toString()));
+            if (sharesCell && field === 'num_of_contracts') {
+                sharesCell.textContent = (trade.num_of_contracts * 100).toString();
+            }
+        }
+    }
+}
+
+// Make a trade row editable (called after new trade is created from roll)
+function makeTradeRowEditable(tradeId) {
+    // The row should already be rendered with editable fields
+    // Just ensure the inputs are visible and focused
+    const inputs = document.querySelectorAll(`[data-trade-id="${tradeId}"].roll-field`);
+    if (inputs.length > 0) {
+        // Focus on the first editable field
+        inputs[0].focus();
+    }
+}
+
+// Handle Tab key navigation within a column (same trade)
+function handleTabNavigation(event, tradeId, currentFieldIndex) {
+    if (event.key === 'Tab') {
+        event.preventDefault();
+        
+        // Define the order of editable fields (field indices)
+        const editableFieldOrder = [2, 3, 4, 5, 7, 8, 9]; // Ticker, Trade Date, Price, Exp Date, Strike, Credit, Contracts
+        
+        // Find current position in the order
+        const currentIndex = editableFieldOrder.indexOf(currentFieldIndex);
+        
+        if (currentIndex === -1) return; // Current field not in editable list
+        
+        // Determine next/previous field
+        let nextIndex;
+        if (event.shiftKey) {
+            // Shift+Tab: move up
+            nextIndex = currentIndex > 0 ? currentIndex - 1 : editableFieldOrder.length - 1;
+        } else {
+            // Tab: move down
+            nextIndex = currentIndex < editableFieldOrder.length - 1 ? currentIndex + 1 : 0;
+        }
+        
+        const nextFieldIndex = editableFieldOrder[nextIndex];
+        
+        // Find the next editable field in the same column (same trade_id)
+        const nextInput = document.querySelector(`input[data-trade-id="${tradeId}"][data-field-row="${nextFieldIndex}"]`);
+        
+        if (nextInput) {
+            nextInput.focus();
+            nextInput.select();
+        }
     }
 }
 
@@ -3065,15 +3873,24 @@ async function loadAccounts() {
                 const option = document.createElement('option');
                 option.value = account.id;
                 option.textContent = account.account_name;
-                // Set default account as selected
+                // Set default account as selected (not "All")
                 if (account.id === defaultAccountId) {
                     option.selected = true;
                 }
                 universalAccountFilter.appendChild(option);
             });
+            
+            // Trigger change event to update filters with default account
+            if (defaultAccountId) {
+                universalAccountFilter.value = defaultAccountId;
+                universalAccountFilter.dispatchEvent(new Event('change'));
+            }
         }
+        
+        return defaultAccountId;
     } catch (error) {
         console.error('Error loading accounts:', error);
+        return null;
     }
 }
 
@@ -3631,6 +4448,67 @@ function setUniversalTickerFilter(ticker) {
             loadCostBasis(ticker);
         }, 0);
     }
+}
+
+// Function to set universal ticker filter without triggering reload
+function setUniversalTickerFilterSilent(ticker) {
+    const universalTickerInput = document.getElementById('universal-ticker-filter');
+    const universalClearButton = document.getElementById('clear-universal-ticker');
+    
+    if (universalTickerInput) {
+        // Set the input value
+        universalTickerInput.value = ticker || '';
+        
+        // Show the clear button if ticker is set
+        if (universalClearButton) {
+            universalClearButton.style.display = ticker ? 'inline-block' : 'none';
+        }
+        
+        // Set the global symbol filter to match the input value
+        window.symbolFilter = ticker || '';
+    }
+}
+
+// Function to get the ticker currently displayed in the cost basis table
+function getTickerFromCostBasisTable() {
+    // Check if the cost basis table is showing details for a specific ticker
+    // This happens when the table shows summary cards (isTickerSelected is true)
+    const container = document.getElementById('cost-basis-table-container') || 
+                      document.getElementById('cost-basis-inline-container');
+    
+    if (!container) return null;
+    
+    // Look for the header card that shows ticker name when a ticker is selected
+    // The header card contains text like "TICKER - Company Name (Account)"
+    const headerCard = container.querySelector('.card.bg-light h6');
+    if (headerCard) {
+        const headerText = headerCard.textContent.trim();
+        // Extract ticker from header text (format: "TICKER - Company Name (Account)")
+        const match = headerText.match(/^([A-Z]+)\s*-/);
+        if (match && match[1]) {
+            return match[1].trim();
+        }
+    }
+    
+    // Alternative: Check if there's a ticker in the first row of the table
+    const table = container.querySelector('.table');
+    if (table) {
+        const firstRow = table.querySelector('tbody tr');
+        if (firstRow) {
+            // Try to get ticker from trade description (e.g., "BTO 2 POSH")
+            const descriptionCell = firstRow.querySelector('td:nth-child(2)');
+            if (descriptionCell) {
+                const description = descriptionCell.textContent.trim();
+                // Look for ticker pattern in description (e.g., "BTO 2 POSH" or "BTO 5 POSH")
+                const tickerMatch = description.match(/\b([A-Z]{1,5})\s*$/);
+                if (tickerMatch && tickerMatch[1]) {
+                    return tickerMatch[1].trim();
+                }
+            }
+        }
+    }
+    
+    return null;
 }
 
 function clearUniversalTickerFilter() {

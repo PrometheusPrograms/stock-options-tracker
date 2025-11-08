@@ -340,7 +340,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             account_id INTEGER NOT NULL,
             transaction_date TEXT NOT NULL,
-            transaction_type TEXT NOT NULL CHECK(transaction_type IN ('DEPOSIT', 'WITHDRAWAL', 'PREMIUM_CREDIT', 'PREMIUM_DEBIT', 'OPTIONS', 'ASSIGNMENT', 'BUY', 'SELL')),
+            transaction_type TEXT NOT NULL CHECK(transaction_type IN ('DEPOSIT', 'WITHDRAWAL', 'PREMIUM_CREDIT', 'PREMIUM_DEBIT', 'ASSIGNMENT', 'SELL PUT', 'SELL CALL')),
             amount NUMERIC(12,2) NOT NULL,
             description TEXT,
             trade_id INTEGER,
@@ -376,7 +376,7 @@ def init_db():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     account_id INTEGER NOT NULL,
                     transaction_date TEXT NOT NULL,
-                    transaction_type TEXT NOT NULL CHECK(transaction_type IN ('DEPOSIT', 'WITHDRAWAL', 'PREMIUM_CREDIT', 'PREMIUM_DEBIT', 'OPTIONS', 'ASSIGNMENT', 'BUY', 'SELL')),
+                    transaction_type TEXT NOT NULL CHECK(transaction_type IN ('DEPOSIT', 'WITHDRAWAL', 'PREMIUM_CREDIT', 'PREMIUM_DEBIT', 'ASSIGNMENT', 'SELL PUT', 'SELL CALL')),
                     amount NUMERIC(12,2) NOT NULL,
                     description TEXT,
                     trade_id INTEGER,
@@ -1456,17 +1456,27 @@ def add_trade():
         requires_contracts = trade_type_row['requires_contracts'] if trade_type_row else 0
         
         if requires_contracts == 1:
-            # Options trade: create positive cash flow entry with transaction_type='OPTIONS'
+            # Options trade: determine if PUT or CALL
+            if 'PUT' in trade_type or 'ROP' in trade_type:
+                transaction_type = 'SELL PUT'
+            elif 'CALL' in trade_type or 'ROC' in trade_type:
+                transaction_type = 'SELL CALL'
+            else:
+                # Default to PREMIUM_CREDIT if can't determine
+                transaction_type = 'PREMIUM_CREDIT'
             cursor.execute('''
                 INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (account_id, trade_date, 'OPTIONS', round(premium * num_of_contracts * 100, 2), 
+            ''', (account_id, trade_date, transaction_type, round(premium * num_of_contracts * 100, 2), 
                   f"{trade_type} premium received", trade_id, ticker_id))
             cash_flow_id = cursor.lastrowid
         else:
-            # For BTO/STC or other trade types that don't require contracts, still create a cash flow entry
-            # Determine if it's a credit or debit based on trade type
-            transaction_type = 'BUY' if trade_type == 'BTO' else 'SELL'
+            # For BTO/STC or other trade types that don't require contracts
+            # These are stock trades, use PREMIUM_CREDIT or PREMIUM_DEBIT
+            if trade_type == 'BTO':
+                transaction_type = 'PREMIUM_DEBIT'  # Buying stock
+            else:
+                transaction_type = 'PREMIUM_CREDIT'  # Selling stock
             cursor.execute('''
                 INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1477,7 +1487,8 @@ def add_trade():
         # Update cost_basis entry to link to cash_flow if cash flow was created
         if cash_flow_id:
             cursor.execute('''
-                UPDATE cost_basis SET cash_flow_id = ? WHERE trade_id = ? AND ticker_id = ? AND transaction_date = ?
+                UPDATE cost_basis SET cash_flow_id = ? 
+                WHERE trade_id = ? AND ticker_id = ? AND transaction_date = ? AND cash_flow_id IS NULL
             ''', (cash_flow_id, trade_id, ticker_id, trade_date))
         
         conn.commit()
@@ -2041,19 +2052,30 @@ def update_trade_status(trade_id):
                 total_amount = strike_price * shares
                 description = f"ASSIGNMENT: SELL {shares} {ticker} @ ${strike_price} (assigned CALL)"
             
+            # Use expiration_date + 2 days as transaction_date for assigned trades
+            expiration_date = trade_dict.get('expiration_date', trade_date)
+            from datetime import datetime, timedelta
+            try:
+                exp_date_obj = datetime.strptime(expiration_date, '%Y-%m-%d')
+                assignment_transaction_date = (exp_date_obj + timedelta(days=2)).strftime('%Y-%m-%d')
+            except:
+                assignment_transaction_date = expiration_date  # Fallback to expiration_date if parsing fails
+            
             cursor.execute('''
                 INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (account_id, trade_date, 'ASSIGNMENT', round(total_amount, 2), 
+            ''', (account_id, assignment_transaction_date, 'ASSIGNMENT', round(total_amount, 2), 
                   description, trade_id, ticker_id))
             cash_flow_id = cursor.lastrowid
             
             # Link the cost_basis entry to this cash flow
+            # Use expiration_date as transaction_date for cost_basis (cost_basis uses expiration_date, cash_flow uses expiration_date + 2)
+            assigned_trade_date = trade_dict.get('expiration_date', trade_date)
             cursor.execute('''
                 UPDATE cost_basis SET cash_flow_id = ? 
                 WHERE trade_id = ? AND account_id = ? AND ticker_id = ? AND transaction_date = ?
-                AND description LIKE 'ASSIGNED%'
-            ''', (cash_flow_id, trade_id, account_id, ticker_id, trade_date))
+                AND description LIKE 'ASSIGNED%' AND cash_flow_id IS NULL
+            ''', (cash_flow_id, trade_id, account_id, ticker_id, assigned_trade_date))
         
         # Handle unassigning - delete assigned cost basis entry
         elif old_status == 'assigned' and new_status != 'assigned':
@@ -2069,6 +2091,107 @@ def update_trade_status(trade_id):
                 AND description LIKE 'ASSIGNED%'
             ''', (trade_id, account_id, ticker_id))
         
+        # Handle rolling - create a new trade entry
+        elif new_status == 'roll' and old_status == 'open':
+            # Convert Row to dict if needed
+            trade_dict = dict(trade) if hasattr(trade, 'keys') and not isinstance(trade, dict) else trade
+            account_id = trade_dict.get('account_id', 9)
+            ticker_id = trade_dict['ticker_id']
+            trade_type = trade_dict['trade_type']
+            
+            # Get ticker symbol for trade_type formatting
+            cursor.execute('SELECT ticker FROM tickers WHERE id = ?', (ticker_id,))
+            ticker_row = cursor.fetchone()
+            ticker = ticker_row['ticker'] if ticker_row else ''
+            
+            # Get base trade type (remove ticker prefix if present)
+            base_trade_type = trade_type
+            if ticker and trade_type.startswith(ticker + ' '):
+                base_trade_type = trade_type[len(ticker) + 1:]
+            
+            # Get trade_type_id
+            cursor.execute('SELECT id FROM trade_types WHERE type_name = ?', (base_trade_type,))
+            trade_type_row = cursor.fetchone()
+            trade_type_id = trade_type_row['id'] if trade_type_row else None
+            
+            # Get current date for the new trade
+            from datetime import datetime
+            current_date = datetime.now().strftime('%Y-%m-%d')
+            
+            # Format trade_type with ticker for options trades
+            if base_trade_type in ['ROCT PUT', 'ROCT CALL']:
+                formatted_trade_type = f"{ticker} {base_trade_type}"
+            else:
+                formatted_trade_type = trade_type
+            
+            # Create a new trade entry with default values
+            # Use the same ticker, trade_type, and account
+            # Set default values for editable fields
+            # Set trade_parent_id to the original trade's ID
+            cursor.execute('''
+                INSERT INTO trades 
+                (account_id, ticker_id, trade_date, trade_type, num_of_contracts, strike_price, 
+                 expiration_date, credit_debit, trade_status, days_to_expiration, margin_percent, 
+                 current_price, price_per_share, total_premium, total_amount, commission_per_share,
+                 net_credit_per_share, risk_capital_per_share, margin_capital, ARORC, trade_type_id, trade_parent_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                account_id,
+                ticker_id,
+                current_date,  # Auto-populate with current date
+                formatted_trade_type,    # Same trade_type (formatted with ticker)
+                1,             # Default contracts (editable)
+                0.0,           # Default strike (editable)
+                current_date,  # Default expiration date (editable)
+                0.0,           # Default credit/debit (editable)
+                'open',        # New trade starts as 'open'
+                0,             # Default DTE (will be recalculated)
+                100.0,         # Default margin percent
+                0.0,           # Default current_price
+                0.0,           # Default price_per_share
+                0.0,           # Default total_premium
+                0.0,           # Default total_amount
+                0.0,           # Default commission_per_share
+                0.0,           # Default net_credit_per_share
+                None,          # Default risk_capital_per_share (NULL)
+                None,          # Default margin_capital (NULL)
+                None,          # Default ARORC (NULL)
+                trade_type_id,  # trade_type_id
+                trade_id  # trade_parent_id - set to the original trade's ID
+            ))
+            new_trade_id = cursor.lastrowid
+            
+            # Create cost basis entry for the roll trade
+            # Get original trade details for the diagonal format
+            original_exp_date = trade_dict.get('expiration_date', current_date)
+            original_strike = trade_dict.get('strike_price', 0.0)
+            original_trade_type = trade_dict.get('trade_type', '')
+            original_num_contracts = trade_dict.get('num_of_contracts', 1)
+            
+            # Get ticker for description
+            cursor.execute('SELECT ticker FROM tickers WHERE id = ?', (ticker_id,))
+            ticker_row = cursor.fetchone()
+            ticker = ticker_row['ticker'] if ticker_row else ''
+            
+            # Create cost basis entry with diagonal format
+            # The new trade has default values, so we'll create the entry with those
+            # It will be updated when the user fills in the actual values
+            create_roll_diagonal_cost_basis_entry(
+                cursor, new_trade_id, trade_id, account_id, ticker_id, 
+                current_date, ticker, current_date, original_exp_date,
+                0.0, original_strike, 0.0, original_trade_type, 1
+            )
+            
+            # Return the new trade ID so frontend can update it
+            conn.commit()
+            conn.close()
+            
+            return jsonify({
+                'success': True,
+                'new_trade_id': new_trade_id,
+                'message': 'New trade created for roll'
+            })
+        
         conn.commit()
         conn.close()
         
@@ -2078,6 +2201,85 @@ def update_trade_status(trade_id):
         print(f'Error updating trade status: {e}')
         print(f'Traceback: {traceback.format_exc()}')
         return jsonify({'error': f'Failed to update trade status: {str(e)}'}), 500
+
+def create_roll_diagonal_cost_basis_entry(cursor, new_trade_id, original_trade_id, account_id, ticker_id, 
+                                         trade_date, ticker, new_exp_date, original_exp_date,
+                                         new_strike, original_strike, new_credit, original_trade_type, new_num_contracts):
+    """Create cost basis entry for roll trades with diagonal format"""
+    try:
+        # Format dates as DD-MMM-YY
+        from datetime import datetime
+        try:
+            new_exp = datetime.strptime(new_exp_date, '%Y-%m-%d')
+            new_exp_formatted = new_exp.strftime('%d-%b-%y').upper()
+        except:
+            new_exp_formatted = new_exp_date
+        
+        try:
+            orig_exp = datetime.strptime(original_exp_date, '%Y-%m-%d')
+            orig_exp_formatted = orig_exp.strftime('%d-%b-%y').upper()
+        except:
+            orig_exp_formatted = original_exp_date
+        
+        # Determine if it's PUT or CALL based on trade_type
+        is_put = 'PUT' in original_trade_type or 'ROP' in original_trade_type
+        is_call = 'CALL' in original_trade_type or 'ROC' in original_trade_type
+        
+        # Create description based on trade type
+        if is_put:
+            description = f"SELL -{new_num_contracts} DIAGONAL {ticker} 100 {new_exp_formatted}/{orig_exp_formatted} {new_strike}/{original_strike} PUT @ {new_credit}"
+        elif is_call:
+            description = f"SELL -{new_num_contracts} DIAGONAL {ticker} 100 {new_exp_formatted}/{orig_exp_formatted} {new_strike}/{original_strike} CALL @ {new_credit}"
+        else:
+            description = f"SELL -{new_num_contracts} DIAGONAL {ticker} 100 {new_exp_formatted}/{orig_exp_formatted} {new_strike}/{original_strike} {original_trade_type} @ {new_credit}"
+        
+        # For diagonal roll trades:
+        # - shares = 0 (options trades)
+        # - cost_per_share = 0
+        # - total_amount = -new_credit * new_num_contracts * 100 (negative because we receive premium)
+        shares = 0
+        cost_per_share = 0
+        total_amount = -(new_credit * new_num_contracts * 100)
+        
+        # Get current running totals for this account and ticker
+        cursor.execute('''
+            SELECT running_basis, running_shares 
+            FROM cost_basis 
+            WHERE ticker_id = ? AND account_id = ?
+            ORDER BY transaction_date DESC, rowid DESC
+            LIMIT 1
+        ''', (ticker_id, account_id))
+        
+        last_entry = cursor.fetchone()
+        if last_entry:
+            running_basis = last_entry['running_basis']
+            running_shares = last_entry['running_shares']
+        else:
+            running_basis = 0
+            running_shares = 0
+        
+        # Update running totals
+        new_running_basis = running_basis + total_amount
+        new_running_shares = running_shares + shares  # shares is 0 for options
+        
+        # Calculate basis per share
+        basis_per_share = new_running_basis / new_running_shares if new_running_shares != 0 else new_running_basis
+        
+        # Insert cost basis entry
+        cursor.execute('''
+            INSERT INTO cost_basis 
+            (account_id, ticker_id, trade_id, cash_flow_id, transaction_date, description, shares, cost_per_share, 
+             total_amount, running_basis, running_shares, basis_per_share)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (account_id, ticker_id, new_trade_id, None, trade_date, description, shares, cost_per_share,
+              total_amount, new_running_basis, new_running_shares, basis_per_share))
+        
+        print(f"Created roll diagonal cost basis entry for trade {new_trade_id}: {description}")
+        
+    except Exception as e:
+        import traceback
+        print(f"Error creating roll diagonal cost basis entry: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
 
 def create_assigned_cost_basis_entry(cursor, trade):
     """Create cost basis entry for assigned trades"""
@@ -2105,12 +2307,12 @@ def create_assigned_cost_basis_entry(cursor, trade):
         return
     
     # Get current running totals BEFORE creating the assigned entry
-    # Use rowid to get the most recently inserted entry
+    # Use transaction_date to get the most recent entry chronologically
     cursor.execute('''
         SELECT running_basis, running_shares 
         FROM cost_basis 
         WHERE ticker_id = ? AND account_id = ?
-        ORDER BY rowid DESC 
+        ORDER BY transaction_date DESC, rowid DESC 
         LIMIT 1
     ''', (ticker_id, account_id))
     
@@ -2177,8 +2379,8 @@ def update_trade_field(trade_id):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Validate field name
-        valid_fields = ['num_of_contracts', 'credit_debit', 'strike_price', 'trade_status']
+        # Validate field name (use snake_case to match database schema)
+        valid_fields = ['num_of_contracts', 'credit_debit', 'strike_price', 'trade_status', 'current_price', 'expiration_date', 'ticker', 'trade_date']
         if field not in valid_fields:
             return jsonify({'error': 'Invalid field'}), 400
         
@@ -2192,22 +2394,123 @@ def update_trade_field(trade_id):
         # Convert Row to dict for easier access
         trade = dict(trade_row)
         
+        # Get ticker for cost basis entry creation
+        cursor.execute('SELECT ticker FROM tickers WHERE id = ?', (trade['ticker_id'],))
+        ticker_row = cursor.fetchone()
+        ticker = ticker_row['ticker'] if ticker_row else ''
+        
         updates = []
         params = []
         
-        # Convert value to appropriate type
+        # Convert value to appropriate type (field names already match database schema)
+        db_field_name = field
         if field == 'num_of_contracts':
             value = int(value)
         elif field == 'credit_debit':
             value = float(value)
         elif field == 'strike_price':
             value = round_standard(float(value), 2)
+        elif field == 'current_price':
+            value = round_standard(float(value), 2)
+        elif field == 'expiration_date':
+            value = str(value)  # Date string in YYYY-MM-DD format
+        elif field == 'trade_date':
+            value = str(value)  # Date string in YYYY-MM-DD format
         elif field == 'trade_status':
             value = str(value)
+        elif field == 'ticker':
+            # Ticker needs special handling - update ticker_id instead
+            ticker = str(value).upper()
+            # Get or create ticker (case-insensitive)
+            cursor.execute('SELECT id FROM tickers WHERE UPPER(ticker) = UPPER(?)', (ticker,))
+            symbol_row = cursor.fetchone()
+            
+            if symbol_row:
+                ticker_id = symbol_row['id']
+            else:
+                # Create new ticker (store as uppercase)
+                cursor.execute('INSERT INTO tickers (ticker, company_name) VALUES (?, ?)', (ticker.upper(), ticker))
+                ticker_id = cursor.lastrowid
+            
+            # Update ticker_id instead of ticker
+            db_field_name = 'ticker_id'
+            value = ticker_id
         
         # Update the field
-        updates.append(f'{field} = ?')
+        updates.append(f'{db_field_name} = ?')
         params.append(value)
+        
+        # Recalculate dependent fields based on what changed
+        if field == 'expiration_date':
+            # Recalculate days_to_expiration
+            trade_date = trade.get('trade_date')
+            if trade_date:
+                from datetime import datetime
+                try:
+                    trade_date_obj = datetime.strptime(trade_date, '%Y-%m-%d')
+                    exp_date_obj = datetime.strptime(value, '%Y-%m-%d')
+                    days_to_exp = (exp_date_obj - trade_date_obj).days
+                    updates.append('days_to_expiration = ?')
+                    params.append(days_to_exp)
+                except:
+                    pass  # If date parsing fails, skip DTE calculation
+        elif field == 'trade_date':
+            # Recalculate days_to_expiration when trade_date changes
+            expiration_date = trade.get('expiration_date')
+            if expiration_date:
+                from datetime import datetime
+                try:
+                    trade_date_obj = datetime.strptime(value, '%Y-%m-%d')
+                    exp_date_obj = datetime.strptime(expiration_date, '%Y-%m-%d')
+                    days_to_exp = (exp_date_obj - trade_date_obj).days
+                    updates.append('days_to_expiration = ?')
+                    params.append(days_to_exp)
+                except:
+                    pass  # If date parsing fails, skip DTE calculation
+            
+            # Check if this is a roll trade and if expiration dates match
+            # A roll trade is one created today (from a roll status change)
+            today = datetime.now().strftime('%Y-%m-%d')
+            if trade.get('trade_date') == today and trade.get('trade_status') == 'open':
+                # Find the original trade that was rolled (has status 'roll' and same ticker/account)
+                cursor.execute('''
+                    SELECT id, expiration_date, strike_price, trade_type, num_of_contracts
+                    FROM trades 
+                    WHERE ticker_id = ? AND account_id = ? AND trade_status = 'roll'
+                    ORDER BY id DESC
+                    LIMIT 1
+                ''', (trade['ticker_id'], trade['account_id']))
+                original_trade = cursor.fetchone()
+                
+                if original_trade:
+                    original_exp_date = original_trade['expiration_date']
+                    original_strike = original_trade['strike_price']
+                    original_trade_type = original_trade['trade_type']
+                    original_trade_id = original_trade['id']
+                    
+                    # Check if new expiration date matches original
+                    if value == original_exp_date:
+                        # Get new trade's strike_price and credit_debit
+                        new_strike = trade.get('strike_price', 0)
+                        new_credit = trade.get('credit_debit', 0)
+                        new_num_contracts = trade.get('num_of_contracts', 1)
+                        
+                        # Only create cost basis entry if strike and credit are set
+                        if new_strike > 0 and new_credit != 0:
+                            # Check if cost basis entry already exists for this roll trade
+                            cursor.execute('''
+                                SELECT id FROM cost_basis 
+                                WHERE trade_id = ? AND description LIKE 'SELL -1 DIAGONAL%'
+                            ''', (trade_id,))
+                            existing_entry = cursor.fetchone()
+                            
+                            if not existing_entry:
+                                # Create cost basis entry with diagonal format
+                                create_roll_diagonal_cost_basis_entry(
+                                    cursor, trade_id, original_trade_id, trade['account_id'], 
+                                    trade['ticker_id'], trade.get('trade_date'), ticker, value, original_exp_date,
+                                    new_strike, original_strike, new_credit, original_trade_type, new_num_contracts
+                                )
         
         # Recalculate dependent fields based on what changed
         if field == 'num_of_contracts':
@@ -2249,6 +2552,49 @@ def update_trade_field(trade_id):
             new_net_credit = round_standard((value - current_commission), 5)
             updates.append('net_credit_per_share = ?')
             params.append(new_net_credit)
+            
+            # Check if this is a roll trade and if expiration dates match
+            from datetime import datetime
+            today = datetime.now().strftime('%Y-%m-%d')
+            if trade.get('trade_date') == today and trade.get('trade_status') == 'open':
+                # Get updated values
+                new_exp_date = trade.get('expiration_date')
+                new_strike = trade.get('strike_price', 0)
+                new_credit = float(value)
+                new_num_contracts = trade.get('num_of_contracts', 1)
+                
+                # Find the original trade that was rolled
+                cursor.execute('''
+                    SELECT id, expiration_date, strike_price, trade_type, num_of_contracts
+                    FROM trades 
+                    WHERE ticker_id = ? AND account_id = ? AND trade_status = 'roll'
+                    ORDER BY id DESC
+                    LIMIT 1
+                ''', (trade['ticker_id'], trade['account_id']))
+                original_trade = cursor.fetchone()
+                
+                if original_trade and new_exp_date:
+                    original_exp_date = original_trade['expiration_date']
+                    original_strike = original_trade['strike_price']
+                    original_trade_type = original_trade['trade_type']
+                    original_trade_id = original_trade['id']
+                    
+                    # Check if new expiration date matches original
+                    if new_exp_date == original_exp_date and new_strike > 0 and new_credit != 0:
+                        # Check if cost basis entry already exists for this roll trade
+                        cursor.execute('''
+                            SELECT id FROM cost_basis 
+                            WHERE trade_id = ? AND description LIKE 'SELL -1 DIAGONAL%'
+                        ''', (trade_id,))
+                        existing_entry = cursor.fetchone()
+                        
+                        if not existing_entry:
+                            # Create cost basis entry with diagonal format
+                            create_roll_diagonal_cost_basis_entry(
+                                cursor, trade_id, original_trade_id, trade['account_id'], 
+                                trade['ticker_id'], trade.get('trade_date'), ticker, new_exp_date, original_exp_date,
+                                new_strike, original_strike, new_credit, original_trade_type, new_num_contracts
+                            )
             
             # Recalculate risk_capital_per_share for ROCT PUT and RULE ONE PUT trades
             trade_type = trade['trade_type']
@@ -2660,6 +3006,8 @@ def get_cost_basis():
         for key, ticker_data in ticker_groups.items():
             ticker = ticker_data['trades'][0]['ticker'] if ticker_data['trades'] else ''
             entries_list = ticker_data['trades']
+            # Sort entries by transaction_date to ensure correct running totals
+            entries_list.sort(key=lambda x: (x.get('transaction_date', ''), x.get('id', 0)))
             
             # Get company name from database first (cached)
             cursor.execute('SELECT company_name FROM tickers WHERE ticker = ?', (ticker,))
@@ -2703,23 +3051,34 @@ def get_cost_basis():
             
             # Map cost_basis entries to trade structure
             mapped_trades = []
+            # Calculate running totals by summing shares and amounts
+            calculated_running_shares = 0
+            calculated_running_basis = 0
             for entry in entries_list:
+                shares = entry.get('shares', 0) or 0
+                amount = entry.get('total_amount', 0) or 0
+                calculated_running_shares += shares
+                calculated_running_basis += amount
+                
+                # Calculate basis per share for this entry
+                basis_per_share = calculated_running_basis / calculated_running_shares if calculated_running_shares != 0 else calculated_running_basis
+                
                 trade = {
                     'id': entry.get('id'),
                     'trade_date': entry.get('transaction_date'),
                     'trade_description': entry.get('description'),
-                    'shares': entry.get('shares'),
+                    'shares': shares,
                     'cost_per_share': entry.get('cost_per_share'),
-                    'amount': entry.get('total_amount'),
-                    'running_basis': entry.get('running_basis'),
-                    'running_basis_per_share': entry.get('basis_per_share'),
-                    'running_shares': entry.get('running_shares'),
+                    'amount': amount,
+                    'running_basis': calculated_running_basis,
+                    'running_basis_per_share': basis_per_share,
+                    'running_shares': calculated_running_shares,
                     'trade_status': entry.get('status'),  # From linked trade
                     'trade_type': entry.get('trade_type')  # From linked trade
                 }
                 mapped_trades.append(trade)
             
-            # Calculate totals from the last entry (which has the running totals)
+            # Calculate totals from the calculated running totals (more reliable than database values)
             if mapped_trades:
                 last_entry = mapped_trades[-1]
                 total_shares = last_entry['running_shares']
@@ -2964,17 +3323,27 @@ def repopulate_cash_flows():
             
             # Create cash flow entry for the initial trade
             if requires_contracts == 1:
-                # Options trade: create positive cash flow entry
+                # Options trade: determine if PUT or CALL
+                if 'PUT' in trade_type or 'ROP' in trade_type:
+                    transaction_type = 'SELL PUT'
+                elif 'CALL' in trade_type or 'ROC' in trade_type:
+                    transaction_type = 'SELL CALL'
+                else:
+                    # Default to PREMIUM_CREDIT if can't determine
+                    transaction_type = 'PREMIUM_CREDIT'
                 amount = premium * num_of_contracts * 100
                 cursor.execute('''
                     INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (account_id, trade_date, 'OPTIONS', round(amount, 2), 
+                ''', (account_id, trade_date, transaction_type, round(amount, 2), 
                       f"{trade_type} premium received", trade_id, ticker_id))
             else:
-                # Non-options trade: create BUY/SELL entry
+                # Non-options trade: use PREMIUM_CREDIT or PREMIUM_DEBIT
                 amount = trade_dict.get('total_premium', premium * num_of_contracts)
-                transaction_type = 'BUY' if trade_type == 'BTO' else 'SELL'
+                if trade_type == 'BTO':
+                    transaction_type = 'PREMIUM_DEBIT'  # Buying stock
+                else:
+                    transaction_type = 'PREMIUM_CREDIT'  # Selling stock
                 cursor.execute('''
                     INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -3089,7 +3458,11 @@ def repopulate_cost_basis():
                     ''', (cash_flow_id, trade_id, account_id, ticker_id))
                     linked_count += 1
             else:
-                print(f"No ASSIGNMENT cash flow found for trade {trade_id}", flush=True)
+                # No cash flow found, but still create cost basis entry if it doesn't exist
+                if not cost_basis_entry:
+                    print(f"No ASSIGNMENT cash flow found for trade {trade_id}, but creating cost basis entry anyway", flush=True)
+                    create_assigned_cost_basis_entry(cursor, trade_dict)
+                    created_count += 1
         
         conn.commit()
         conn.close()
@@ -3104,6 +3477,134 @@ def repopulate_cost_basis():
         print(f'Error repopulating cost basis: {e}')
         print(f'Traceback: {error_detail}')
         return jsonify({'error': f'Failed to repopulate cost basis: {str(e)}'}), 500
+
+@app.route('/api/backfill-cash-flows-for-cost-basis', methods=['POST'])
+def backfill_cash_flows_for_cost_basis():
+    """Create missing cash_flow entries for all cost_basis entries that don't have one"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get all cost_basis entries without cash_flow_id
+        cursor.execute('''
+            SELECT cb.*, t.ticker, tr.trade_type, tr.trade_status, tr.num_of_contracts, 
+                   tr.strike_price, tr.expiration_date, tr.account_id as trade_account_id
+            FROM cost_basis cb
+            JOIN tickers t ON cb.ticker_id = t.id
+            LEFT JOIN trades tr ON cb.trade_id = tr.id
+            WHERE cb.cash_flow_id IS NULL
+            ORDER BY cb.transaction_date ASC
+        ''')
+        cost_basis_entries = cursor.fetchall()
+        
+        print(f"Found {len(cost_basis_entries)} cost_basis entries without cash_flow_id", flush=True)
+        
+        created_count = 0
+        linked_count = 0
+        
+        for cb_entry in cost_basis_entries:
+            cb_dict = dict(cb_entry)
+            cb_id = cb_dict['id']
+            account_id = cb_dict['account_id']
+            ticker_id = cb_dict['ticker_id']
+            trade_id = cb_dict['trade_id']
+            transaction_date = cb_dict['transaction_date']
+            description = cb_dict['description']
+            total_amount = cb_dict['total_amount']
+            ticker = cb_dict['ticker']
+            
+            # Check if a cash_flow already exists for this trade and transaction_date
+            cursor.execute('''
+                SELECT id FROM cash_flows
+                WHERE trade_id = ? AND transaction_date = ? AND ticker_id = ?
+            ''', (trade_id, transaction_date, ticker_id))
+            existing_cash_flow = cursor.fetchone()
+            
+            if existing_cash_flow:
+                # Link existing cash_flow to cost_basis
+                cash_flow_id = existing_cash_flow['id']
+                cursor.execute('''
+                    UPDATE cost_basis SET cash_flow_id = ? WHERE id = ?
+                ''', (cash_flow_id, cb_id))
+                linked_count += 1
+                print(f"Linked cost_basis {cb_id} to existing cash_flow {cash_flow_id}", flush=True)
+            else:
+                # Create new cash_flow entry based on cost_basis description
+                transaction_type = None
+                amount = total_amount
+                
+                # Determine transaction type based on description
+                if 'ASSIGNED' in description.upper() or 'ASSIGNMENT' in description.upper():
+                    transaction_type = 'ASSIGNMENT'
+                    # For assigned trades, amount should match the cost_basis total_amount
+                    # PUT assignments: negative (buying shares)
+                    # CALL assignments: positive (selling shares)
+                elif 'BTO' in description.upper() or 'BUY' in description.upper():
+                    transaction_type = 'PREMIUM_DEBIT'  # Buying stock
+                    # BTO: negative amount (buying shares, money goes out)
+                    amount = abs(total_amount) if total_amount < 0 else -abs(total_amount)
+                elif 'STC' in description.upper() or 'SELL' in description.upper():
+                    # Options trades (SELL): determine PUT or CALL
+                    # Stock trades (STC): PREMIUM_CREDIT
+                    if cb_dict.get('trade_type') and cb_dict['trade_type'] not in ['BTO', 'STC']:
+                        # Options trade: determine PUT or CALL
+                        trade_type = cb_dict['trade_type']
+                        if 'PUT' in trade_type or 'ROP' in trade_type:
+                            transaction_type = 'SELL PUT'
+                        elif 'CALL' in trade_type or 'ROC' in trade_type:
+                            transaction_type = 'SELL CALL'
+                        else:
+                            transaction_type = 'PREMIUM_CREDIT'
+                        # Options: negative amount (we receive premium)
+                        amount = abs(total_amount) if total_amount < 0 else -abs(total_amount)
+                    else:
+                        transaction_type = 'PREMIUM_CREDIT'  # Stock trade
+                        # STC: positive amount (selling shares, money comes in)
+                        amount = abs(total_amount) if total_amount > 0 else -abs(total_amount)
+                else:
+                    # Default: assume it's an options trade
+                    if cb_dict.get('trade_type'):
+                        trade_type = cb_dict['trade_type']
+                        if 'PUT' in trade_type or 'ROP' in trade_type:
+                            transaction_type = 'SELL PUT'
+                        elif 'CALL' in trade_type or 'ROC' in trade_type:
+                            transaction_type = 'SELL CALL'
+                        else:
+                            transaction_type = 'PREMIUM_CREDIT'
+                    else:
+                        transaction_type = 'PREMIUM_CREDIT'
+                    amount = abs(total_amount) if total_amount < 0 else -abs(total_amount)
+                
+                # Create cash_flow entry
+                cash_flow_description = description
+                cursor.execute('''
+                    INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (account_id, transaction_date, transaction_type, round(amount, 2), 
+                      cash_flow_description, trade_id, ticker_id))
+                cash_flow_id = cursor.lastrowid
+                
+                # Link cost_basis to cash_flow
+                cursor.execute('''
+                    UPDATE cost_basis SET cash_flow_id = ? WHERE id = ?
+                ''', (cash_flow_id, cb_id))
+                
+                created_count += 1
+                print(f"Created cash_flow {cash_flow_id} for cost_basis {cb_id} ({description})", flush=True)
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Created {created_count} new cash_flow entries and linked {linked_count} existing entries for {len(cost_basis_entries)} cost_basis entries'
+        })
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f'Error backfilling cash flows for cost basis: {e}')
+        print(f'Traceback: {error_detail}')
+        return jsonify({'error': f'Failed to backfill cash flows: {str(e)}'}), 500
 
 @app.route('/test')
 def test_endpoint():
@@ -3544,6 +4045,7 @@ def import_excel():
                 21: "credit_debit",     # Row 21 -> trades.credit_debit
                 41: "num_of_contracts", # Row 41 -> trades.num_of_contracts
                 64: "trade_status",     # Row 64 -> trades.trade_status (dropdown: open, expired, closed, roll, assigned)
+                65: "roll_indicator",   # Row 65 -> "ROLL" indicates this column is a roll trade
             }
 
             # Build trade columns from row 1 (trade_type_raw)
@@ -3561,18 +4063,64 @@ def import_excel():
             # Build a dataframe column by column
             # Only include columns where row 1 has a value (skip empty metadata columns)
             # Row 64 provides trade_status when available
+            # Row 65 provides roll indicator - if "ROLL", this column is a roll trade
             data = {field: [] for field in mapping.values()}
+            data['trade_parent_id'] = []  # Add trade_parent_id to track roll relationships
+            data['after_blank'] = []  # Track if this trade comes after a blank column
             collected_cols = []
             
-            for c in trade_cols:
+            # Get row 65 for roll indicator
+            roll_indicator_row = rows.get(65, {})
+            
+            # Track the previous trade's column index for roll trades
+            previous_trade_col = None
+            
+            for i, c in enumerate(trade_cols):
                 # Check if row 1 has data in this column (trade_type_raw)
                 if 1 in rows and c in rows[1] and rows[1][c]:
+                    # Check if this trade comes after a blank column
+                    # A blank column is detected if:
+                    # 1. This is the first trade (previous_trade_col is None), OR
+                    # 2. There's a gap between the previous trade column and this column (not adjacent)
+                    #    (e.g., previous was column 5, this is column 10 - columns 6-9 are blank)
+                    if previous_trade_col is None:
+                        after_blank = True
+                    else:
+                        # Check if there's a gap between previous_trade_col and current column
+                        # If the difference is more than 1, there are blank columns in between
+                        after_blank = (c - previous_trade_col > 1)
+                    
+                    # Check if row 65 indicates this is a roll trade
+                    roll_indicator = roll_indicator_row.get(c, "").strip().upper() if roll_indicator_row else ""
+                    is_roll = roll_indicator == "ROLL"
+                    
+                    # Import logic:
+                    # 1. Blank column = separator, starts a new trade sequence (not linked)
+                    # 2. If a trade has status "roll" and comes after a blank column, the next trade (if not blank) should be its child
+                    # 3. If a trade is adjacent to a previous trade (not after blank), it should be part of the chain (child of previous)
+                    # 4. Chain continues until a blank column is encountered
+                    
+                    if after_blank:
+                        # This trade comes after a blank column - it's a new trade sequence
+                        # IMPORTANT: If there's a blank column before a trade, it should NOT have a trade_parent_id
+                        # If it's a roll trade, the next trade (if not blank) will be its child
+                        trade_parent_id = None  # Will be set during insertion if needed
+                        print(f"Column {c}: Trade comes after blank column (gap detected: {c - previous_trade_col if previous_trade_col else 'first trade'}), treating as new trade sequence", flush=True)
+                        previous_trade_col = c  # Update previous trade column
+                    else:
+                        # This trade is adjacent to a previous trade (not after blank)
+                        # It should be part of the chain (child of previous)
+                        trade_parent_id = None  # Will be set during insertion based on previous_trade_id
+                        previous_trade_col = c  # Update previous trade column
+                    
                     collected_cols.append(c)
                     for r, field in mapping.items():
                         # For trade_status (row 64), use the value from trade_status_row
                         # If not present in row 64, it will be empty string (will default to 'open' later)
                         if field == "trade_status":
                             val = trade_status_row.get(c, "")
+                        elif field == "roll_indicator":
+                            val = roll_indicator
                         else:
                             val = rows.get(r, {}).get(c, "")
                         data[field].append(val)
@@ -3580,6 +4128,14 @@ def import_excel():
                         if r == 64 and field == "trade_status":
                             status_msg = f"'{val}'" if val else "'EMPTY - will default to open'"
                             print(f"Trade status from column {c} (row 64): {status_msg}", flush=True)
+                    
+                    # Add trade_parent_id (will be updated during insertion)
+                    data['trade_parent_id'].append(trade_parent_id)
+                    # Add after_blank flag
+                    data['after_blank'].append(after_blank)
+                else:
+                    # Blank column - reset previous_trade_col to start a new trade sequence
+                    previous_trade_col = None
             
             df = pd.DataFrame(data)
             
@@ -3717,7 +4273,16 @@ def import_excel():
             imported_count = 0
             errors = []
             
+            # Track the previous trade's ID for roll trades
+            previous_trade_id = None
+            
             for idx, row in df_to_insert.iterrows():
+                # Check if this trade comes after a blank column - if so, reset previous_trade_id
+                after_blank = row.get('after_blank', False)
+                if after_blank:
+                    previous_trade_id = None
+                    print(f"Row {idx}: Blank column detected, resetting previous_trade_id", flush=True)
+                
                 try:
                     # Get ticker safely
                     ticker = str(row.get('ticker', '')).strip()
@@ -3863,17 +4428,64 @@ def import_excel():
                                 arorc = round_standard(arorc_decimal * 100.0, 1)
                     
                     # Get trade_type_id from trade_types table
-                    # Extract base trade type (remove ticker prefix if present)
+                    # First try the full trade_type as-is
+                    cursor.execute('SELECT id FROM trade_types WHERE type_name = ?', (trade_type,))
+                    trade_type_row = cursor.fetchone()
+                    trade_type_id = trade_type_row['id'] if trade_type_row else None
+                    
+                    # Initialize base_trade_type for later use
                     base_trade_type = trade_type
-                    if ' ' in trade_type:
+                    
+                    # If not found, try extracting base trade type (remove ticker prefix if present)
+                    if trade_type_id is None and ' ' in trade_type:
                         # Check if it starts with a ticker (4-5 uppercase letters followed by space)
                         parts = trade_type.split(' ', 1)
                         if len(parts) == 2 and len(parts[0]) <= 5 and parts[0].isupper():
                             base_trade_type = parts[1]  # Use the part after the ticker
+                            cursor.execute('SELECT id FROM trade_types WHERE type_name = ?', (base_trade_type,))
+                            trade_type_row = cursor.fetchone()
+                            trade_type_id = trade_type_row['id'] if trade_type_row else None
                     
-                    cursor.execute('SELECT id FROM trade_types WHERE type_name = ?', (base_trade_type,))
-                    trade_type_row = cursor.fetchone()
-                    trade_type_id = trade_type_row['id'] if trade_type_row else None
+                    if trade_type_id is None:
+                        print(f"WARNING: trade_type_id not found for trade_type '{trade_type}'", flush=True)
+                    
+                    # Check if this trade comes after a blank column
+                    after_blank = row.get('after_blank', False)
+                    
+                    # Import logic:
+                    # 1. Blank column = separator, starts a new trade sequence (not linked)
+                    # 2. If a trade has status "roll" and comes after a blank column, the next trade (if not blank) should be its child
+                    # 3. If a trade is adjacent to a previous trade (not after blank), it should be part of the chain (child of previous)
+                    # 4. Chain continues until a blank column is encountered
+                    
+                    if after_blank:
+                        # Trade comes after blank column - it's a new trade sequence
+                        # IMPORTANT: If there's a blank column before a trade, it should NOT have a trade_parent_id,
+                        # regardless of its status (even if it's "roll")
+                        # The blank column is a separator - it starts a new trade sequence
+                        trade_parent_id = None
+                        print(f"Row {idx}: Trade comes after blank column, treating as new trade sequence (NO PARENT) (ticker: {ticker}, date: {trade_date}, status: {trade_status})", flush=True)
+                    else:
+                        # This trade is adjacent to a previous trade (not after blank)
+                        # It should be part of the chain (child of previous)
+                        if previous_trade_id is None:
+                            print(f"WARNING: Trade is adjacent to previous but previous_trade_id is None for ticker {ticker}", flush=True)
+                            trade_parent_id = None
+                        else:
+                            trade_parent_id = previous_trade_id
+                            print(f"Row {idx}: Trade is adjacent to previous (part of chain), setting trade_parent_id={previous_trade_id} (ticker: {ticker}, date: {trade_date})", flush=True)
+                    
+                    # Create trade_dict for use in cost basis creation (before insertion)
+                    trade_dict = {
+                        'id': None,  # Will be set after insertion
+                        'account_id': account_id,
+                        'ticker_id': ticker_id,
+                        'trade_date': trade_date,
+                        'expiration_date': expiration_date,
+                        'trade_type': trade_type,
+                        'num_of_contracts': num_of_contracts,
+                        'strike_price': strike_price
+                    }
                     
                     # Insert trade
                     cursor.execute('''
@@ -3881,18 +4493,132 @@ def import_excel():
                         (account_id, ticker_id, trade_date, expiration_date, num_of_contracts, 
                          credit_debit, total_premium, days_to_expiration, current_price, 
                          strike_price, trade_status, trade_type, price_per_share, total_amount,
-                         commission_per_share, net_credit_per_share, risk_capital_per_share, margin_capital, margin_percent, ARORC, trade_type_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         commission_per_share, net_credit_per_share, risk_capital_per_share, margin_capital, margin_percent, ARORC, trade_type_id, trade_parent_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (account_id, ticker_id, trade_date, expiration_date, num_of_contracts,
                           credit_debit, total_premium, days_to_expiration, current_price,
                           strike_price, trade_status, trade_type, current_price, total_premium,
-                          commission, net_credit_per_share, risk_capital_per_share, margin_capital, margin_percent, arorc, trade_type_id))
+                          commission, net_credit_per_share, risk_capital_per_share, margin_capital, margin_percent, arorc, trade_type_id, trade_parent_id))
                     
                     trade_id = cursor.lastrowid
                     
-                    # Create cost basis entry for options trades
-                    create_options_cost_basis_entry(cursor, account_id, ticker_id, trade_id, trade_date, trade_type, 
-                                                    num_of_contracts, credit_debit, strike_price, expiration_date)
+                    # Update trade_dict with the new trade_id
+                    trade_dict['id'] = trade_id
+                    
+                    # Update previous_trade_id for next iteration
+                    # Always update to the current trade_id so that consecutive roll trades chain correctly
+                    # For example: Trade A (roll) -> Trade B (roll, parent=A) -> Trade C (roll, parent=B)
+                    previous_trade_id = trade_id
+                    
+                    # Create cost basis entry based on trade status
+                    if trade_status == 'assigned':
+                        # For assigned trades, create assigned cost basis entry and cash flow
+                        # First create the assigned cost basis entry
+                        # create_assigned_cost_basis_entry accepts dict or Row, so pass trade_dict directly
+                        create_assigned_cost_basis_entry(cursor, trade_dict)
+                        
+                        # Then create cash flow entry for the assignment
+                        shares = num_of_contracts * 100
+                        if 'PUT' in trade_type or 'ROP' in trade_type:
+                            # PUT assignment: negative amount (buying shares)
+                            total_amount = -(strike_price * shares)
+                            description = f"ASSIGNMENT: BUY {shares} {ticker} @ ${strike_price} (assigned PUT)"
+                        else:
+                            # CALL assignment: positive amount (selling shares)
+                            total_amount = strike_price * shares
+                            description = f"ASSIGNMENT: SELL {shares} {ticker} @ ${strike_price} (assigned CALL)"
+                        
+                        # Use expiration_date + 2 days as transaction_date for assigned trades
+                        try:
+                            exp_date_obj = datetime.strptime(expiration_date, '%Y-%m-%d')
+                            assignment_transaction_date = (exp_date_obj + timedelta(days=2)).strftime('%Y-%m-%d')
+                        except:
+                            assignment_transaction_date = expiration_date  # Fallback to expiration_date if parsing fails
+                        
+                        cursor.execute('''
+                            INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''', (account_id, assignment_transaction_date, 'ASSIGNMENT', round(total_amount, 2), 
+                              description, trade_id, ticker_id))
+                        cash_flow_id = cursor.lastrowid
+                        
+                        # Link the cost_basis entry to this cash flow
+                        assigned_trade_date = expiration_date
+                        cursor.execute('''
+                            UPDATE cost_basis SET cash_flow_id = ? 
+                            WHERE trade_id = ? AND account_id = ? AND ticker_id = ? AND transaction_date = ?
+                            AND description LIKE 'ASSIGNED%' AND cash_flow_id IS NULL
+                        ''', (cash_flow_id, trade_id, account_id, ticker_id, assigned_trade_date))
+                    elif is_roll and trade_parent_id:
+                        # For roll trades, create roll diagonal cost basis entry
+                        # Get the parent trade details
+                        cursor.execute('''
+                            SELECT expiration_date, strike_price, trade_type, num_of_contracts
+                            FROM trades
+                            WHERE id = ?
+                        ''', (trade_parent_id,))
+                        parent_trade = cursor.fetchone()
+                        
+                        if parent_trade:
+                            original_exp_date = parent_trade['expiration_date']
+                            original_strike = parent_trade['strike_price']
+                            original_trade_type = parent_trade['trade_type']
+                            
+                            # Only create if we have valid values
+                            if strike_price > 0 and credit_debit != 0:
+                                create_roll_diagonal_cost_basis_entry(
+                                    cursor, trade_id, trade_parent_id, account_id, ticker_id,
+                                    trade_date, ticker, expiration_date, original_exp_date,
+                                    strike_price, original_strike, credit_debit, original_trade_type, num_of_contracts
+                                )
+                    else:
+                        # For regular trades, create standard options cost basis entry
+                        create_options_cost_basis_entry(cursor, account_id, ticker_id, trade_id, trade_date, trade_type, 
+                                                        num_of_contracts, credit_debit, strike_price, expiration_date)
+                    
+                    # Create cash flow entry for EVERY trade (if not already created for assigned trades)
+                    if trade_status != 'assigned':
+                        # Check if this trade type requires contracts
+                        cursor.execute('SELECT requires_contracts FROM trade_types WHERE type_name = ?', (base_trade_type,))
+                        trade_type_row = cursor.fetchone()
+                        requires_contracts = trade_type_row['requires_contracts'] if trade_type_row else 0
+                        
+                        cash_flow_id = None
+                        if requires_contracts == 1:
+                            # Options trade: determine if PUT or CALL
+                            if 'PUT' in trade_type or 'ROP' in trade_type:
+                                transaction_type = 'SELL PUT'
+                            elif 'CALL' in trade_type or 'ROC' in trade_type:
+                                transaction_type = 'SELL CALL'
+                            else:
+                                # Default to PREMIUM_CREDIT if can't determine
+                                transaction_type = 'PREMIUM_CREDIT'
+                            cursor.execute('''
+                                INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            ''', (account_id, trade_date, transaction_type, round(credit_debit * num_of_contracts * 100, 2), 
+                                  f"{trade_type} premium received", trade_id, ticker_id))
+                            cash_flow_id = cursor.lastrowid
+                        else:
+                            # For BTO/STC or other trade types that don't require contracts
+                            # These are stock trades, use PREMIUM_CREDIT or PREMIUM_DEBIT
+                            if trade_type == 'BTO':
+                                transaction_type = 'PREMIUM_DEBIT'  # Buying stock
+                            else:
+                                transaction_type = 'PREMIUM_CREDIT'  # Selling stock
+                            cursor.execute('''
+                                INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            ''', (account_id, trade_date, transaction_type, round(total_premium, 2), 
+                                  f"{trade_type} {num_of_contracts} shares", trade_id, ticker_id))
+                            cash_flow_id = cursor.lastrowid
+                        
+                        # Update cost_basis entry to link to cash_flow if cash flow was created
+                        if cash_flow_id:
+                            cursor.execute('''
+                                UPDATE cost_basis SET cash_flow_id = ? 
+                                WHERE trade_id = ? AND ticker_id = ? AND transaction_date = ? AND cash_flow_id IS NULL
+                            ''', (cash_flow_id, trade_id, ticker_id, trade_date))
                     
                     imported_count += 1
                     
