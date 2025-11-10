@@ -5109,7 +5109,7 @@ def import_cost_basis_excel():
                         
                         # Start at row 11 and process rows until blank
                         row = 11
-                        processed_rows = set()  # Track processed rows to prevent duplicates
+                        processed_data = set()  # Track processed data to prevent duplicates (based on content, not row number)
                         while True:
                             # Check if row B is blank
                             description = cells.get((row, 2), "").strip()
@@ -5117,21 +5117,26 @@ def import_cost_basis_excel():
                                 # Blank row found, move to next sheet
                                 break
                             
-                            # Skip if we've already processed this row
-                            if row in processed_rows:
-                                print(f"Sheet '{sheet_name}', Row {row}: Already processed, skipping", flush=True)
-                                row += 1
-                                continue
-                            
                             # Check if it's a dividend (case-insensitive, check for DIVIDEND anywhere in description)
                             description_upper = description.upper()
                             if 'DIVIDEND' in description_upper:
                                 try:
+                                    # Get date and amount to create a unique key for duplicate detection
+                                    transaction_date_str = cells.get((row, 3), "").strip()
+                                    amount_str = cells.get((row, 7), "").strip()
+                                    data_key = ('dividend', ticker_id, transaction_date_str, amount_str)
+                                    
+                                    # Check if we've already processed this exact dividend data
+                                    if data_key in processed_data:
+                                        print(f"Sheet '{sheet_name}', Row {row}: Duplicate dividend data detected, skipping", flush=True)
+                                        row += 1
+                                        continue
+                                    
                                     print(f"Sheet '{sheet_name}', Row {row}: Processing dividend - Description: '{description}'", flush=True)
                                     result = process_dividend_row(cursor, cells, row, ticker_id, account_id, ticker_symbol)
                                     if result:
                                         total_dividends += 1
-                                        processed_rows.add(row)
+                                        processed_data.add(data_key)
                                         print(f"Sheet '{sheet_name}', Row {row}: Successfully imported dividend", flush=True)
                                     else:
                                         print(f"Sheet '{sheet_name}', Row {row}: Dividend processing returned None", flush=True)
@@ -5151,18 +5156,20 @@ def import_cost_basis_excel():
                                     # Get date and shares to create a unique key for duplicate detection
                                     transaction_date_str = cells.get((row, 3), "").strip()
                                     shares_str = cells.get((row, 5), "").strip()
-                                    row_key = (row, description, transaction_date_str, shares_str)
+                                    # Create key based on data content, not row number
+                                    data_key = ('trade', ticker_id, description, transaction_date_str, shares_str)
                                     
-                                    # Check if we've already processed this exact row data
-                                    if row_key in processed_rows:
-                                        print(f"Sheet '{sheet_name}', Row {row}: Duplicate data detected, skipping", flush=True)
+                                    # Check if we've already processed this exact trade data
+                                    if data_key in processed_data:
+                                        print(f"Sheet '{sheet_name}', Row {row}: Duplicate trade data detected (Description: '{description}', Date: '{transaction_date_str}', Shares: '{shares_str}'), skipping", flush=True)
                                         row += 1
                                         continue
                                     
                                     result = process_trade_row(cursor, db, cells, row, ticker_id, account_id, ticker_symbol)
                                     if result:
                                         total_trades += 1
-                                        processed_rows.add(row_key)
+                                        processed_data.add(data_key)
+                                        print(f"Sheet '{sheet_name}', Row {row}: Successfully imported trade", flush=True)
                                 except Exception as e:
                                     error_msg = f"Sheet '{sheet_name}', Row {row}: {str(e)}"
                                     errors.append(error_msg)
