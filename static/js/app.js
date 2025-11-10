@@ -1223,10 +1223,28 @@ async function loadCostBasis(ticker = null) {
             }
         } else {
             // If no ticker is selected, show all available symbols
+            // Check if we already have symbols displayed from trades data
+            // If so, only update if we have better data from API
+            const costBasisContainer = document.getElementById('cost-basis-table-container');
+            const alreadyShowingSymbols = costBasisContainer && costBasisContainer.querySelector('.symbol-card');
+            
             if (data.length === 0) {
-                hideCostBasisTable();
+                // If API returns no data, check if we have trades data to show symbols from
+                if (trades && trades.length > 0 && !alreadyShowingSymbols) {
+                    showAllSymbolsFromTrades();
+                } else if (!alreadyShowingSymbols) {
+                    hideCostBasisTable();
+                }
+                // If already showing symbols, don't overwrite
             } else {
-                showAllSymbols(data);
+                // Use API data which may have more complete information
+                // But only if we don't already have symbols displayed
+                if (!alreadyShowingSymbols) {
+                    showAllSymbols(data);
+                } else {
+                    // Already showing symbols, just update with API data if it's better
+                    showAllSymbols(data);
+                }
             }
         }
     } catch (error) {
