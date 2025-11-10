@@ -5113,12 +5113,16 @@ def import_cost_basis_excel():
                         # Start at row 11 and process rows until blank
                         row = 11
                         processed_data = set()  # Track processed data to prevent duplicates (based on content, not row number)
+                        print(f"Sheet '{sheet_name}': Starting to process rows from row 11", flush=True)
                         while True:
                             # Check if row B is blank
                             description = cells.get((row, 2), "").strip()
                             if not description:
                                 # Blank row found, move to next sheet
+                                print(f"Sheet '{sheet_name}': Blank row found at row {row}, moving to next sheet", flush=True)
                                 break
+                            
+                            print(f"Sheet '{sheet_name}', Row {row}: Found description '{description}' in column B", flush=True)
                             
                             # Check if it's a dividend (case-insensitive, check for DIVIDEND anywhere in description)
                             description_upper = description.upper()
@@ -5154,11 +5158,13 @@ def import_cost_basis_excel():
                             
                             # Check if it's a trade type (BUY, SELL, BTO, STC)
                             trade_type = get_trade_type(description)
+                            print(f"Sheet '{sheet_name}', Row {row}: get_trade_type returned '{trade_type}' for description '{description}'", flush=True)
                             if trade_type in ['BUY', 'SELL', 'BTO', 'STC']:
                                 try:
                                     # Get date and shares to create a unique key for duplicate detection
                                     transaction_date_str = cells.get((row, 3), "").strip()
                                     shares_str = cells.get((row, 5), "").strip()
+                                    print(f"Sheet '{sheet_name}', Row {row}: Date='{transaction_date_str}' (col C), Shares='{shares_str}' (col E)", flush=True)
                                     # Create key based on data content, not row number
                                     data_key = ('trade', ticker_id, description, transaction_date_str, shares_str)
                                     
@@ -5168,18 +5174,24 @@ def import_cost_basis_excel():
                                         row += 1
                                         continue
                                     
+                                    print(f"Sheet '{sheet_name}', Row {row}: Processing trade - Type: {trade_type}, Ticker: {ticker_symbol}", flush=True)
                                     result = process_trade_row(cursor, db, cells, row, ticker_id, account_id, ticker_symbol)
                                     if result:
                                         total_trades += 1
                                         processed_data.add(data_key)
                                         print(f"Sheet '{sheet_name}', Row {row}: Successfully imported trade", flush=True)
+                                    else:
+                                        print(f"Sheet '{sheet_name}', Row {row}: process_trade_row returned None", flush=True)
                                 except Exception as e:
                                     error_msg = f"Sheet '{sheet_name}', Row {row}: {str(e)}"
                                     errors.append(error_msg)
                                     print(f"Error processing trade: {error_msg}", flush=True)
+                                    import traceback
+                                    print(f"Traceback: {traceback.format_exc()}", flush=True)
                                 row += 1
                             else:
                                 # Not a trade type, move to next row
+                                print(f"Sheet '{sheet_name}', Row {row}: Not a recognized trade type (got '{trade_type}'), moving to next row", flush=True)
                                 row += 1
                     
                     except Exception as e:
