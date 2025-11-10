@@ -5934,8 +5934,11 @@ async function handleExcelUpload(event) {
                 return;
             }
         }
+        // Check import type - prioritize cost basis if checked
         if (importTypeCostBasis && importTypeCostBasis.checked) {
             importType = 'cost-basis';
+        } else if (importTypeTrades && importTypeTrades.checked) {
+            importType = 'trades';
         }
     }
     
