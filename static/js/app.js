@@ -1,4 +1,6 @@
 let trades = [];
+let cachedTrades = null; // Cache original unfiltered trades data
+let cachedCostBasis = null; // Cache original unfiltered cost basis data
 let currentFilter = { startDate: null, endDate: null, period: 'all' };
 let statusFilter = '';
 let sortColumn = 'trade_date'; // Default to sorting by trade date
