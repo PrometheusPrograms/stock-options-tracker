@@ -4291,12 +4291,14 @@ function setUniversalTickerFilter(ticker) {
         // Reload all data with the ticker filter to ensure everything is in sync
         // This ensures the dashboard, trades table, and cost basis table all update
         // based on both the selected account and ticker filter
-        // Use setTimeout to ensure the input value is set before async operations
-        setTimeout(() => {
-            loadTrades();
-            loadSummary();
-            loadCostBasis(ticker);
-        }, 0);
+        // Run all loads in parallel to reduce delay
+        Promise.all([
+            loadTrades(),
+            loadSummary(),
+            loadCostBasis(ticker)
+        ]).catch(error => {
+            console.error('Error loading data after setting ticker filter:', error);
+        });
     }
 }
 
