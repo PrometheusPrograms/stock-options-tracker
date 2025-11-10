@@ -2884,8 +2884,15 @@ function showAllSymbols(data = null) {
     const targetContainers = [costBasisContainer, inlineContainer].filter(c => c !== null);
     if (targetContainers.length === 0) return;
     
-    // Get all unique tickers from trades data - we already have this loaded!
-    const allTickers = [...new Set(trades.map(trade => trade.ticker))].filter(ticker => ticker && ticker.trim() !== '').sort();
+    // Get all unique tickers from cost basis data if provided, otherwise from trades data
+    let allTickers = [];
+    if (data && data.length > 0) {
+        // Use cost basis data to get unique tickers
+        allTickers = [...new Set(data.map(entry => entry.ticker))].filter(ticker => ticker && ticker.trim() !== '').sort();
+    } else if (trades && trades.length > 0) {
+        // Fallback to trades data if cost basis data is not available
+        allTickers = [...new Set(trades.map(trade => trade.ticker))].filter(ticker => ticker && ticker.trim() !== '').sort();
+    }
     
     if (allTickers.length === 0) {
         targetContainers.forEach(c => {
