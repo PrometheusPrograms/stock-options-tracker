@@ -4354,16 +4354,22 @@ function setupUniversalControls() {
             const importTypeTrades = document.getElementById('import-type-trades');
             const importTypeCostBasis = document.getElementById('import-type-cost-basis');
             
+            // Debug logging
+            console.log('File upload triggered - importTypeTrades.checked:', importTypeTrades?.checked, 'importTypeCostBasis.checked:', importTypeCostBasis?.checked);
+            
             // Check if any button is selected
-            if (!importTypeTrades.checked && !importTypeCostBasis.checked) {
+            if (!importTypeTrades?.checked && !importTypeCostBasis?.checked) {
                 // If no button is selected, default to Trades and select it
-                importTypeTrades.checked = true;
+                if (importTypeTrades) importTypeTrades.checked = true;
+                console.log('No import type selected, defaulting to trades');
                 handleExcelUpload(event);
             } else if (importTypeCostBasis && importTypeCostBasis.checked) {
                 // Call cost basis import function
+                console.log('Cost basis import selected, calling handleCostBasisUpload');
                 handleCostBasisUpload(event);
             } else {
                 // Call trades import function (existing)
+                console.log('Trades import selected, calling handleExcelUpload');
                 handleExcelUpload(event);
             }
             
