@@ -4370,21 +4370,25 @@ function setupUniversalControls() {
     if (menuExcelUpload) {
         menuExcelUpload.addEventListener('change', function(event) {
             // Get fresh references to radio buttons to ensure we have the current state
+            // Use querySelector to get the actual checked state from the DOM
             const importTypeTrades = document.getElementById('import-type-trades');
             const importTypeCostBasis = document.getElementById('import-type-cost-basis');
             
-            // Debug logging - check both the element and querySelector to verify state
-            const tradesChecked = importTypeTrades?.checked;
-            const costBasisChecked = importTypeCostBasis?.checked;
+            // Use querySelector to check the actual DOM state - this is more reliable
             const tradesCheckedViaQuery = document.querySelector('#import-type-trades:checked') !== null;
             const costBasisCheckedViaQuery = document.querySelector('#import-type-cost-basis:checked') !== null;
             
+            // Also check the element properties as fallback
+            const tradesChecked = importTypeTrades?.checked;
+            const costBasisChecked = importTypeCostBasis?.checked;
+            
+            // Use querySelector result as primary source of truth
+            const isCostBasisSelected = costBasisCheckedViaQuery || costBasisChecked;
+            const isTradesSelected = tradesCheckedViaQuery || tradesChecked;
+            
             console.log('File upload triggered - importTypeTrades.checked:', tradesChecked, 'importTypeCostBasis.checked:', costBasisChecked);
             console.log('Via querySelector - trades:', tradesCheckedViaQuery, 'cost-basis:', costBasisCheckedViaQuery);
-            
-            // Check if any button is selected - use querySelector as fallback
-            const isCostBasisSelected = costBasisChecked || costBasisCheckedViaQuery;
-            const isTradesSelected = tradesChecked || tradesCheckedViaQuery;
+            console.log('Final decision - isCostBasisSelected:', isCostBasisSelected, 'isTradesSelected:', isTradesSelected);
             
             if (!isTradesSelected && !isCostBasisSelected) {
                 // If no button is selected, default to Trades and select it
