@@ -5221,6 +5221,7 @@ def import_cost_basis_excel():
                                     # Get date and amount to create a unique key for duplicate detection
                                     transaction_date_str = cells.get((row, 3), "").strip()
                                     amount_str = cells.get((row, 7), "").strip()
+                                    print(f"Sheet '{sheet_name}', Row {row}: Dividend detected - Date (col C): '{transaction_date_str}', Amount (col G): '{amount_str}'", flush=True)
                                     data_key = ('dividend', ticker_id, transaction_date_str, amount_str)
                                     
                                     # Check if we've already processed this exact dividend data
@@ -5229,18 +5230,18 @@ def import_cost_basis_excel():
                                         row += 1
                                         continue
                                     
-                                    print(f"Sheet '{sheet_name}', Row {row}: Processing dividend - Description: '{description}'", flush=True)
+                                    print(f"Sheet '{sheet_name}', Row {row}: Processing dividend - Description: '{description}', Ticker: {ticker_symbol} (ID: {ticker_id}), Account: {account_id}", flush=True)
                                     result = process_dividend_row(cursor, cells, row, ticker_id, account_id, ticker_symbol)
                                     if result:
                                         total_dividends += 1
                                         processed_data.add(data_key)
-                                        print(f"Sheet '{sheet_name}', Row {row}: Successfully imported dividend", flush=True)
+                                        print(f"Sheet '{sheet_name}', Row {row}: Successfully imported dividend - Cash Flow ID: {result.get('cash_flow_id')}", flush=True)
                                     else:
-                                        print(f"Sheet '{sheet_name}', Row {row}: Dividend processing returned None", flush=True)
+                                        print(f"Sheet '{sheet_name}', Row {row}: Dividend processing returned None - check date/amount parsing", flush=True)
                                 except Exception as e:
                                     error_msg = f"Sheet '{sheet_name}', Row {row}: {str(e)}"
                                     errors.append(error_msg)
-                                    print(f"Error processing dividend: {error_msg}", flush=True)
+                                    print(f"ERROR processing dividend: {error_msg}", flush=True)
                                     import traceback
                                     print(f"Traceback: {traceback.format_exc()}", flush=True)
                                 row += 1
