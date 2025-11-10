@@ -760,7 +760,7 @@ def get_bankroll_summary():
         # Get date filters, account filter, and status filter
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
-        account_id = request.args.get('account_id', 9)  # Default to Rule One
+        account_id = request.args.get('account_id', type=int)  # None if not provided (show all accounts)
         status_filter = request.args.get('status_filter')  # 'open', 'completed', etc.
         
         conn = get_db_connection()
@@ -804,7 +804,9 @@ def get_bankroll_summary():
         # So: Margin Capital = (strike_price - (credit_debit - commission)) * (num_of_contracts * 100)
         # Calculate for options trades (not BTO/STC stock trades) that are open or assigned
         # Apply status filter if provided
-        base_where = 'trade_status != \'roll\' AND account_id = ? AND trade_type NOT IN (\'BTO\', \'STC\') AND (trade_type LIKE \'%ROCT PUT\' OR trade_type LIKE \'%ROCT CALL\' OR trade_type LIKE \'ROCT%\' OR trade_type LIKE \'BTO CALL\' OR trade_type LIKE \'STC CALL\')'
+        base_where = 'trade_status != \'roll\' AND trade_type NOT IN (\'BTO\', \'STC\') AND (trade_type LIKE \'%ROCT PUT\' OR trade_type LIKE \'%ROCT CALL\' OR trade_type LIKE \'ROCT%\' OR trade_type LIKE \'BTO CALL\' OR trade_type LIKE \'STC CALL\')'
+        if account_id:
+            base_where += ' AND account_id = ?'
         
         # Determine status condition
         if status_filter == 'open':
@@ -822,7 +824,9 @@ def get_bankroll_summary():
             FROM trades
             WHERE {status_condition} AND {base_where}
         '''
-        query_params = [account_id]
+        query_params = []
+        if account_id:
+            query_params.append(account_id)
         
         if start_date:
             query += ' AND trade_date >= ?'
