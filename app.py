@@ -1304,7 +1304,15 @@ def create_cash_flow():
 @app.route('/api/trades', methods=['GET'])
 def get_trades():
     try:
-        account_id = request.args.get('account_id', type=int)
+        # Get account_id - handle both string and int conversion
+        account_id_arg = request.args.get('account_id')
+        account_id = None
+        if account_id_arg:
+            try:
+                account_id = int(account_id_arg)
+            except (ValueError, TypeError):
+                account_id = None
+        
         ticker = request.args.get('ticker', '')
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
