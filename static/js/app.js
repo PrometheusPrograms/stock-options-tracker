@@ -711,6 +711,11 @@ async function loadTrades() {
             trades = [];
         }
         
+        // Cache unfiltered trades data (when no ticker filter is applied)
+        if (!tickerFilter) {
+            cachedTrades = JSON.parse(JSON.stringify(trades)); // Deep copy
+        }
+        
         lastTradeCount = trades.length;
         console.log('Trades loaded:', trades.length, 'trades');
         console.log('Sample trade:', trades[0]);
@@ -1213,6 +1218,11 @@ async function loadCostBasis(ticker = null) {
         const response = await fetch(`/api/cost-basis?${params}`);
         const data = await response.json();
         console.log('Cost basis API response:', data);
+        
+        // Cache unfiltered cost basis data (when no ticker filter is applied)
+        if (!ticker) {
+            cachedCostBasis = JSON.parse(JSON.stringify(data)); // Deep copy
+        }
         
         if (ticker) {
             // If a specific ticker is selected, show the detailed cost basis table
@@ -4394,15 +4404,25 @@ function clearUniversalTickerFilter() {
         }
         window.symbolFilter = '';
         
-        // Optimistic update: immediately update tables with existing data (no filter)
-        // This provides instant feedback while API calls happen in background
-        updateTradesTable(); // Uses existing trades array, just filters it
-        showAllSymbolsFromTrades(); // Shows all symbols from existing data immediately
+        // Immediate restore: restore cached data if available for instant display
+        if (cachedTrades) {
+            trades = JSON.parse(JSON.stringify(cachedTrades)); // Deep copy
+            updateTradesTable(); // Update immediately with cached data
+        } else {
+            // Fallback: use existing trades array (filtered)
+            updateTradesTable();
+        }
+        
+        // Restore cached cost basis if available
+        if (cachedCostBasis && cachedCostBasis.length > 0) {
+            showAllSymbols(cachedCostBasis); // Restore immediately with cached data
+        } else {
+            // Fallback: show symbols from trades data
+            showAllSymbolsFromTrades();
+        }
         
         // Then reload all data in background to ensure everything is in sync
         // Run all loads in parallel to reduce delay
-        // Skip loadCostBasis when clearing - showAllSymbolsFromTrades already shows all symbols
-        // The API call would just overwrite the immediate display and cause lag
         Promise.all([
             loadTrades(),
             loadSummary()
@@ -4410,8 +4430,8 @@ function clearUniversalTickerFilter() {
             console.error('Error loading data after clearing ticker filter:', error);
         });
         
-        // Optionally refresh cost basis in background after a longer delay
-        // This allows the immediate display to stay visible and only updates if needed
+        // Refresh cost basis in background after a delay
+        // This allows the immediate cached display to stay visible
         setTimeout(() => {
             // Only refresh if user hasn't selected a new ticker
             if (!window.symbolFilter || window.symbolFilter.trim() === '') {
@@ -4419,7 +4439,7 @@ function clearUniversalTickerFilter() {
                     console.error('Error loading cost basis after clearing ticker filter:', error);
                 });
             }
-        }, 2000); // Longer delay - only refresh if user hasn't interacted
+        }, 500); // Short delay to allow cached display to render
     }
 }
 
