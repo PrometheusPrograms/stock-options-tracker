@@ -38,7 +38,7 @@
     --space-header: 25px;
     --space-controls: 35px;
     
-    /* Colors */
+    /* Light Mode Colors */
     --primary-color: #667eea;
     --primary-color-alt: #007bff;
     --primary-color-dark: #0056b3;
@@ -55,15 +55,62 @@
     --light-color-alt: #e9ecef;
     --dark-color: #212529;
     --background-color: #f5f7fa;
+    --text-color: #212529;
+    --text-muted: #6c757d;
+    --border-color: #dee2e6;
+    --card-bg: #ffffff;
+    --card-border: rgba(0, 0, 0, 0.125);
+    --table-bg: #ffffff;
+    --table-header-bg: #f8f9fa;
+    --input-bg: #ffffff;
+    --input-border: #ced4da;
+    --modal-bg: #ffffff;
+    --dropdown-bg: #ffffff;
+    --dropdown-hover: #f8f9fa;
     
     /* Typography */
     --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
+/* Dark Mode Variables */
+[data-theme="dark"] {
+    /* Dark Mode Colors */
+    --primary-color: #7c8ef5;
+    --primary-color-alt: #4dabf7;
+    --primary-color-dark: #5c7cfa;
+    --secondary-color: #8b6fb8;
+    --accent-color: #f5a3d3;
+    --success-color: #51cf66;
+    --success-color-dark: #40c057;
+    --info-color: #3bc9db;
+    --info-color-dark: #22b8cf;
+    --warning-color: #ffd43b;
+    --warning-color-dark: #fcc419;
+    --danger-color: #ff6b6b;
+    --light-color: #2d3436;
+    --light-color-alt: #3d4446;
+    --dark-color: #e9ecef;
+    --background-color: #1a1d20;
+    --text-color: #e9ecef;
+    --text-muted: #adb5bd;
+    --border-color: #495057;
+    --card-bg: #25292e;
+    --card-border: rgba(255, 255, 255, 0.1);
+    --table-bg: #25292e;
+    --table-header-bg: #2d3436;
+    --input-bg: #2d3436;
+    --input-border: #495057;
+    --modal-bg: #25292e;
+    --dropdown-bg: #2d3436;
+    --dropdown-hover: #3d4446;
+}
+
 /* ========= 2. Global Styles ========= */
 body {
     background-color: var(--background-color);
+    color: var(--text-color);
     font-family: var(--font-family);
+    transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 /* ========= Spacing Scale Classes ========= */
@@ -123,7 +170,8 @@ body {
     padding-right: 1.4rem; /* Reduced from 2rem (30% reduction) */
     margin: 0 auto;
     width: 100%;
-    background-color: white;
+    background-color: var(--background-color);
+    transition: background-color 0.3s ease;
 }
 
 /* ========= 4. Header Banner ========= */
@@ -147,30 +195,42 @@ body {
     top: 0;
     z-index: 999;
     padding-bottom: 0; /* No padding - control bar will sit right below */
-    background-color: white;
+    background-color: var(--background-color);
     width: calc(100% + 20px);
     margin-left: -10px;
     margin-right: -10px;
+    transition: background-color 0.3s ease;
 }
 
 /* ========= 5. Cards & Headers ========= */
 .card {
     border-radius: 0.5rem;
-    border: 1px solid rgba(0, 0, 0, 0.125);
+    border: 1px solid var(--card-border);
+    background-color: var(--card-bg);
     box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
-    transition: box-shadow 0.15s ease-in-out;
+    transition: box-shadow 0.15s ease-in-out, background-color 0.3s ease, border-color 0.3s ease;
     animation: fadeIn 0.3s ease-in-out;
+    color: var(--text-color);
+}
+
+[data-theme="dark"] .card {
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.3);
 }
 
 .card:hover {
     box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
 }
 
+[data-theme="dark"] .card:hover {
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.5);
+}
+
 .card-header {
-    background-color: #fff;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+    background-color: var(--card-bg);
+    border-bottom: 1px solid var(--card-border);
     border-radius: 0.5rem 0.5rem 0 0;
     padding: 1.05rem 0.7rem; /* Reduced from 1.5rem 1rem (30% reduction) */
+    transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
 /* Compact header variant for tighter layouts */
@@ -182,7 +242,8 @@ body {
 #dashboard,
 #trades,
 #cost-basis {
-    border: 1px solid rgba(0, 0, 0, 0.1);
+    border: 1px solid var(--border-color);
+    transition: border-color 0.3s ease;
 }
 
 /* Ensure dashboard card has proper top margin to avoid overlapping with sticky control bar */
@@ -426,6 +487,9 @@ body {
 .table-fixed {
     table-layout: fixed;
     /* width will be set dynamically by JavaScript */
+    background-color: var(--table-bg);
+    color: var(--text-color);
+    transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 .table-fixed td {
@@ -435,13 +499,16 @@ body {
     padding: 0.35rem 0.525rem; /* Reduced from 0.5rem 0.75rem (30% reduction) */
     vertical-align: middle;
     text-align: center;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--border-color);
+    background-color: var(--table-bg);
+    color: var(--text-color);
+    transition: border-color 0.3s ease, background-color 0.3s ease, color 0.3s ease;
 }
 
 .table-fixed td:first-child:not(:empty) {
     text-align: left;
     font-weight: bold;
-    background-color: var(--light-color);
+    background-color: var(--table-header-bg);
 }
 
 /* Override for trades table - no ellipsis and white background for first column */
@@ -453,6 +520,9 @@ table#trades-table-main.table-fixed td {
     overflow: visible !important;
     text-overflow: clip !important;
     white-space: normal !important;
+    background-color: var(--table-bg);
+    color: var(--text-color);
+    transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 #trades-table-main.table-fixed td:first-child:not(:empty),
@@ -461,8 +531,8 @@ table#trades-table-main.table-fixed td {
 #trades-table-main td:first-child,
 table#trades-table-main td:first-child,
 table#trades-table-main.table-fixed td:first-child {
-    background-color: #ffffff !important;
-    background: #ffffff !important;
+    background-color: var(--table-bg) !important;
+    background: var(--table-bg) !important;
 }
 
 /* Filter Components */
@@ -686,17 +756,30 @@ table#trades-table-main.table-fixed td:first-child {
 }
 
 /* Dropdown Styling */
+.dropdown-menu {
+    background-color: var(--dropdown-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-color);
+    transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+}
+
 .dropdown-item {
-    border-bottom: 1px solid var(--light-color);
-    transition: background-color 0.15s ease-in-out;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-color);
+    transition: background-color 0.15s ease-in-out, color 0.3s ease;
 }
 
 .dropdown-item:hover {
-    background-color: var(--light-color);
+    background-color: var(--dropdown-hover);
+    color: var(--text-color);
 }
 
 .dropdown-item:last-child {
     border-bottom: none;
+}
+
+.dropdown-divider {
+    border-top: 1px solid var(--border-color);
 }
 
 /* Editable Cell Styling */
@@ -758,13 +841,24 @@ table#trades-table-main.table-fixed td:first-child {
 /* Form Styling */
 .form-control {
     border-radius: 0.375rem;
-    border: 1px solid #ced4da;
-    transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+    border: 1px solid var(--input-border);
+    background-color: var(--input-bg);
+    color: var(--text-color);
+    transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out, background-color 0.3s ease, color 0.3s ease;
 }
 
 .form-control:focus {
     border-color: var(--primary-color-alt);
-    box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+    box-shadow: 0 0 0 0.25rem rgba(77, 171, 247, 0.25);
+    background-color: var(--input-bg);
+    color: var(--text-color);
+}
+
+.form-select {
+    background-color: var(--input-bg);
+    color: var(--text-color);
+    border-color: var(--input-border);
+    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 
 .form-select {
@@ -773,15 +867,21 @@ table#trades-table-main.table-fixed td:first-child {
 
 /* Header Styling */
 h1 {
-    color: var(--dark-color);
+    color: var(--text-color);
     font-weight: 600;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    transition: color 0.3s ease;
+}
+
+[data-theme="dark"] h1 {
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
 /* Card Title Styling */
 .card-title {
     font-weight: 600;
-    color: var(--dark-color);
+    color: var(--text-color);
+    transition: color 0.3s ease;
 }
 
 .card-header .card-title {
@@ -817,6 +917,24 @@ h1 {
 .modal-content {
     border-radius: 0.5rem;
     box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.175);
+    background-color: var(--modal-bg);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+
+[data-theme="dark"] .modal-content {
+    box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+    border-bottom: 1px solid var(--border-color);
+    transition: border-color 0.3s ease;
+}
+
+.modal-footer {
+    border-top: 1px solid var(--border-color);
+    transition: border-color 0.3s ease;
 }
 
 /* Button Group Styling */
@@ -855,49 +973,69 @@ h1 {
 
 /* Cost Basis Table Styling */
 #cost-basis-summary .table {
-    border: 10px solid #dee2e6;
+    border: 10px solid var(--border-color);
     border-radius: 0.5rem;
+    transition: border-color 0.3s ease;
 }
 
 #cost-basis-summary .table th {
     border-top: none;
     font-weight: 600;
     font-size: 0.6125rem; /* Reduced from 0.875rem (30% reduction) */
-    background-color: var(--light-color);
+    background-color: var(--table-header-bg);
+    color: var(--text-color);
+    border-color: var(--border-color);
+    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 
 #cost-basis-summary .table td {
     font-size: 0.6125rem; /* Reduced from 0.875rem (30% reduction) */
     padding: 0.35rem 0.525rem; /* Reduced from 0.5rem 0.75rem (30% reduction) */
+    background-color: var(--table-bg);
+    color: var(--text-color);
+    border-color: var(--border-color);
+    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 
 /* Cost Basis Table Borders */
 #cost-basis-table-container .table,
 #cost-basis-inline-container .table {
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--border-color);
     border-collapse: separate;
     border-spacing: 0;
     font-size: 0.6125rem !important; /* Match trades table font size */
+    background-color: var(--table-bg);
+    color: var(--text-color);
+    transition: border-color 0.3s ease, background-color 0.3s ease, color 0.3s ease;
 }
 
 #cost-basis-table-container .table th,
 #cost-basis-inline-container .table th {
-    border: 1px solid #dee2e6;
-    border-bottom: 2px solid #dee2e6;
+    border: 1px solid var(--border-color);
+    border-bottom: 2px solid var(--border-color);
+    background-color: var(--table-header-bg);
+    color: var(--text-color);
+    transition: border-color 0.3s ease, background-color 0.3s ease, color 0.3s ease;
 }
 
 #cost-basis-table-container .table td,
 #cost-basis-inline-container .table td {
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--border-color);
     font-size: 0.6125rem !important; /* Match trades table font size */
     padding: 0.35rem 0.525rem; /* Match trades table cell padding */
+    background-color: var(--table-bg);
+    color: var(--text-color);
+    transition: border-color 0.3s ease, background-color 0.3s ease, color 0.3s ease;
 }
 
 #cost-basis-table-container .table thead th,
 #cost-basis-inline-container .table thead th {
-    border-top: 1px solid #dee2e6;
+    border-top: 1px solid var(--border-color);
     padding: 0.35rem 0.525rem; /* Match cost basis table cell padding for condensed layout */
     font-size: 0.6125rem; /* Match cost basis table cell font size */
+    background-color: var(--table-header-bg);
+    color: var(--text-color);
+    transition: border-color 0.3s ease, background-color 0.3s ease, color 0.3s ease;
 }
 
 /* Cost Basis Table Fixed Height - Show 10 rows (height set dynamically via JS) */
@@ -913,7 +1051,8 @@ h1 {
     position: sticky;
     top: 0;
     z-index: 10;
-    background-color: #212529; /* Match table-dark background */
+    background-color: var(--table-header-bg);
+    transition: background-color 0.3s ease;
 }
 
 /* Number Styling */
@@ -925,23 +1064,60 @@ h1 {
     color: var(--success-color) !important;
 }
 
+.text-muted {
+    color: var(--text-muted) !important;
+}
+
+.text-white {
+    color: white !important;
+}
+
+/* Ensure text colors work in both themes */
+[data-theme="dark"] .text-white {
+    color: white !important;
+}
+
 /* Custom Scrollbar */
 .table-responsive::-webkit-scrollbar {
     height: 8px;
 }
 
 .table-responsive::-webkit-scrollbar-track {
-    background: #f1f1f1;
+    background: var(--light-color-alt);
     border-radius: 4px;
+    transition: background-color 0.3s ease;
 }
 
 .table-responsive::-webkit-scrollbar-thumb {
-    background: #c1c1c1;
+    background: var(--text-muted);
     border-radius: 4px;
+    transition: background-color 0.3s ease;
 }
 
 .table-responsive::-webkit-scrollbar-thumb:hover {
-    background: #a8a8a8;
+    background: var(--text-color);
+}
+
+/* Dark Mode Toggle Button */
+.theme-toggle {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 1.25rem;
+    cursor: pointer;
+    padding: 0.5rem;
+    border-radius: 0.375rem;
+    transition: background-color 0.15s ease-in-out, transform 0.15s ease-in-out;
+}
+
+.theme-toggle:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    transform: scale(1.1);
+}
+
+.theme-toggle:focus {
+    outline: none;
+    box-shadow: 0 0 0 0.2rem rgba(255, 255, 255, 0.25);
 }
 
 /* Trades Table Specific - Compact Layout */
@@ -976,29 +1152,61 @@ table#trades-table-main tbody td:first-child,
 #trades-table-main.table-sm tbody td:first-child {
     position: sticky;
     left: 0;
-    background-color: #ffffff !important;
-    background: #ffffff !important;
-    border-left: 1px solid #dee2e6 !important;
-    border-right: 2px solid #dee2e6 !important;
-    border-top: 1px solid #dee2e6 !important;
-    border-bottom: 1px solid #dee2e6 !important;
+    background-color: var(--table-bg) !important;
+    background: var(--table-bg) !important;
+    color: var(--text-color) !important;
+    border-left: 1px solid var(--border-color) !important;
+    border-right: 2px solid var(--border-color) !important;
+    border-top: 1px solid var(--border-color) !important;
+    border-bottom: 1px solid var(--border-color) !important;
     border-style: solid !important;
     z-index: 100 !important;
-    box-shadow: 3px 0 8px rgba(0,0,0,0.15), 2px 0 0 0 #ffffff;
+    box-shadow: 3px 0 8px rgba(0,0,0,0.15), 2px 0 0 0 var(--table-bg);
     isolation: isolate;
     overflow: visible !important;
+    transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
 #trades-table-main thead th:first-child,
 table#trades-table-main thead th:first-child {
     z-index: 200 !important; /* Higher z-index for header */
-    background-color: #ffffff !important;
-    background: #ffffff !important;
-    border-left: 1px solid #dee2e6 !important;
-    border-right: 2px solid #dee2e6 !important;
-    border-top: 1px solid #dee2e6 !important;
-    border-bottom: 1px solid #dee2e6 !important;
+    background-color: var(--table-header-bg) !important;
+    background: var(--table-header-bg) !important;
+    border-left: 1px solid var(--border-color) !important;
+    border-right: 2px solid var(--border-color) !important;
+    border-top: 1px solid var(--border-color) !important;
+    border-bottom: 1px solid var(--border-color) !important;
     isolation: isolate;
+    transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+/* In dark mode, make first column match rest of table exactly */
+[data-theme="dark"] #trades-table-main thead th:first-child,
+[data-theme="dark"] table#trades-table-main thead th:first-child,
+[data-theme="dark"] #trades-table-main.table thead th:first-child,
+[data-theme="dark"] #trades-table-main.table-sm thead th:first-child {
+    background-color: var(--table-header-bg) !important;
+    background: var(--table-header-bg) !important;
+    color: var(--text-color) !important;
+    border-color: var(--border-color) !important;
+}
+
+[data-theme="dark"] #trades-table-main tbody td:first-child,
+[data-theme="dark"] table#trades-table-main tbody td:first-child,
+[data-theme="dark"] #trades-table-main tbody tr td:first-child,
+[data-theme="dark"] #trades-table-main.table-fixed td:first-child,
+[data-theme="dark"] #trades-table-main .table-fixed td:first-child,
+[data-theme="dark"] #trades-table-main.table tbody tr td:first-child,
+[data-theme="dark"] #trades-table-main.table-sm tbody tr td:first-child,
+[data-theme="dark"] table#trades-table-main.table-fixed tbody td:first-child,
+[data-theme="dark"] table#trades-table-main.table tbody tr td:first-child,
+[data-theme="dark"] table#trades-table-main.table-sm tbody tr td:first-child,
+[data-theme="dark"] #trades-table-main.table.table-fixed tbody tr td:first-child,
+[data-theme="dark"] #trades-table-main.table.table-sm.table-fixed tbody tr td:first-child {
+    background-color: var(--table-bg) !important;
+    background: var(--table-bg) !important;
+    color: var(--text-color) !important;
+    border-color: var(--border-color) !important;
 }
 
 /* Ensure first column cells are not transparent - multiple selectors for specificity */
@@ -1015,28 +1223,31 @@ table#trades-table-main.table tbody tr td:first-child,
 table#trades-table-main.table-sm tbody tr td:first-child,
 #trades-table-main.table.table-fixed tbody tr td:first-child,
 #trades-table-main.table.table-sm.table-fixed tbody tr td:first-child {
-    background-color: #ffffff !important;
-    background: #ffffff !important;
-    border-left: 1px solid #dee2e6 !important;
-    border-right: 2px solid #dee2e6 !important;
-    border-top: 1px solid #dee2e6 !important;
-    border-bottom: 1px solid #dee2e6 !important;
+    background-color: var(--table-bg) !important;
+    background: var(--table-bg) !important;
+    color: var(--text-color) !important;
+    border-left: 1px solid var(--border-color) !important;
+    border-right: 2px solid var(--border-color) !important;
+    border-top: 1px solid var(--border-color) !important;
+    border-bottom: 1px solid var(--border-color) !important;
     border-style: solid !important;
     -webkit-border-image: none !important;
     -moz-border-image: none !important;
     border-image: none !important;
     z-index: 100 !important;
     isolation: isolate;
+    transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
 /* Make second column (spacer) sticky */
 #trades-table-main tbody td.sticky-spacer-column {
     position: sticky;
     left: 105px; /* Width of first column */
-    background-color: #f5f7fa !important;
-    background: #f5f7fa !important;
+    background-color: var(--background-color) !important;
+    background: var(--background-color) !important;
     z-index: 9;
     box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+    transition: background-color 0.3s ease;
 }
 
 /* Ensure scrolling columns behind first column don't show their left borders */
@@ -1054,9 +1265,15 @@ table#trades-table-main.table-sm tbody tr td:first-child,
     right: -6px;
     bottom: 0;
     width: 6px;
-    background-color: #ffffff;
+    background-color: var(--table-bg);
     z-index: 101;
     pointer-events: none;
+    transition: background-color 0.3s ease;
+}
+
+/* Ensure ::after pseudo-element matches in dark mode */
+[data-theme="dark"] #trades-table-main tbody td:first-child::after {
+    background-color: var(--table-bg) !important;
 }
 
 /* Remove ellipsis from date input fields - must be very specific */
@@ -1132,6 +1349,10 @@ table#trades-table-main td input.form-control {
     font-size: 0.6125rem; /* Match cost basis table header font size for consistency */
     font-weight: 600;
     white-space: nowrap;
+    background-color: var(--table-header-bg) !important;
+    color: var(--text-color) !important;
+    border-color: var(--border-color) !important;
+    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 
 /* Responsive Design */

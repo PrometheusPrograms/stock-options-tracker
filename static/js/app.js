@@ -2067,14 +2067,15 @@ function updateTradesTable() {
             firstCell.style.whiteSpace = 'normal';
             firstCell.style.wordWrap = 'break-word';
             firstCell.style.verticalAlign = 'middle';
-            // Force white background with !important
-            firstCell.style.setProperty('background-color', '#ffffff', 'important');
-            firstCell.style.setProperty('background', '#ffffff', 'important');
+            // Use CSS variables for dark mode compatibility
+            firstCell.style.setProperty('background-color', 'var(--table-header-bg)', 'important');
+            firstCell.style.setProperty('background', 'var(--table-header-bg)', 'important');
+            firstCell.style.setProperty('color', 'var(--text-color)', 'important');
             // Force visible borders and high z-index to cover scrolling columns
-            firstCell.style.setProperty('border-left', '1px solid #dee2e6', 'important');
-            firstCell.style.setProperty('border-right', '2px solid #dee2e6', 'important');
-            firstCell.style.setProperty('border-top', '1px solid #dee2e6', 'important');
-            firstCell.style.setProperty('border-bottom', '1px solid #dee2e6', 'important');
+            firstCell.style.setProperty('border-left', '1px solid var(--border-color)', 'important');
+            firstCell.style.setProperty('border-right', '2px solid var(--border-color)', 'important');
+            firstCell.style.setProperty('border-top', '1px solid var(--border-color)', 'important');
+            firstCell.style.setProperty('border-bottom', '1px solid var(--border-color)', 'important');
             firstCell.style.setProperty('border-style', 'solid', 'important');
             firstCell.style.setProperty('position', 'sticky', 'important');
             firstCell.style.setProperty('left', '0', 'important');
@@ -4147,6 +4148,55 @@ document.addEventListener('DOMContentLoaded', function() {
 // UNIVERSAL CONTROL BAR FUNCTIONS
 // ============================================================================
 
+function setupThemeToggle() {
+    const themeToggle = document.getElementById('theme-toggle');
+    const themeIcon = document.getElementById('theme-icon');
+    const html = document.documentElement;
+    
+    // Get saved theme preference or default to light
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    
+    // Apply saved theme on page load
+    if (savedTheme === 'dark') {
+        html.setAttribute('data-theme', 'dark');
+        if (themeIcon) {
+            themeIcon.classList.remove('fa-moon');
+            themeIcon.classList.add('fa-sun');
+        }
+    } else {
+        html.removeAttribute('data-theme');
+        if (themeIcon) {
+            themeIcon.classList.remove('fa-sun');
+            themeIcon.classList.add('fa-moon');
+        }
+    }
+    
+    // Toggle theme on button click
+    if (themeToggle) {
+        themeToggle.addEventListener('click', function() {
+            const currentTheme = html.getAttribute('data-theme');
+            
+            if (currentTheme === 'dark') {
+                // Switch to light mode
+                html.removeAttribute('data-theme');
+                localStorage.setItem('theme', 'light');
+                if (themeIcon) {
+                    themeIcon.classList.remove('fa-sun');
+                    themeIcon.classList.add('fa-moon');
+                }
+            } else {
+                // Switch to dark mode
+                html.setAttribute('data-theme', 'dark');
+                localStorage.setItem('theme', 'dark');
+                if (themeIcon) {
+                    themeIcon.classList.remove('fa-moon');
+                    themeIcon.classList.add('fa-sun');
+                }
+            }
+        });
+    }
+}
+
 function setupUniversalControls() {
     // Setup universal ticker filter
     const universalTickerInput = document.getElementById('universal-ticker-filter');
@@ -5030,6 +5080,7 @@ document.addEventListener('DOMContentLoaded', function() {
     updateChart();
     
     // Set up event listeners
+    setupThemeToggle();  // Setup dark mode toggle
     setupUniversalControls();  // Setup new universal control bar
     setupTradesSymbolFilter();
     setupStatusFilter();
