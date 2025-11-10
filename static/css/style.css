@@ -608,6 +608,14 @@ table#trades-table-main.table-fixed td:first-child {
     -moz-appearance: none !important;
 }
 
+/* In dark mode, make status dropdown arrow white for visibility on dark header */
+[data-theme="dark"] #trades .card-header .status-filter,
+[data-theme="dark"] #trades .card-header .form-select.status-filter {
+    /* Use white arrow for visibility on dark header background */
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23ffffff' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") !important;
+    color: white !important; /* White text for visibility on dark header */
+}
+
 /* Form select in card headers */
 .card-header .form-select,
 .card-header .form-select-sm {
@@ -642,6 +650,16 @@ table#trades-table-main.table-fixed td:first-child {
     appearance: none !important; /* Remove default arrow */
     -webkit-appearance: none !important;
     -moz-appearance: none !important;
+}
+
+/* In dark mode, make status dropdown arrow in table rows white */
+[data-theme="dark"] #trades-table-main .status-select,
+[data-theme="dark"] #trades-table-main .form-select.status-select {
+    /* Use white arrow for visibility on dark table background */
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23ffffff' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") !important;
+    border-color: var(--border-color) !important;
+    background-color: var(--input-bg) !important;
+    color: var(--text-color) !important;
 }
 
 /* Status dropdown options - condensed layout */

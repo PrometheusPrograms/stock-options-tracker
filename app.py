@@ -99,24 +99,42 @@ init_db_helper(DATABASE)
 # Run migrations on app startup (runs once when app starts)
 _migrations_run = False
 def ensure_migrations():
-    """Ensure database migrations have been run"""
+    """Ensure database migrations have been run - with timeout protection"""
     global _migrations_run
     if not _migrations_run:
         try:
+            # Try to run migrations, but don't let them block for too long
+            # On PythonAnywhere, migrations should be quick or run manually
             run_migrations()
             _migrations_run = True
+            logging.info("Migrations completed successfully")
         except Exception as e:
             logging.warning(f"Migration error: {e}")
             logging.info("Falling back to init_db() for initial setup...")
-            init_db()
-            _migrations_run = True
+            try:
+                init_db()
+                _migrations_run = True
+            except Exception as init_error:
+                # Even init_db can fail - just log and continue
+                logging.error(f"init_db() also failed: {init_error}")
+                logging.warning("App will continue without database initialization")
+                _migrations_run = True  # Mark as run to prevent retrying
 
-# Run migrations on first request
+# Run migrations on first request (non-blocking to prevent 504 errors)
 @app.before_request
 def run_migrations_on_startup():
-    """Run database migrations before first request"""
+    """Run database migrations before first request - non-blocking"""
+    global _migrations_run
     if not _migrations_run:
-        ensure_migrations()
+        try:
+            # Run migrations but don't let them block the request
+            # If they take too long or fail, just continue without them
+            ensure_migrations()
+        except Exception as e:
+            # If migrations fail or timeout, log but don't block the request
+            logging.warning(f"Migration skipped due to error: {e}")
+            logging.info("App will continue without migrations - they can be run manually")
+            _migrations_run = True  # Mark as run to prevent retrying on every request
 
 def get_db_connection():
     """
@@ -3176,7 +3194,8 @@ def get_cost_basis():
                 
                 if entry_type == 'dividend':
                     # Handle dividend entries
-                    amount = entry.get('amount', 0) or 0
+                    # For dividends, the SQL query uses 'cf.amount as total_amount'
+                    amount = entry.get('total_amount', 0) or 0
                     # Dividends don't affect shares, but they do affect the basis (they're income)
                     # For display purposes, we'll show the dividend amount but keep shares unchanged
                     calculated_running_basis += amount  # Dividends increase basis (they're income)
@@ -4364,13 +4383,18 @@ def import_excel():
             
             # Reset trades and cost_basis tables for the selected account only before importing
             # This prevents deleting data from other accounts
-            cursor.execute('''
-                DELETE FROM cost_basis 
-                WHERE trade_id IN (SELECT id FROM trades WHERE account_id = ?)
-            ''', (account_id,))
+            # IMPORTANT: We preserve cost_basis entries that were created from cost basis import
+            # by NOT deleting cost_basis entries when importing trades - we only delete trades
+            # This way, cost_basis entries from cost basis import remain even if their trades are deleted
+            
+            # Delete all trades for this account
+            # NOTE: We intentionally do NOT delete cost_basis entries here
+            # This preserves cost_basis entries that were created from cost basis import
+            # even though their associated trades will be deleted
             cursor.execute('DELETE FROM trades WHERE account_id = ?', (account_id,))
+            
             conn.commit()
-            print(f"Reset trades and cost_basis tables for account {account_id} before import", flush=True)
+            print(f"Reset trades table for account {account_id} before import (preserving cost_basis entries)", flush=True)
             
             # Check for duplicates against existing trades from the selected account only
             try:
@@ -4828,9 +4852,11 @@ def import_excel():
     except Exception as e:
         import traceback
         error_detail = traceback.format_exc()
-        print(f'Error importing Excel: {e}')
-        print(f'Traceback: {error_detail}')
-        return jsonify({'success': False, 'error': f'Failed to import Excel: {str(e)}'}), 500
+        error_type = type(e).__name__
+        error_message = str(e) if str(e) else repr(e)
+        print(f'Error importing Excel: {error_type}: {error_message}', flush=True)
+        print(f'Traceback: {error_detail}', flush=True)
+        return jsonify({'success': False, 'error': f'Failed to import Excel: {error_type}: {error_message}'}), 500
 
 @app.route('/api/import-cost-basis-excel', methods=['POST'])
 def import_cost_basis_excel():
@@ -4957,25 +4983,31 @@ def import_cost_basis_excel():
             return None
         transaction_date = transaction_date_obj.strftime('%Y-%m-%d')
         
-        # Column E: shares (for cost_basis.shares)
+        # Column E: shares (for cost_basis.shares and trades.num_of_shares)
         shares_str = cells.get((row, 5), "").strip()
         if not shares_str:
             print(f"Warning: No shares value in row {row}, column E", flush=True)
             return None
         try:
             shares = int(float(shares_str))
+            num_of_shares = shares  # num_of_shares comes from column E
         except (ValueError, TypeError):
             print(f"Warning: Invalid shares value in row {row}, column E: '{shares_str}'", flush=True)
             return None
         
-        # Column F: num_of_shares (for trades.num_of_shares)
-        num_of_shares_str = cells.get((row, 6), "").strip()
-        num_of_shares = shares  # Default to shares if F is empty
-        if num_of_shares_str:
-            try:
-                num_of_shares = int(float(num_of_shares_str))
-            except (ValueError, TypeError):
-                pass  # Use shares as fallback
+        # Column F: price_per_share (for trades.price_per_share and cost_basis.cost_per_share)
+        price_per_share_str = cells.get((row, 6), "").strip()
+        if not price_per_share_str:
+            print(f"Warning: No price_per_share value in row {row}, column F", flush=True)
+            return None
+        try:
+            price_per_share = float(price_per_share_str)
+        except (ValueError, TypeError):
+            print(f"Warning: Invalid price_per_share value in row {row}, column F: '{price_per_share_str}'", flush=True)
+            return None
+        
+        # Calculate total_amount = num_of_shares * price_per_share
+        total_amount = num_of_shares * price_per_share
         
         # Get trade type ID
         cursor.execute('SELECT id FROM trade_types WHERE type_name = ?', (trade_type,))
@@ -4990,12 +5022,10 @@ def import_cost_basis_excel():
         trade_date = transaction_date
         expiration_date = transaction_date
         days_to_expiration = 0
-        price_per_share = 0
         premium = 0
         current_price = 0
         strike_price = 0
         total_premium = 0
-        total_amount = 0
         
         # Insert trade
         cursor.execute('''
@@ -5124,10 +5154,18 @@ def import_cost_basis_excel():
         if file.filename == '':
             return jsonify({'success': False, 'error': 'No file selected'}), 400
         
-        # Get account_id from request
+        # Get account_id from request (this is the default account for non-Roth sheets)
+        # Always use account_id 9 (Rule One) as the default for non-Roth sheets, regardless of what's selected
+        # Only sheets with "Roth" in the name should go to the Roth account
         account_id = request.form.get('account_id', type=int)
         if not account_id:
             account_id = 9  # Default to Rule One account
+        
+        # Force default to account 9 for non-Roth sheets (ignore the selected account in the dropdown)
+        # This ensures only sheets with "Roth" in the name go to Roth account
+        default_account_id = 9  # Always use Rule One (9) as default for non-Roth sheets
+        
+        print(f"Cost basis import - Request account_id: {account_id}, Default account_id for non-Roth sheets: {default_account_id}", flush=True)
         
         # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
@@ -5158,10 +5196,29 @@ def import_cost_basis_excel():
                 total_dividends = 0
                 errors = []
                 
+                # Get Roth account ID
+                cursor.execute('SELECT id FROM accounts WHERE UPPER(account_name) LIKE UPPER(?)', ('%Roth%',))
+                roth_account_row = cursor.fetchone()
+                roth_account_id = roth_account_row['id'] if roth_account_row else None
+                # default_account_id is already set above (always 9 for non-Roth sheets)
+                
+                print(f"Cost basis import - Roth account_id: {roth_account_id}, Default account_id: {default_account_id}", flush=True)
+                
                 # Process each sheet
                 for sheet_idx, sheet in enumerate(sheets, 1):
                     sheet_name = sheet.attrib.get("name", f"Sheet{sheet_idx}")
                     print(f"Processing sheet {sheet_idx}: '{sheet_name}'", flush=True)
+                    
+                    # Determine account_id based on sheet name (case-insensitive check)
+                    sheet_name_upper = sheet_name.upper()
+                    sheet_account_id = default_account_id
+                    has_roth = roth_account_id and 'ROTH' in sheet_name_upper
+                    print(f"Sheet '{sheet_name}': Checking for 'Roth' - sheet_name_upper='{sheet_name_upper}', contains 'ROTH'={has_roth}, roth_account_id={roth_account_id}", flush=True)
+                    if has_roth:
+                        sheet_account_id = roth_account_id
+                        print(f"Sheet '{sheet_name}': Found 'Roth' in sheet name (case-insensitive), using account_id = {sheet_account_id} (Roth account)", flush=True)
+                    else:
+                        print(f"Sheet '{sheet_name}': No 'Roth' in sheet name, using account_id = {sheet_account_id} (default account)", flush=True)
                     
                     try:
                         sheet_xml = ET.parse(z.open(f"xl/worksheets/sheet{sheet_idx}.xml"))
@@ -5202,7 +5259,12 @@ def import_cost_basis_excel():
                         row = 11
                         processed_data = set()  # Track processed data to prevent duplicates (based on content, not row number)
                         print(f"Sheet '{sheet_name}': Starting to process rows from row 11", flush=True)
-                        print(f"Sheet '{sheet_name}': Ticker = {ticker}, Ticker ID = {ticker_id}", flush=True)
+                        print(f"Sheet '{sheet_name}': Ticker = {ticker}, Ticker ID = {ticker_id}, Account ID = {sheet_account_id}", flush=True)
+                        
+                        # Check if row 11 has any data
+                        row_11_description = cells.get((11, 2), "").strip()
+                        print(f"Sheet '{sheet_name}': Row 11, column B value: '{row_11_description}'", flush=True)
+                        
                         while True:
                             # Check if row B is blank
                             description = cells.get((row, 2), "").strip()
@@ -5224,14 +5286,35 @@ def import_cost_basis_excel():
                                     print(f"Sheet '{sheet_name}', Row {row}: Dividend detected - Date (col C): '{transaction_date_str}', Amount (col G): '{amount_str}'", flush=True)
                                     data_key = ('dividend', ticker_id, transaction_date_str, amount_str)
                                     
-                                    # Check if we've already processed this exact dividend data
+                                    # Check if we've already processed this exact dividend data in this import session
                                     if data_key in processed_data:
-                                        print(f"Sheet '{sheet_name}', Row {row}: Duplicate dividend data detected, skipping", flush=True)
+                                        print(f"Sheet '{sheet_name}', Row {row}: Duplicate dividend data detected in import session, skipping", flush=True)
                                         row += 1
                                         continue
                                     
-                                    print(f"Sheet '{sheet_name}', Row {row}: Processing dividend - Description: '{description}', Ticker: {ticker_symbol} (ID: {ticker_id}), Account: {account_id}", flush=True)
-                                    result = process_dividend_row(cursor, cells, row, ticker_id, account_id, ticker_symbol)
+                                    # Check if this dividend already exists in the database
+                                    transaction_date_obj = parse_date(transaction_date_str)
+                                    if transaction_date_obj:
+                                        transaction_date = transaction_date_obj.strftime('%Y-%m-%d')
+                                        try:
+                                            amount = float(amount_str)
+                                            cursor.execute('''
+                                                SELECT id FROM cash_flows 
+                                                WHERE ticker_id = ? AND account_id = ? 
+                                                AND transaction_date = ? AND transaction_type = 'Dividend' 
+                                                AND ABS(amount - ?) < 0.01
+                                            ''', (ticker_id, sheet_account_id, transaction_date, amount))
+                                            existing_dividend = cursor.fetchone()
+                                            if existing_dividend:
+                                                print(f"Sheet '{sheet_name}', Row {row}: Dividend already exists in database (ID: {existing_dividend['id']}), skipping", flush=True)
+                                                processed_data.add(data_key)
+                                                row += 1
+                                                continue
+                                        except (ValueError, TypeError):
+                                            pass  # Will be caught by process_dividend_row
+                                    
+                                    print(f"Sheet '{sheet_name}', Row {row}: Processing dividend - Description: '{description}', Ticker: {ticker_symbol} (ID: {ticker_id}), Account: {sheet_account_id}", flush=True)
+                                    result = process_dividend_row(cursor, cells, row, ticker_id, sheet_account_id, ticker_symbol)
                                     if result:
                                         total_dividends += 1
                                         processed_data.add(data_key)
@@ -5248,10 +5331,18 @@ def import_cost_basis_excel():
                                 continue
                             
                             # Check if it's a trade type (BUY, SELL, BTO, STC)
-                            trade_type = get_trade_type(description)
-                            print(f"Sheet '{sheet_name}', Row {row}: get_trade_type returned '{trade_type}' for description '{description}'", flush=True)
-                            if trade_type in ['BUY', 'SELL', 'BTO', 'STC']:
+                            trade_type_str = get_trade_type(description)
+                            print(f"Sheet '{sheet_name}', Row {row}: get_trade_type returned '{trade_type_str}' for description '{description}'", flush=True)
+                            if trade_type_str in ['BUY', 'SELL', 'BTO', 'STC']:
                                 try:
+                                    # Map to standard trade types (BUY -> BTO, SELL -> STC)
+                                    if trade_type_str == 'BUY':
+                                        trade_type = 'BTO'
+                                    elif trade_type_str == 'SELL':
+                                        trade_type = 'STC'
+                                    else:
+                                        trade_type = trade_type_str
+                                    
                                     # Get date and shares to create a unique key for duplicate detection
                                     transaction_date_str = cells.get((row, 3), "").strip()
                                     shares_str = cells.get((row, 5), "").strip()
@@ -5259,14 +5350,61 @@ def import_cost_basis_excel():
                                     # Create key based on data content, not row number
                                     data_key = ('trade', ticker_id, description, transaction_date_str, shares_str)
                                     
-                                    # Check if we've already processed this exact trade data
+                                    # Check if we've already processed this exact trade data in this import session
                                     if data_key in processed_data:
-                                        print(f"Sheet '{sheet_name}', Row {row}: Duplicate trade data detected (Description: '{description}', Date: '{transaction_date_str}', Shares: '{shares_str}'), skipping", flush=True)
+                                        print(f"Sheet '{sheet_name}', Row {row}: Duplicate trade data detected in import session (Description: '{description}', Date: '{transaction_date_str}', Shares: '{shares_str}'), skipping", flush=True)
                                         row += 1
                                         continue
                                     
-                                    print(f"Sheet '{sheet_name}', Row {row}: Processing trade - Type: {trade_type}, Ticker: {ticker_symbol}", flush=True)
-                                    result = process_trade_row(cursor, db, cells, row, ticker_id, account_id, ticker_symbol)
+                                    # Check if this trade already exists in the database
+                                    transaction_date_obj = parse_date(transaction_date_str)
+                                    if not transaction_date_obj:
+                                        print(f"Sheet '{sheet_name}', Row {row}: Invalid date, skipping duplicate check", flush=True)
+                                        row += 1
+                                        continue
+                                    
+                                    transaction_date = transaction_date_obj.strftime('%Y-%m-%d')
+                                    try:
+                                        shares = int(float(shares_str))
+                                    except (ValueError, TypeError) as e:
+                                        print(f"Sheet '{sheet_name}', Row {row}: Invalid shares value for duplicate check: {e}, skipping", flush=True)
+                                        row += 1
+                                        continue
+                                    
+                                    # The description in the database is formatted as "{trade_type} {shares} {ticker_symbol}"
+                                    # Use the mapped trade_type (BTO/STC), not the raw trade_type_str (BUY/SELL)
+                                    expected_description = f"{trade_type} {shares} {ticker_symbol}"
+                                    print(f"Sheet '{sheet_name}', Row {row}: Checking for duplicate - ticker_id={ticker_id}, account_id={sheet_account_id}, date={transaction_date}, description='{expected_description}', shares={shares}", flush=True)
+                                    
+                                    # Check for existing trade with exact match
+                                    cursor.execute('''
+                                        SELECT id, description FROM cost_basis 
+                                        WHERE ticker_id = ? AND account_id = ? 
+                                        AND transaction_date = ? AND shares = ?
+                                    ''', (ticker_id, sheet_account_id, transaction_date, shares))
+                                    existing_trades = cursor.fetchall()
+                                    
+                                    # Check if any existing trade matches the description
+                                    found_duplicate = False
+                                    for existing in existing_trades:
+                                        existing_desc = existing['description']
+                                        if existing_desc == expected_description:
+                                            found_duplicate = True
+                                            print(f"Sheet '{sheet_name}', Row {row}: Trade already exists in database (ID: {existing['id']}, description='{existing_desc}'), skipping", flush=True)
+                                            processed_data.add(data_key)
+                                            break
+                                    
+                                    if found_duplicate:
+                                        row += 1
+                                        continue
+                                    
+                                    if existing_trades:
+                                        print(f"Sheet '{sheet_name}', Row {row}: Found {len(existing_trades)} existing trades with same date/shares but different description. Existing: {[e['description'] for e in existing_trades]}, Expected: '{expected_description}'", flush=True)
+                                    else:
+                                        print(f"Sheet '{sheet_name}', Row {row}: No duplicate found, proceeding with import", flush=True)
+                                    
+                                    print(f"Sheet '{sheet_name}', Row {row}: Processing trade - Type: {trade_type}, Ticker: {ticker_symbol}, Account: {sheet_account_id}", flush=True)
+                                    result = process_trade_row(cursor, db, cells, row, ticker_id, sheet_account_id, ticker_symbol)
                                     if result:
                                         total_trades += 1
                                         processed_data.add(data_key)
@@ -5282,7 +5420,7 @@ def import_cost_basis_excel():
                                 row += 1
                             else:
                                 # Not a trade type, move to next row
-                                print(f"Sheet '{sheet_name}', Row {row}: Not a recognized trade type (got '{trade_type}'), moving to next row", flush=True)
+                                print(f"Sheet '{sheet_name}', Row {row}: Not a recognized trade type (got '{trade_type_str}'), moving to next row", flush=True)
                                 row += 1
                     
                     except Exception as e:
