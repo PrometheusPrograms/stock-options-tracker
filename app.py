@@ -4982,37 +4982,48 @@ def import_cost_basis_excel():
         """Process a dividend row"""
         # Column B: description (should contain "Dividend")
         description = cells.get((row, 2), "").strip()
+        print(f"Processing dividend row {row} - Description: '{description}'", flush=True)
         
         # Column C: transaction_date
         transaction_date_str = cells.get((row, 3), "").strip()
+        print(f"Row {row} - Date string from column C: '{transaction_date_str}'", flush=True)
         transaction_date_obj = parse_date(transaction_date_str)
         if not transaction_date_obj:
             print(f"Warning: Invalid date in row {row}, column C for dividend: '{transaction_date_str}'", flush=True)
             return None
         transaction_date = transaction_date_obj.strftime('%Y-%m-%d')
+        print(f"Row {row} - Parsed date: '{transaction_date}'", flush=True)
         
         # Column G: amount
         amount_str = cells.get((row, 7), "").strip()
+        print(f"Row {row} - Amount string from column G: '{amount_str}'", flush=True)
         if not amount_str:
             print(f"Warning: No amount value in row {row}, column G for dividend", flush=True)
             return None
         try:
             amount = float(amount_str)
+            print(f"Row {row} - Parsed amount: {amount}", flush=True)
         except (ValueError, TypeError):
             print(f"Warning: Invalid amount value in row {row}, column G: '{amount_str}'", flush=True)
             return None
         
         # Insert cash flow entry for dividend
-        cursor.execute('''
-            INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (account_id, transaction_date, 'Dividend', round(amount, 2), 
-              f"Dividend {ticker_symbol}", None, ticker_id))
-        
-        cash_flow_id = cursor.lastrowid
-        print(f'Inserted dividend cash flow {cash_flow_id} - Date: {transaction_date}, Amount: {amount}', flush=True)
-        
-        return {'cash_flow_id': cash_flow_id}
+        try:
+            cursor.execute('''
+                INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (account_id, transaction_date, 'Dividend', round(amount, 2), 
+                  f"Dividend {ticker_symbol}", None, ticker_id))
+            
+            cash_flow_id = cursor.lastrowid
+            print(f'Inserted dividend cash flow {cash_flow_id} - Date: {transaction_date}, Amount: {amount}, Ticker: {ticker_symbol}', flush=True)
+            
+            return {'cash_flow_id': cash_flow_id}
+        except Exception as e:
+            print(f"Error inserting dividend cash flow: {e}", flush=True)
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}", flush=True)
+            raise
     
     try:
         if 'file' not in request.files:
