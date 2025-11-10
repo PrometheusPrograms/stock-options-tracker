@@ -4374,9 +4374,12 @@ function clearUniversalTickerFilter() {
         }
         window.symbolFilter = '';
         
-        // Reload all data without the ticker filter to ensure everything is cleared
-        // This ensures the dashboard, trades table, and cost basis table all update
-        // based only on the selected account filter
+        // Optimistic update: immediately update tables with existing data (no filter)
+        // This provides instant feedback while API calls happen in background
+        updateTradesTable(); // Uses existing trades array, just filters it
+        showAllSymbolsFromTrades(); // Shows all symbols from existing data
+        
+        // Then reload all data in background to ensure everything is in sync
         // Run all loads in parallel to reduce delay
         Promise.all([
             loadTrades(),
