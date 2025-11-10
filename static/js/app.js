@@ -6135,7 +6135,26 @@ async function handleCostBasisUpload(event) {
         if (!response.ok) {
             const errorText = await response.text();
             console.error('Error response body:', errorText);
-            alert('Error uploading file: Server returned ' + response.status);
+            let errorMessage = 'Error uploading file: Server returned ' + response.status;
+            try {
+                const errorJson = JSON.parse(errorText);
+                if (errorJson.error) {
+                    errorMessage += '\n\n' + errorJson.error;
+                    console.error('Parsed error:', errorJson.error);
+                }
+            } catch (e) {
+                // If not JSON, use the raw text
+                if (errorText) {
+                    errorMessage += '\n\n' + errorText;
+                    console.error('Raw error text:', errorText);
+                }
+            }
+            console.error('Full error details:', {
+                status: response.status,
+                statusText: response.statusText,
+                errorText: errorText
+            });
+            alert(errorMessage);
             return;
         }
         
@@ -6153,16 +6172,23 @@ async function handleCostBasisUpload(event) {
                 message += `\nDividends imported: ${result.dividends_imported}`;
             }
             if (result.errors && result.errors.length > 0) {
-                message += `\n\nErrors:\n${result.errors.join('\n')}`;
+                const errorsText = result.errors.join('\n');
+                message += `\n\nErrors (${result.errors.length}):\n${errorsText}`;
+                // Also log errors to console for easy inspection
+                console.error('Import errors:', result.errors);
+                console.error('Full error details:', result.errors);
             }
+            console.log('Import success message:', message);
             alert(message);
             // Reload data
             await loadCostBasis();
             await loadTrades();
             await loadSummary();
         } else {
-            console.error('Import failed:', result.error);
-            alert('Error importing Excel file: ' + result.error);
+            const errorMsg = result.error || 'Unknown error occurred';
+            console.error('Import failed:', errorMsg);
+            console.error('Full error result:', result);
+            alert('Error importing Excel file:\n\n' + errorMsg);
         }
     } catch (error) {
         console.error('Upload error:', error);
