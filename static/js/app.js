@@ -4377,14 +4377,16 @@ function clearUniversalTickerFilter() {
         // Optimistic update: immediately update tables with existing data (no filter)
         // This provides instant feedback while API calls happen in background
         updateTradesTable(); // Uses existing trades array, just filters it
-        showAllSymbolsFromTrades(); // Shows all symbols from existing data
+        showAllSymbolsFromTrades(); // Shows all symbols from existing data immediately
         
         // Then reload all data in background to ensure everything is in sync
         // Run all loads in parallel to reduce delay
+        // Note: loadCostBasis will update the display when it completes, but showAllSymbolsFromTrades
+        // already shows all symbols immediately, so there's no visible delay
         Promise.all([
             loadTrades(),
             loadSummary(),
-            loadCostBasis(null) // Pass null to load all cost basis data
+            loadCostBasis(null) // Pass null to load all cost basis data - this will refresh the display when done
         ]).catch(error => {
             console.error('Error loading data after clearing ticker filter:', error);
         });
