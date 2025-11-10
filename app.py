@@ -4783,6 +4783,19 @@ def import_cost_basis_excel():
             return None
         date_str = date_str.strip()
         try:
+            # Try DD MMM YY format (e.g., "23 DEC 24")
+            if ' ' in date_str and len(date_str.split()) == 3:
+                parts = date_str.split()
+                if len(parts) == 3:
+                    day, month_str, year = parts
+                    # Try to parse as DD MMM YY
+                    try:
+                        month_num = datetime.strptime(month_str, '%b').month
+                        if len(year) == 2:
+                            year = '20' + year
+                        return datetime.strptime(f"{year}-{month_num:02d}-{day.zfill(2)}", '%Y-%m-%d')
+                    except ValueError:
+                        pass
             # Try DD-MMM-YY format (e.g., "08-APR-20")
             if '-' in date_str and len(date_str.split('-')) == 3:
                 parts = date_str.split('-')
@@ -5099,17 +5112,24 @@ def import_cost_basis_excel():
                                 row += 1
                                 continue
                             
-                            # Check if it's a dividend
-                            if 'DIVIDEND' in description.upper():
+                            # Check if it's a dividend (case-insensitive, check for DIVIDEND anywhere in description)
+                            description_upper = description.upper()
+                            if 'DIVIDEND' in description_upper:
                                 try:
+                                    print(f"Sheet '{sheet_name}', Row {row}: Processing dividend - Description: '{description}'", flush=True)
                                     result = process_dividend_row(cursor, cells, row, ticker_id, account_id, ticker_symbol)
                                     if result:
                                         total_dividends += 1
                                         processed_rows.add(row)
+                                        print(f"Sheet '{sheet_name}', Row {row}: Successfully imported dividend", flush=True)
+                                    else:
+                                        print(f"Sheet '{sheet_name}', Row {row}: Dividend processing returned None", flush=True)
                                 except Exception as e:
                                     error_msg = f"Sheet '{sheet_name}', Row {row}: {str(e)}"
                                     errors.append(error_msg)
                                     print(f"Error processing dividend: {error_msg}", flush=True)
+                                    import traceback
+                                    print(f"Traceback: {traceback.format_exc()}", flush=True)
                                 row += 1
                                 continue
                             
