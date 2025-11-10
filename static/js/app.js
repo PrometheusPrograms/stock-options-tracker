@@ -288,11 +288,21 @@ async function submitTradeForm(formType, action = 'addAndClose') {
 // GENERIC AUTOCOMPLETE HANDLING
 // ============================================================================
 
+// Track autocomplete setup to prevent duplicate listeners
+const autocompleteSetup = new Set();
+
 function setupAutocomplete(inputId, suggestionsId, onSelectCallback) {
     const input = document.getElementById(inputId);
     const suggestions = document.getElementById(suggestionsId);
     
     if (!input || !suggestions) return;
+    
+    // Prevent duplicate setup
+    const setupKey = `${inputId}-${suggestionsId}`;
+    if (autocompleteSetup.has(setupKey)) {
+        return; // Already set up
+    }
+    autocompleteSetup.add(setupKey);
     
     let debounceTimer;
     
@@ -340,8 +350,8 @@ function setupAutocomplete(inputId, suggestionsId, onSelectCallback) {
     });
     
     // Handle keyboard navigation
-    freshInput.addEventListener('keydown', function(e) {
-        const items = freshSuggestions.querySelectorAll('.suggestion-item');
+    input.addEventListener('keydown', function(e) {
+        const items = suggestions.querySelectorAll('.suggestion-item');
         const current = suggestions.querySelector('.suggestion-item.active');
         
         if (e.key === 'ArrowDown') {
@@ -374,12 +384,14 @@ function setupAutocomplete(inputId, suggestionsId, onSelectCallback) {
         }
     });
     
-    // Hide suggestions when clicking outside
-    document.addEventListener('click', function(e) {
+    // Hide suggestions when clicking outside - use a single document listener
+    // Store handler reference to allow removal if needed
+    const clickHandler = function(e) {
         if (!input.contains(e.target) && !suggestions.contains(e.target)) {
             suggestions.style.display = 'none';
         }
-    });
+    };
+    document.addEventListener('click', clickHandler);
 }
 
 // ============================================================================
@@ -675,6 +687,12 @@ function calculateROCTPutARORC() {
 
 async function loadTrades() {
     try {
+        // Cancel any pending trades request
+        if (tradesAbortController) {
+            tradesAbortController.abort();
+        }
+        tradesAbortController = new AbortController();
+        
         console.log('Loading trades...');
         
         // Get account filter
@@ -707,7 +725,9 @@ async function loadTrades() {
             params.append('end_date', currentFilter.endDate);
         }
         
-        const response = await fetch(`/api/trades?${params}`);
+        const response = await fetch(`/api/trades?${params}`, {
+            signal: tradesAbortController.signal
+        });
         trades = await response.json();
         
         // Ensure trades is an array
@@ -717,8 +737,13 @@ async function loadTrades() {
         }
         
         // Cache unfiltered trades data (when no ticker filter is applied)
+        // Use structuredClone for better performance, fallback to JSON for compatibility
         if (!tickerFilter) {
-            cachedTrades = JSON.parse(JSON.stringify(trades)); // Deep copy
+            try {
+                cachedTrades = structuredClone ? structuredClone(trades) : JSON.parse(JSON.stringify(trades));
+            } catch (e) {
+                cachedTrades = JSON.parse(JSON.stringify(trades)); // Fallback
+            }
         }
         
         lastTradeCount = trades.length;
@@ -728,12 +753,23 @@ async function loadTrades() {
         updateTradesTable();
         updateSymbolFilter();
     } catch (error) {
+        // Ignore abort errors
+        if (error.name === 'AbortError') {
+            console.log('Trades request aborted');
+            return;
+        }
         console.error('Error loading trades:', error);
     }
 }
 
 async function loadSummary() {
     try {
+        // Cancel any pending summary request
+        if (summaryAbortController) {
+            summaryAbortController.abort();
+        }
+        summaryAbortController = new AbortController();
+        
         console.log('Loading summary...');
         const params = new URLSearchParams();
         
@@ -764,7 +800,9 @@ async function loadSummary() {
             params.append('end_date', currentFilter.endDate);
         }
         
-        const response = await fetch(`/api/summary?${params}`);
+        const response = await fetch(`/api/summary?${params}`, {
+            signal: summaryAbortController.signal
+        });
         const summary = await response.json();
         console.log('Summary loaded:', summary);
         
@@ -1203,6 +1241,12 @@ async function updateBankroll(statusFilter = null) {
 async function loadCostBasis(ticker = null) {
     console.log('loadCostBasis called with ticker:', ticker);
     try {
+        // Cancel any pending cost basis request
+        if (costBasisAbortController) {
+            costBasisAbortController.abort();
+        }
+        costBasisAbortController = new AbortController();
+        
         // Set window.symbolFilter to match the ticker parameter so updateCostBasisTable knows a ticker is selected
         if (ticker) {
             window.symbolFilter = ticker;
@@ -1220,7 +1264,9 @@ async function loadCostBasis(ticker = null) {
         if (ticker) params.append('ticker', ticker);
         params.append('commission', commission.toString());
         
-        const response = await fetch(`/api/cost-basis?${params}`);
+        const response = await fetch(`/api/cost-basis?${params}`, {
+            signal: costBasisAbortController.signal
+        });
         const data = await response.json();
         console.log('Cost basis API response:', data);
         
@@ -4419,8 +4465,13 @@ function clearUniversalTickerFilter() {
         window.symbolFilter = '';
         
         // Immediate restore: restore cached data if available for instant display
+        // Use structuredClone for better performance, fallback to JSON for compatibility
         if (cachedTrades) {
-            trades = JSON.parse(JSON.stringify(cachedTrades)); // Deep copy
+            try {
+                trades = structuredClone ? structuredClone(cachedTrades) : JSON.parse(JSON.stringify(cachedTrades));
+            } catch (e) {
+                trades = JSON.parse(JSON.stringify(cachedTrades)); // Fallback
+            }
             updateTradesTable(); // Update immediately with cached data
         } else {
             // Fallback: use existing trades array (filtered)
