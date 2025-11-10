@@ -1224,27 +1224,27 @@ async function loadCostBasis(ticker = null) {
         } else {
             // If no ticker is selected, show all available symbols
             // Check if we already have symbols displayed from trades data
-            // If so, only update if we have better data from API
+            // If symbols are already showing, don't overwrite to avoid lag
             const costBasisContainer = document.getElementById('cost-basis-table-container');
             const alreadyShowingSymbols = costBasisContainer && costBasisContainer.querySelector('.symbol-card');
             
+            // If symbols are already displayed, skip the API update to prevent lag
+            // The immediate display from showAllSymbolsFromTrades is sufficient
+            if (alreadyShowingSymbols) {
+                console.log('Symbols already displayed, skipping API update to prevent lag');
+                return; // Don't overwrite the immediate display
+            }
+            
             if (data.length === 0) {
                 // If API returns no data, check if we have trades data to show symbols from
-                if (trades && trades.length > 0 && !alreadyShowingSymbols) {
+                if (trades && trades.length > 0) {
                     showAllSymbolsFromTrades();
-                } else if (!alreadyShowingSymbols) {
+                } else {
                     hideCostBasisTable();
                 }
-                // If already showing symbols, don't overwrite
             } else {
                 // Use API data which may have more complete information
-                // But only if we don't already have symbols displayed
-                if (!alreadyShowingSymbols) {
-                    showAllSymbols(data);
-                } else {
-                    // Already showing symbols, just update with API data if it's better
-                    showAllSymbols(data);
-                }
+                showAllSymbols(data);
             }
         }
     } catch (error) {
