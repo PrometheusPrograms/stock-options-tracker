@@ -2768,8 +2768,13 @@ function clearCostBasisSymbolFilter() {
     updateArrowPositions();
     
     // Update both tables - use optimized function to avoid API call
-    updateTradesTable();
-    showAllSymbolsFromTrades(); // Show symbols instantly without API call
+    // Run updates in parallel to reduce delay
+    Promise.all([
+        updateTradesTable(),
+        showAllSymbolsFromTrades() // Show symbols instantly without API call
+    ]).catch(error => {
+        console.error('Error updating tables after clearing cost basis symbol filter:', error);
+    });
 }
 
 function showAllSymbols(data = null) {
@@ -4366,9 +4371,14 @@ function clearUniversalTickerFilter() {
         // Reload all data without the ticker filter to ensure everything is cleared
         // This ensures the dashboard, trades table, and cost basis table all update
         // based only on the selected account filter
-        loadTrades();
-        loadSummary();
-        loadCostBasis(null); // Pass null to load all cost basis data
+        // Run all loads in parallel to reduce delay
+        Promise.all([
+            loadTrades(),
+            loadSummary(),
+            loadCostBasis(null) // Pass null to load all cost basis data
+        ]).catch(error => {
+            console.error('Error loading data after clearing ticker filter:', error);
+        });
     }
 }
 
