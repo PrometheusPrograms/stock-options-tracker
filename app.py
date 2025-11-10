@@ -849,7 +849,9 @@ def get_bankroll_summary():
             FROM trades
             WHERE {status_condition} AND {base_where}
         '''
-        breakdown_params = [account_id]
+        breakdown_params = []
+        if account_id:
+            breakdown_params.append(account_id)
         
         if start_date:
             breakdown_query += ' AND trade_date >= ?'
