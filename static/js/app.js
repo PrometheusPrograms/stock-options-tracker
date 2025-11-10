@@ -8,8 +8,6 @@ let statusMonitorInterval = null;
 let lastTradeCount = 0;
 let selectedTicker = null;
 let premiumChart = null;
-let storedTradesHeaderPosition = null; // Store trades header position for floating toggle
-let storedCostBasisHeaderPosition = null; // Store cost basis header position for floating toggle
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -3314,8 +3312,6 @@ function toggleTrades() {
     const tradesColumn = document.getElementById('trades-column');
     const costBasisColumn = document.getElementById('cost-basis-column');
     const toggleIcon = document.getElementById('trades-toggle-icon');
-    const floatingToggle = document.getElementById('trades-floating-toggle');
-    const floatingToggleIcon = document.getElementById('trades-floating-toggle-icon');
     const collapsedCardToggle = document.getElementById('trades-collapsed-card-toggle');
     const collapsedCardIcon = document.getElementById('trades-collapsed-card-icon');
     
@@ -3342,8 +3338,6 @@ function toggleTrades() {
                 const containerTop = containerRect.top;
                 const offsetFromContainer = headerTop - containerTop;
                 
-                // Store the offset for when trades table is collapsed
-                storedTradesHeaderPosition = offsetFromContainer;
             }
         }
         
@@ -3354,24 +3348,6 @@ function toggleTrades() {
         if (toggleIcon) {
             toggleIcon.classList.remove('fa-chevron-left');
             toggleIcon.classList.add('fa-chevron-right');
-        }
-        if (floatingToggle) {
-            floatingToggle.style.display = 'block'; // Show floating toggle when collapsed
-            if (floatingToggleIcon) {
-                floatingToggleIcon.classList.remove('fa-chevron-left');
-                floatingToggleIcon.classList.add('fa-chevron-right');
-            }
-            // Position immediately using stored position
-            if (storedTradesHeaderPosition !== null) {
-                floatingToggle.style.top = `${storedTradesHeaderPosition}px`;
-                floatingToggle.style.transform = 'translateY(0)';
-            }
-            // Then recalculate after layout is complete to ensure accuracy
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    positionTradesToggle();
-                });
-            });
         }
         if (collapsedCardIcon) {
             collapsedCardIcon.classList.remove('fa-chevron-left');
@@ -3394,11 +3370,6 @@ function toggleTrades() {
                 costBasisCollapsedCardIcon.classList.remove('fa-chevron-left');
                 costBasisCollapsedCardIcon.classList.add('fa-chevron-right');
             }
-            // Hide cost basis floating toggle since it's now expanded
-            const costBasisFloatingToggle = document.getElementById('cost-basis-floating-toggle');
-            if (costBasisFloatingToggle) {
-                costBasisFloatingToggle.style.display = 'none';
-            }
         }
     } else {
         // Expanding - show the trades table
@@ -3409,13 +3380,6 @@ function toggleTrades() {
             toggleIcon.classList.remove('fa-chevron-right');
             toggleIcon.classList.add('fa-chevron-left');
         }
-        if (floatingToggle) {
-            floatingToggle.style.display = 'none';
-        }
-        // Update stored position after expansion (use requestAnimationFrame to ensure DOM is updated)
-        requestAnimationFrame(() => {
-            positionTradesToggle();
-        });
         if (collapsedCardIcon) {
             collapsedCardIcon.classList.remove('fa-chevron-right');
             collapsedCardIcon.classList.add('fa-chevron-left');
@@ -3436,11 +3400,6 @@ function toggleTrades() {
             if (costBasisCollapsedCardIcon) {
                 costBasisCollapsedCardIcon.classList.remove('fa-chevron-left');
                 costBasisCollapsedCardIcon.classList.add('fa-chevron-right');
-            }
-            // Hide cost basis floating toggle since it's now expanded
-            const costBasisFloatingToggle = document.getElementById('cost-basis-floating-toggle');
-            if (costBasisFloatingToggle) {
-                costBasisFloatingToggle.style.display = 'none';
             }
             // Update column widths first to ensure layout is correct
             updateColumnWidths();
@@ -3466,59 +3425,12 @@ function toggleTrades() {
                                 const offsetFromContainer = headerTop - containerTop;
                                 
                                 // Update stored position with new value
-                                storedCostBasisHeaderPosition = offsetFromContainer;
                             }
                         }
-                        // Now call positionCostBasisToggle to ensure everything is in sync
-                        positionCostBasisToggle();
                     });
                 });
             });
         } else {
-            // Cost basis is already expanded - but check if it's actually collapsed
-            // This handles the case where trades expands but cost basis is collapsed
-            const costBasisFloatingToggle = document.getElementById('cost-basis-floating-toggle');
-            const costBasisColumnCheck = document.getElementById('cost-basis-column');
-            const isCostBasisActuallyCollapsed = costBasisColumnCheck && !costBasisColumnCheck.classList.contains('show');
-            
-            if (isCostBasisActuallyCollapsed && costBasisFloatingToggle) {
-                // Cost basis is collapsed, recalculate its toggle position after trades expands
-                updateColumnWidths();
-                requestAnimationFrame(() => {
-                    requestAnimationFrame(() => {
-                        requestAnimationFrame(() => {
-                            // Recalculate position from scratch after trades expands
-                            const tradesCard = document.getElementById('trades');
-                            const container = document.querySelector('.trades-cost-container');
-                            if (tradesCard && container) {
-                                const tradesHeader = tradesCard.querySelector('.card-header');
-                                if (tradesHeader) {
-                                    // Get positions relative to viewport AFTER trades expands
-                                    const headerRect = tradesHeader.getBoundingClientRect();
-                                    const containerRect = container.getBoundingClientRect();
-                                    
-                                    // Calculate position relative to container (not viewport)
-                                    const headerTop = headerRect.top;
-                                    const containerTop = containerRect.top;
-                                    const offsetFromContainer = headerTop - containerTop;
-                                    
-                                    // Update stored position with new value
-                                    storedCostBasisHeaderPosition = offsetFromContainer;
-                                    
-                                    // Position the toggle immediately
-                                    if (costBasisFloatingToggle.style.display !== 'none') {
-                                        costBasisFloatingToggle.style.top = `${offsetFromContainer}px`;
-                                        costBasisFloatingToggle.style.transform = 'translateY(0)';
-                                        costBasisFloatingToggle.style.right = '0px';
-                                    }
-                                }
-                            }
-                            // Now call positionCostBasisToggle to ensure everything is in sync
-                            positionCostBasisToggle();
-                        });
-                    });
-                });
-            }
         }
     }
     
@@ -3527,46 +3439,6 @@ function toggleTrades() {
     updateCollapsedCardVisibility();
 }
 
-function positionTradesToggle() {
-    const floatingToggle = document.getElementById('trades-floating-toggle');
-    const tradesCard = document.getElementById('trades');
-    const tradesColumn = document.getElementById('trades-column');
-    const container = document.querySelector('.trades-cost-container');
-    
-    if (!floatingToggle || !container) return;
-    
-    // Check if trades table is visible (expanded)
-    const isTradesVisible = tradesColumn && tradesColumn.classList.contains('show');
-    
-    if (isTradesVisible && tradesCard) {
-        // Trades table is visible - get current position relative to container
-        const tradesHeader = tradesCard.querySelector('.card-header');
-        
-        if (tradesHeader) {
-            // Get positions relative to viewport
-            const headerRect = tradesHeader.getBoundingClientRect();
-            const containerRect = container.getBoundingClientRect();
-            
-            // Calculate position relative to container (not viewport)
-            // Align with top of header instead of middle
-            const headerTop = headerRect.top;
-            const containerTop = containerRect.top;
-            const offsetFromContainer = headerTop - containerTop;
-            
-            // Store the offset for when trades table is collapsed
-            storedTradesHeaderPosition = offsetFromContainer;
-        }
-    } else {
-        // Trades table is collapsed - use stored offset relative to container
-        if (storedTradesHeaderPosition !== null) {
-            floatingToggle.style.top = `${storedTradesHeaderPosition}px`;
-            floatingToggle.style.transform = 'translateY(0)';
-        }
-    }
-    
-    // Always position at left edge
-    floatingToggle.style.left = '0px';
-}
 
 function updateColumnWidths() {
     const tradesColumn = document.getElementById('trades-column');
@@ -4653,10 +4525,6 @@ function toggleCostBasis() {
                 tradesCollapsedCardIcon.classList.add('fa-chevron-left');
             }
             // Hide trades floating toggle since it's now expanded
-            const tradesFloatingToggle = document.getElementById('trades-floating-toggle');
-            if (tradesFloatingToggle) {
-                tradesFloatingToggle.style.display = 'none';
-            }
             
             // Update column widths to make trades full width (60/40 split since cost basis is still expanded)
             updateColumnWidths();
@@ -4712,7 +4580,6 @@ function toggleCostBasis() {
                                                                         const offsetFromContainer = headerTop - containerTop;
                                                                         
                                                                         // Store the offset for future use
-                                                                        storedCostBasisHeaderPosition = offsetFromContainer;
                                                                         
                                                                         // Position the toggle with the new position
                                                                         floatingToggle.style.top = `${offsetFromContainer}px`;
@@ -4769,13 +4636,6 @@ function toggleCostBasis() {
                 toggleIcon.classList.remove('fa-chevron-right');
                 toggleIcon.classList.add('fa-chevron-left');
             }
-            if (floatingToggle) {
-                floatingToggle.style.display = 'block'; // Show floating toggle when collapsed
-                if (floatingToggleIcon) {
-                    floatingToggleIcon.classList.remove('fa-chevron-right');
-                    floatingToggleIcon.classList.add('fa-chevron-left');
-                }
-                // Position immediately using stored position (same as trades)
                 if (storedCostBasisHeaderPosition !== null) {
                     floatingToggle.style.top = `${storedCostBasisHeaderPosition}px`;
                     floatingToggle.style.transform = 'translateY(0)';
@@ -4798,7 +4658,6 @@ function toggleCostBasis() {
                                     const headerTop = headerRect.top;
                                     const containerTop = containerRect.top;
                                     const offsetFromContainer = headerTop - containerTop;
-                                    storedCostBasisHeaderPosition = offsetFromContainer;
                                     floatingToggle.style.top = `${offsetFromContainer}px`;
                                     floatingToggle.style.transform = 'translateY(0)';
                                     floatingToggle.style.right = '0px';
@@ -4833,10 +4692,6 @@ function toggleCostBasis() {
                 tradesCollapsedCardIcon.classList.add('fa-chevron-left');
             }
             // Hide trades floating toggle since it's now expanded
-            const tradesFloatingToggle = document.getElementById('trades-floating-toggle');
-            if (tradesFloatingToggle) {
-                tradesFloatingToggle.style.display = 'none';
-            }
             // Update column widths to make trades 60% and cost basis 40%
             updateColumnWidths();
             // Wait for trades to expand and layout to update, then expand cost basis
@@ -4882,7 +4737,6 @@ function toggleCostBasis() {
                                                 const offsetFromContainer = headerTop - containerTop;
                                                 
                                                 // Store the offset for future use
-                                                storedCostBasisHeaderPosition = offsetFromContainer;
                                             }
                                         }
                                         // Don't call positionCostBasisToggle() here - cost basis is expanded, so it's hidden
@@ -5075,54 +4929,21 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Initialize cost basis toggle state
     const costBasisColumn = document.getElementById('cost-basis-column');
-    const costBasisFloatingToggle = document.getElementById('cost-basis-floating-toggle');
-    const costBasisFloatingToggleIcon = document.getElementById('cost-basis-floating-toggle-icon');
     const costBasisCollapsedCardIcon = document.getElementById('cost-basis-collapsed-card-icon');
     
     if (costBasisColumn) {
-        // If cost basis is collapsed (hidden), show floating toggle
+        // If cost basis is collapsed (hidden), update collapsed card icon
         if (!costBasisColumn.classList.contains('show')) {
-            if (costBasisFloatingToggle) {
-                costBasisFloatingToggle.style.display = 'block';
-                if (costBasisFloatingToggleIcon) {
-                    costBasisFloatingToggleIcon.classList.remove('fa-chevron-right');
-                    costBasisFloatingToggleIcon.classList.add('fa-chevron-left');
-                }
-                positionCostBasisToggle();
-            }
             if (costBasisCollapsedCardIcon) {
                 costBasisCollapsedCardIcon.classList.remove('fa-chevron-right');
                 costBasisCollapsedCardIcon.classList.add('fa-chevron-left');
             }
         } else {
-            // If cost basis is visible, hide floating toggle
-            if (costBasisFloatingToggle) {
-                costBasisFloatingToggle.style.display = 'none';
-            }
+            // If cost basis is visible, update collapsed card icon
             if (costBasisCollapsedCardIcon) {
                 costBasisCollapsedCardIcon.classList.remove('fa-chevron-left');
                 costBasisCollapsedCardIcon.classList.add('fa-chevron-right');
             }
-        }
-    }
-    
-    // Initialize trades toggle state
-    const tradesColumn = document.getElementById('trades-column');
-    const tradesFloatingToggle = document.getElementById('trades-floating-toggle');
-    const tradesFloatingToggleIcon = document.getElementById('trades-floating-toggle-icon');
-    
-    if (tradesColumn && tradesFloatingToggle && tradesFloatingToggleIcon) {
-        // If trades is collapsed (hidden), show floating toggle with right arrow
-        if (!tradesColumn.classList.contains('show')) {
-            tradesFloatingToggle.style.display = 'block';
-            tradesFloatingToggleIcon.classList.remove('fa-chevron-left');
-            tradesFloatingToggleIcon.classList.add('fa-chevron-right');
-            positionTradesToggle();
-        } else {
-            // If trades is visible, hide floating toggle and store position
-            tradesFloatingToggle.style.display = 'none';
-            // Store the position for when trades table is collapsed
-            positionTradesToggle();
         }
     }
     
@@ -5158,13 +4979,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // setupCostBasisToggle(); // Removed - now using horizontal collapse
     setupDashboardDatePickers();
     
-    // Position cost basis toggle button if it's visible
-    setTimeout(() => {
-        const floatingToggle = document.getElementById('cost-basis-floating-toggle');
-        if (floatingToggle && floatingToggle.style.display !== 'none') {
-            positionCostBasisToggle();
-        }
-    }, 100);
     
     console.log('App initialized');
     

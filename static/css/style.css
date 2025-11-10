@@ -119,8 +119,8 @@ body {
 
 /* ========= 3. Layout ========= */
 .page-wrapper {
-    padding-left: 2rem;
-    padding-right: 2rem;
+    padding-left: 1.4rem; /* Reduced from 2rem (30% reduction) */
+    padding-right: 1.4rem; /* Reduced from 2rem (30% reduction) */
     margin: 0 auto;
     width: 100%;
     background-color: white;
@@ -129,9 +129,9 @@ body {
 /* ========= 4. Header Banner ========= */
 .header-banner {
     position: relative;
-    background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%) !important; /* Solid background to prevent transparency */
     color: white;
-    padding: 2rem 0; /* Increased by 10px */
+    padding: 1.4rem 0; /* Reduced from 2rem (30% reduction) */
     border-radius: 8px 8px 0 0; /* rounded top only when sticky */
     margin-bottom: 0; /* No margin - spacing controlled by section mt-5 */
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
@@ -139,7 +139,7 @@ body {
 
 /* Compact header banner variant */
 .header-banner.compact {
-    padding: 1rem 0;
+    padding: 0.7rem 0; /* Reduced from 1rem (30% reduction) */
 }
 
 .header-banner-wrapper {
@@ -170,12 +170,12 @@ body {
     background-color: #fff;
     border-bottom: 1px solid rgba(0, 0, 0, 0.125);
     border-radius: 0.5rem 0.5rem 0 0;
-    padding: 1.5rem 1rem;
+    padding: 1.05rem 0.7rem; /* Reduced from 1.5rem 1rem (30% reduction) */
 }
 
 /* Compact header variant for tighter layouts */
 .card-header.compact {
-    padding: 0.75rem 1rem;
+    padding: 0.525rem 0.7rem !important; /* Reduced from 0.75rem 1rem (30% reduction) */
 }
 
 /* ========= 6. Section Borders ========= */
@@ -183,6 +183,12 @@ body {
 #trades,
 #cost-basis {
     border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* Ensure dashboard card has proper top margin to avoid overlapping with sticky control bar */
+/* Account for control bar height (padding 0.7rem top + 0.7rem bottom = 1.4rem) + margin-bottom (1.05rem) */
+.container-fluid > .row.mb-5:first-of-type {
+    margin-top: calc(1.4rem + 1.05rem) !important; /* Control bar padding + margin-bottom */
 }
 
 /* Ensure no border on body or page wrapper */
@@ -202,7 +208,7 @@ body {
 }
 
 .row {
-    --bs-gutter-x: 1rem; /* subtle spacing between columns */
+    --bs-gutter-x: 0.7rem; /* Reduced from 1rem (30% reduction) */
 }
 
 /* ========= Responsive ========= */
@@ -216,7 +222,7 @@ body {
 
 /* Standard collapsible section toggle icon */
 .section-toggle-icon {
-    font-size: 1.5em; /* 50% bigger than default */
+    font-size: 1.05em; /* Reduced from 1.5em (30% reduction) */
 }
 
 /* Section header styling */
@@ -224,14 +230,14 @@ body {
 .trades-title,
 .cost-basis-title,
 .test-title {
-    font-size: 1.75em; /* 75% bigger than default h5 */
+    font-size: 1.225em; /* Reduced from 1.75em (30% reduction) */
 }
 
 .dashboard-title i,
 .trades-title i,
 .cost-basis-title i,
 .test-title i {
-    font-size: 1.65em; /* 65% bigger than default */
+    font-size: 1.155em; /* Reduced from 1.65em (30% reduction) */
 }
 
 /* Middle align all elements in section headers */
@@ -280,11 +286,11 @@ body {
 }
 
 .dashboard-controls .form-control-sm {
-    padding: 0.25rem 0.5rem;
+    padding: 0.175rem 0.35rem; /* Reduced from 0.25rem 0.5rem (30% reduction) */
 }
 
 .dashboard-controls .btn-sm {
-    padding: 0.25rem 0.5rem;
+    padding: 0.175rem 0.35rem; /* Reduced from 0.25rem 0.5rem (30% reduction) */
 }
 
 /* Section card component - reusable styles for all sections */
@@ -316,7 +322,7 @@ body {
 .header-group {
     display: flex;
     align-items: center;
-    gap: 1.5rem;
+    gap: 1.05rem; /* Reduced from 1.5rem (30% reduction) */
 }
 
 /* Legacy support for elements still using direct children */
@@ -326,7 +332,7 @@ body {
 }
 
 .section-card .card-header .d-flex {
-    gap: 1.5rem;
+    gap: 1.05rem; /* Reduced from 1.5rem (30% reduction) */
 }
 
 /* Section titles - common styling */
@@ -340,12 +346,12 @@ body {
 
 .chart-container {
     position: relative;
-    height: 450px;
+    height: 315px; /* Reduced from 450px (30% reduction) */
 }
 
 .sunburst-chart {
-    width: 450px;
-    height: 450px;
+    width: 315px; /* Reduced from 450px (30% reduction) */
+    height: 315px; /* Reduced from 450px (30% reduction) */
 }
 
 /* Make chart cards same height */
@@ -426,7 +432,7 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    padding: 0.5rem 0.75rem;
+    padding: 0.35rem 0.525rem; /* Reduced from 0.5rem 0.75rem (30% reduction) */
     vertical-align: middle;
     text-align: center;
     border: 1px solid #dee2e6;
@@ -436,6 +442,27 @@ body {
     text-align: left;
     font-weight: bold;
     background-color: var(--light-color);
+}
+
+/* Override for trades table - no ellipsis and white background for first column */
+#trades-table-main.table-fixed td,
+#trades-table-main .table-fixed td,
+#trades-table-main td,
+table#trades-table-main td,
+table#trades-table-main.table-fixed td {
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: normal !important;
+}
+
+#trades-table-main.table-fixed td:first-child:not(:empty),
+#trades-table-main .table-fixed td:first-child:not(:empty),
+#trades-table-main td:first-child:not(:empty),
+#trades-table-main td:first-child,
+table#trades-table-main td:first-child,
+table#trades-table-main.table-fixed td:first-child {
+    background-color: #ffffff !important;
+    background: #ffffff !important;
 }
 
 /* Filter Components */
@@ -464,16 +491,107 @@ body {
     display: inline-block;
 }
 
-/* Status Filter */
-.status-filter {
-    width: 150px !important;
+/* Status Filter - inherit from trades table styling */
+#trades .status-filter {
+    width: 90px !important; /* More condensed width */
+    font-size: 0.6125rem !important; /* Match trades table font size */
+    padding: 0.1rem 0.5rem 0.1rem 0.75rem !important; /* Padding: top right bottom left - extra left for arrow, right for centering */
+    height: auto !important;
+    line-height: 1.1 !important;
+    text-align: center !important; /* Center the text (excluding arrow) */
+    text-align-last: center !important; /* Center the selected option text */
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23ffffff' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") !important; /* White arrow for header */
+    background-repeat: no-repeat !important;
+    background-position: left 0.25rem center !important; /* Left align the arrow */
+    background-size: 0.5rem 0.5rem !important; /* Condensed arrow size */
+    appearance: none !important; /* Remove default arrow */
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+}
+
+/* Status filter label in trades header - inherit from trades table */
+#trades .card-header .form-label {
+    font-size: 0.6125rem !important; /* Match trades table font size */
+    margin-bottom: 0 !important;
+    line-height: 1.2 !important;
+}
+
+/* Ensure status dropdown in trades card header inherits trades table formatting */
+#trades .card-header .status-filter,
+#trades .card-header .form-select.status-filter {
+    font-size: 0.6125rem !important; /* Match #trades-table-main font-size */
+    padding: 0.1rem 0.5rem 0.1rem 0.75rem !important; /* Padding: top right bottom left - extra left for arrow, right for centering */
+    height: auto !important;
+    line-height: 1.1 !important;
+    width: 90px !important; /* Match width */
+    border: 1px solid rgba(255, 255, 255, 0.5) !important; /* More visible border for header */
+    text-align: center !important; /* Center the text (excluding arrow) */
+    text-align-last: center !important; /* Center the selected option text */
+    background-color: rgba(255, 255, 255, 0.15) !important; /* Light background to stand out from header */
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23ffffff' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") !important; /* White arrow for header - thicker stroke */
+    background-repeat: no-repeat !important;
+    background-position: left 0.25rem center !important; /* Left align the arrow */
+    background-size: 0.6rem 0.6rem !important; /* Slightly larger arrow size for visibility */
+    color: white !important; /* White text for visibility on dark header */
+    appearance: none !important; /* Remove default arrow */
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+}
+
+/* Form select in card headers */
+.card-header .form-select,
+.card-header .form-select-sm {
+    font-size: 0.6125rem !important; /* Match condensed layout */
+    padding: 0.175rem 0.35rem !important; /* Match condensed layout */
+    height: auto !important;
+    line-height: 1.2 !important;
+}
+
+/* Override for status filter in header to match table cell styling */
+#trades .card-header .status-filter,
+#trades .card-header .form-select.status-filter {
+    padding: 0.1rem 0.5rem 0.1rem 0.75rem !important; /* Override general form-select padding */
+    line-height: 1.1 !important; /* Override general form-select line-height */
+}
+
+/* Status select dropdown in trades table - match condensed layout */
+#trades-table-main .status-select,
+#trades-table-main .form-select.status-select {
+    font-size: 0.6125rem !important; /* Match trades table font size */
+    padding: 0.1rem 0.5rem 0.1rem 0.75rem !important; /* Padding: top right bottom left - extra left for arrow, right for centering */
+    height: auto !important;
+    line-height: 1.1 !important;
+    width: 100% !important;
+    border: 1px solid #ced4da !important;
+    text-align: center !important; /* Center the text (excluding arrow) */
+    text-align-last: center !important; /* Center the selected option text */
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") !important;
+    background-repeat: no-repeat !important;
+    background-position: left 0.25rem center !important; /* Left align the arrow */
+    background-size: 0.5rem 0.5rem !important; /* Condensed arrow size */
+    appearance: none !important; /* Remove default arrow */
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+}
+
+/* Status dropdown options - condensed layout */
+/* Consolidated rules for both header and table dropdowns */
+/* Note: Native select elements have limited styling support for options */
+#trades .status-filter option,
+#trades-table-main .status-select option {
+    font-size: 0.6125rem !important; /* Condensed font size */
+    padding: 0.1rem 0.2rem !important; /* More condensed padding */
+    text-align: center !important; /* Center the text in dropdown options */
+    line-height: 1.2 !important; /* Condensed line height */
+    height: auto !important;
+    min-height: auto !important;
 }
 
 /* Header Components */
 .header-settings-icon {
     cursor: pointer;
-    font-size: 2.25rem;
-    margin-left: -70px;
+    font-size: 1.575rem; /* Reduced from 2.25rem (30% reduction) */
+    margin-left: -49px; /* Reduced from -70px (30% reduction) */
 }
 
 /* Layout Containers - Updated for Bootstrap Grid */
@@ -491,6 +609,7 @@ body {
     color: white;
     font-weight: 600;
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    font-size: 1.4rem !important; /* Reduced from 2rem (30% reduction) */
 }
 
 .header-banner .btn {
@@ -617,7 +736,7 @@ body {
 
 /* Icon Styling */
 .fa-2x {
-    font-size: 1.5em;
+    font-size: 1.05em; /* Reduced from 1.5em (30% reduction) */
 }
 
 /* Button Enhancements */
@@ -631,8 +750,8 @@ body {
 }
 
 .btn-sm {
-    padding: 0.375rem 0.75rem;
-    font-size: 0.875rem;
+    padding: 0.2625rem 0.525rem; /* Reduced from 0.375rem 0.75rem (30% reduction) */
+    font-size: 0.6125rem; /* Reduced from 0.875rem (30% reduction) */
     border-radius: 0.25rem;
 }
 
@@ -743,13 +862,13 @@ h1 {
 #cost-basis-summary .table th {
     border-top: none;
     font-weight: 600;
-    font-size: 0.875rem;
+    font-size: 0.6125rem; /* Reduced from 0.875rem (30% reduction) */
     background-color: var(--light-color);
 }
 
 #cost-basis-summary .table td {
-    font-size: 0.875rem;
-    padding: 0.5rem 0.75rem;
+    font-size: 0.6125rem; /* Reduced from 0.875rem (30% reduction) */
+    padding: 0.35rem 0.525rem; /* Reduced from 0.5rem 0.75rem (30% reduction) */
 }
 
 /* Cost Basis Table Borders */
@@ -758,6 +877,7 @@ h1 {
     border: 1px solid #dee2e6;
     border-collapse: separate;
     border-spacing: 0;
+    font-size: 0.6125rem !important; /* Match trades table font size */
 }
 
 #cost-basis-table-container .table th,
@@ -769,11 +889,15 @@ h1 {
 #cost-basis-table-container .table td,
 #cost-basis-inline-container .table td {
     border: 1px solid #dee2e6;
+    font-size: 0.6125rem !important; /* Match trades table font size */
+    padding: 0.35rem 0.525rem; /* Match trades table cell padding */
 }
 
 #cost-basis-table-container .table thead th,
 #cost-basis-inline-container .table thead th {
     border-top: 1px solid #dee2e6;
+    padding: 0.35rem 0.525rem; /* Match cost basis table cell padding for condensed layout */
+    font-size: 0.6125rem; /* Match cost basis table cell font size */
 }
 
 /* Cost Basis Table Fixed Height - Show 10 rows (height set dynamically via JS) */
@@ -822,7 +946,7 @@ h1 {
 
 /* Trades Table Specific - Compact Layout */
 #trades-table-main {
-    font-size: 0.875rem; /* Smaller font */
+    font-size: 0.6125rem; /* Reduced from 0.875rem (30% reduction) */
     min-width: 800px; /* Force horizontal scrolling */
     width: auto !important; /* Let JavaScript set the width */
     max-width: none !important; /* Allow table to be as wide as needed */
@@ -843,17 +967,132 @@ h1 {
 
 /* Make first column sticky */
 #trades-table-main thead th:first-child,
-#trades-table-main tbody td:first-child {
+#trades-table-main tbody td:first-child,
+table#trades-table-main thead th:first-child,
+table#trades-table-main tbody td:first-child,
+#trades-table-main.table thead th:first-child,
+#trades-table-main.table tbody td:first-child,
+#trades-table-main.table-sm thead th:first-child,
+#trades-table-main.table-sm tbody td:first-child {
     position: sticky;
     left: 0;
-    background-color: white !important;
-    z-index: 10;
+    background-color: #ffffff !important;
+    background: #ffffff !important;
+    border-left: 1px solid #dee2e6 !important;
+    border-right: 2px solid #dee2e6 !important;
+    border-top: 1px solid #dee2e6 !important;
+    border-bottom: 1px solid #dee2e6 !important;
+    border-style: solid !important;
+    z-index: 100 !important;
+    box-shadow: 3px 0 8px rgba(0,0,0,0.15), 2px 0 0 0 #ffffff;
+    isolation: isolate;
+    overflow: visible !important;
+}
+
+#trades-table-main thead th:first-child,
+table#trades-table-main thead th:first-child {
+    z-index: 200 !important; /* Higher z-index for header */
+    background-color: #ffffff !important;
+    background: #ffffff !important;
+    border-left: 1px solid #dee2e6 !important;
+    border-right: 2px solid #dee2e6 !important;
+    border-top: 1px solid #dee2e6 !important;
+    border-bottom: 1px solid #dee2e6 !important;
+    isolation: isolate;
+}
+
+/* Ensure first column cells are not transparent - multiple selectors for specificity */
+#trades-table-main tbody tr td:first-child,
+#trades-table-main tbody td:first-child,
+table#trades-table-main tbody tr td:first-child,
+table#trades-table-main tbody td:first-child,
+#trades-table-main.table-fixed tbody td:first-child,
+table#trades-table-main.table-fixed tbody td:first-child,
+.trades-first-column,
+#trades-table-main.table tbody tr td:first-child,
+#trades-table-main.table-sm tbody tr td:first-child,
+table#trades-table-main.table tbody tr td:first-child,
+table#trades-table-main.table-sm tbody tr td:first-child,
+#trades-table-main.table.table-fixed tbody tr td:first-child,
+#trades-table-main.table.table-sm.table-fixed tbody tr td:first-child {
+    background-color: #ffffff !important;
+    background: #ffffff !important;
+    border-left: 1px solid #dee2e6 !important;
+    border-right: 2px solid #dee2e6 !important;
+    border-top: 1px solid #dee2e6 !important;
+    border-bottom: 1px solid #dee2e6 !important;
+    border-style: solid !important;
+    -webkit-border-image: none !important;
+    -moz-border-image: none !important;
+    border-image: none !important;
+    z-index: 100 !important;
+    isolation: isolate;
+}
+
+/* Make second column (spacer) sticky */
+#trades-table-main tbody td.sticky-spacer-column {
+    position: sticky;
+    left: 105px; /* Width of first column */
+    background-color: #f5f7fa !important;
+    background: #f5f7fa !important;
+    z-index: 9;
     box-shadow: 2px 0 5px rgba(0,0,0,0.1);
 }
 
-#trades-table-main thead th:first-child {
-    z-index: 20; /* Higher z-index for header */
-    background-color: var(--light-color) !important;
+/* Ensure scrolling columns behind first column don't show their left borders */
+#trades-table-main tbody td:not(:first-child):not(.sticky-spacer-column) {
+    position: relative;
+}
+
+/* Override to ensure first column completely covers scrolling content */
+/* Note: position: sticky is set in the main first column rule, don't override it here */
+
+#trades-table-main tbody td:first-child::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: -6px;
+    bottom: 0;
+    width: 6px;
+    background-color: #ffffff;
+    z-index: 101;
+    pointer-events: none;
+}
+
+/* Remove ellipsis from date input fields - must be very specific */
+#trades-table-main input[data-field="trade_date"],
+#trades-table-main input[data-field="expiration_date"],
+#trades-table-main input.no-ellipsis,
+#trades-table-main td input[data-field="trade_date"],
+#trades-table-main td input[data-field="expiration_date"],
+table#trades-table-main input[data-field="trade_date"],
+table#trades-table-main input[data-field="expiration_date"],
+table#trades-table-main input.no-ellipsis,
+table#trades-table-main td input[data-field="trade_date"],
+table#trades-table-main td input[data-field="expiration_date"] {
+    text-overflow: clip !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    -webkit-text-overflow: clip !important;
+    -moz-text-overflow: clip !important;
+    text-overflow: unset !important;
+}
+
+/* Remove ellipsis from all form controls in trades table - must override .table-fixed td */
+#trades-table-main .form-control,
+#trades-table-main td .form-control,
+#trades-table-main input.form-control,
+#trades-table-main td input.form-control,
+table#trades-table-main .form-control,
+table#trades-table-main td .form-control,
+table#trades-table-main input.form-control,
+table#trades-table-main td input.form-control {
+    text-overflow: clip !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    -webkit-text-overflow: clip !important;
+    -moz-text-overflow: clip !important;
+    text-overflow: unset !important;
 }
 
 /* Compact padding for all cells */
@@ -862,7 +1101,7 @@ h1 {
     white-space: normal;
     word-wrap: break-word;
     vertical-align: middle;
-    padding: 0.25rem 0.5rem; /* Compact padding */
+    padding: 0.175rem 0.35rem; /* Reduced from 0.25rem 0.5rem (30% reduction) */
 }
 
 #trades-table-main tr:first-child td {
@@ -870,16 +1109,16 @@ h1 {
     word-wrap: break-word;
     text-align: center;
     vertical-align: middle;
-    padding: 0.25rem 0.5rem; /* Compact padding */
+    padding: 0.175rem 0.35rem; /* Reduced from 0.25rem 0.5rem (30% reduction) */
 }
 
 #trades-table-main td {
-    padding: 0.25rem 0.5rem !important; /* Compact padding for all cells */
+    padding: 0.175rem 0.35rem !important; /* Reduced from 0.25rem 0.5rem (30% reduction) */
 }
 
 #trades-table-main .form-control {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.875rem;
+    padding: 0.175rem 0.35rem; /* Reduced from 0.25rem 0.5rem (30% reduction) */
+    font-size: 0.6125rem; /* Reduced from 0.875rem (30% reduction) */
 }
 
 /* Compact table container */
@@ -889,8 +1128,8 @@ h1 {
 
 /* Compact header styling */
 #trades-table-main thead th {
-    padding: 0.375rem 0.5rem;
-    font-size: 0.8125rem;
+    padding: 0.175rem 0.35rem !important; /* Match trades table cell padding for consistency */
+    font-size: 0.6125rem; /* Match cost basis table header font size for consistency */
     font-weight: 600;
     white-space: nowrap;
 }
@@ -943,7 +1182,23 @@ h1 {
 
 /* Ensure trades section content doesn't extend beyond header */
 #trades .card-body {
-    padding: 1rem !important;
+    padding: 0.7rem !important; /* Reduced from 1rem (30% reduction) */
+}
+
+/* Ensure cost basis section content matches trades condensed layout */
+#cost-basis .card-body {
+    padding: 0.7rem !important; /* Match trades card body padding */
+}
+
+/* Condense cost basis ticker and summary card bodies */
+#cost-basis .cost-basis-ticker-card .card-body,
+#cost-basis .card.bg-light .card-body {
+    padding: 0.35rem !important; /* Reduced from 0.5rem (30% reduction) */
+}
+
+/* Condense cost basis header card when ticker is selected */
+#cost-basis .card.bg-light h6 {
+    font-size: 0.49rem !important; /* Reduced from 0.7rem (30% reduction) */
 }
 
 
@@ -1017,11 +1272,13 @@ h1 {
 #trades .card-header,
 #cost-basis .card-header {
     box-sizing: border-box;
-    padding-left: 16px !important;
-    padding-right: 16px !important;
+    padding-left: 11.2px !important; /* Reduced from 16px (30% reduction) */
+    padding-right: 11.2px !important; /* Reduced from 16px (30% reduction) */
+    padding-top: 0.525rem !important; /* Match compact header vertical padding */
+    padding-bottom: 0.525rem !important; /* Match compact header vertical padding */
 }
 
 #dashboard .card-header {
-    padding-left: 16px !important;
-    padding-right: 16px !important;
+    padding-left: 11.2px !important; /* Reduced from 16px (30% reduction) */
+    padding-right: 11.2px !important; /* Reduced from 16px (30% reduction) */
 }
