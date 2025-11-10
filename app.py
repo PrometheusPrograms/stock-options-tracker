@@ -2997,9 +2997,13 @@ def get_cost_basis():
         # Query cost_basis table directly instead of trades table
         # Also include dividend entries from cash_flows table
         if ticker:
-            # Query cost_basis entries
+            # Query cost_basis entries - explicitly list all columns to match UNION structure
             query = '''
-                SELECT cb.*, t.ticker, tr.trade_status as status, tr.trade_type, cb.account_id, a.account_name, 'cost_basis' as entry_type
+                SELECT 
+                    cb.id, cb.account_id, cb.ticker_id, cb.trade_id, cb.cash_flow_id,
+                    cb.transaction_date, cb.description, cb.shares, cb.cost_per_share,
+                    cb.total_amount, cb.running_basis, cb.running_shares, cb.basis_per_share, cb.created_at,
+                    t.ticker, tr.trade_status as status, tr.trade_type, a.account_name, 'cost_basis' as entry_type
                 FROM cost_basis cb
                 JOIN tickers t ON cb.ticker_id = t.id
                 LEFT JOIN trades tr ON cb.trade_id = tr.id
@@ -3011,14 +3015,13 @@ def get_cost_basis():
                 query += ' AND cb.account_id = ?'
                 params.append(account_id)
             
-            # Query dividend entries from cash_flows
+            # Query dividend entries from cash_flows - match column structure exactly
             dividend_query = '''
                 SELECT 
-                    cf.id, cf.account_id, cf.transaction_date, cf.amount, cf.description,
-                    t.ticker, NULL as status, NULL as trade_type, a.account_name, 'dividend' as entry_type,
-                    NULL as trade_id, NULL as cash_flow_id, NULL as shares, NULL as cost_per_share,
-                    NULL as total_amount, NULL as running_basis, NULL as running_shares, NULL as basis_per_share,
-                    t.id as ticker_id
+                    cf.id, cf.account_id, t.id as ticker_id, NULL as trade_id, cf.id as cash_flow_id,
+                    cf.transaction_date, cf.description, 0 as shares, 0 as cost_per_share,
+                    cf.amount as total_amount, 0 as running_basis, 0 as running_shares, 0 as basis_per_share, cf.created_at,
+                    t.ticker, NULL as status, NULL as trade_type, a.account_name, 'dividend' as entry_type
                 FROM cash_flows cf
                 JOIN tickers t ON cf.ticker_id = t.id
                 LEFT JOIN accounts a ON cf.account_id = a.id
@@ -3039,9 +3042,13 @@ def get_cost_basis():
             combined_params = params + dividend_params
             cursor.execute(combined_query, combined_params)
         else:
-            # Query cost_basis entries
+            # Query cost_basis entries - explicitly list all columns to match UNION structure
             query = '''
-                SELECT cb.*, t.ticker, tr.trade_status as status, tr.trade_type, cb.account_id, a.account_name, 'cost_basis' as entry_type
+                SELECT 
+                    cb.id, cb.account_id, cb.ticker_id, cb.trade_id, cb.cash_flow_id,
+                    cb.transaction_date, cb.description, cb.shares, cb.cost_per_share,
+                    cb.total_amount, cb.running_basis, cb.running_shares, cb.basis_per_share, cb.created_at,
+                    t.ticker, tr.trade_status as status, tr.trade_type, a.account_name, 'cost_basis' as entry_type
                 FROM cost_basis cb
                 JOIN tickers t ON cb.ticker_id = t.id
                 LEFT JOIN trades tr ON cb.trade_id = tr.id
@@ -3053,14 +3060,13 @@ def get_cost_basis():
                 query += ' AND cb.account_id = ?'
                 params.append(account_id)
             
-            # Query dividend entries from cash_flows
+            # Query dividend entries from cash_flows - match column structure exactly
             dividend_query = '''
                 SELECT 
-                    cf.id, cf.account_id, cf.transaction_date, cf.amount, cf.description,
-                    t.ticker, NULL as status, NULL as trade_type, a.account_name, 'dividend' as entry_type,
-                    NULL as trade_id, NULL as cash_flow_id, NULL as shares, NULL as cost_per_share,
-                    NULL as total_amount, NULL as running_basis, NULL as running_shares, NULL as basis_per_share,
-                    t.id as ticker_id
+                    cf.id, cf.account_id, t.id as ticker_id, NULL as trade_id, cf.id as cash_flow_id,
+                    cf.transaction_date, cf.description, 0 as shares, 0 as cost_per_share,
+                    cf.amount as total_amount, 0 as running_basis, 0 as running_shares, 0 as basis_per_share, cf.created_at,
+                    t.ticker, NULL as status, NULL as trade_type, a.account_name, 'dividend' as entry_type
                 FROM cash_flows cf
                 JOIN tickers t ON cf.ticker_id = t.id
                 LEFT JOIN accounts a ON cf.account_id = a.id
