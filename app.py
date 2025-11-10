@@ -1313,6 +1313,8 @@ def get_trades():
             except (ValueError, TypeError):
                 account_id = None
         
+        print(f'[DEBUG] Trades query - account_id_arg: {account_id_arg}, account_id: {account_id}')
+        
         ticker = request.args.get('ticker', '')
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
@@ -2979,6 +2981,8 @@ def get_cost_basis():
                 account_id = int(account_id_arg)
             except (ValueError, TypeError):
                 account_id = None
+        
+        print(f'[DEBUG] Cost basis query - account_id_arg: {account_id_arg}, account_id: {account_id}')
         
         # Query cost_basis table directly instead of trades table
         if ticker:
