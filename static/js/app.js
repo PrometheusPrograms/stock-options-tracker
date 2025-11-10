@@ -11,6 +11,11 @@ let lastTradeCount = 0;
 let selectedTicker = null;
 let premiumChart = null;
 
+// Abort controllers for canceling pending API requests
+let tradesAbortController = null;
+let costBasisAbortController = null;
+let summaryAbortController = null;
+
 // ============================================================================
 // UTILITY FUNCTIONS
 // ============================================================================
@@ -335,8 +340,8 @@ function setupAutocomplete(inputId, suggestionsId, onSelectCallback) {
     });
     
     // Handle keyboard navigation
-    input.addEventListener('keydown', function(e) {
-        const items = suggestions.querySelectorAll('.suggestion-item');
+    freshInput.addEventListener('keydown', function(e) {
+        const items = freshSuggestions.querySelectorAll('.suggestion-item');
         const current = suggestions.querySelector('.suggestion-item.active');
         
         if (e.key === 'ArrowDown') {
@@ -1220,8 +1225,13 @@ async function loadCostBasis(ticker = null) {
         console.log('Cost basis API response:', data);
         
         // Cache unfiltered cost basis data (when no ticker filter is applied)
+        // Use structuredClone for better performance, fallback to JSON for compatibility
         if (!ticker) {
-            cachedCostBasis = JSON.parse(JSON.stringify(data)); // Deep copy
+            try {
+                cachedCostBasis = structuredClone ? structuredClone(data) : JSON.parse(JSON.stringify(data));
+            } catch (e) {
+                cachedCostBasis = JSON.parse(JSON.stringify(data)); // Fallback
+            }
         }
         
         if (ticker) {
@@ -4097,15 +4107,19 @@ function setupUniversalControls() {
             });
         });
         
-        // Show/hide clear button
-        universalTickerInput.addEventListener('input', function() {
+        // Show/hide clear button - use once to prevent duplicates
+        const inputHandler = function() {
             universalClearButton.style.display = this.value.trim() ? 'inline-block' : 'none';
-        });
+        };
+        universalTickerInput.removeEventListener('input', inputHandler);
+        universalTickerInput.addEventListener('input', inputHandler);
         
-        // Clear button
-        universalClearButton.addEventListener('click', function() {
+        // Clear button - use once to prevent duplicates
+        const clearHandler = function() {
             clearUniversalTickerFilter();
-        });
+        };
+        universalClearButton.removeEventListener('click', clearHandler);
+        universalClearButton.addEventListener('click', clearHandler);
     }
     
     // Setup universal date filters
