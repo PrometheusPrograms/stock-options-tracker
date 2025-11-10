@@ -4388,6 +4388,37 @@ function setUniversalTickerFilter(ticker) {
         // Set the global symbol filter to match the input value
         window.symbolFilter = ticker || '';
         
+        // Immediate feedback: filter existing trades table instantly
+        // This provides instant visual feedback while API calls happen in background
+        if (trades && trades.length > 0) {
+            // Filter trades array in memory for immediate display
+            const filteredTrades = trades.filter(trade => 
+                trade.ticker && trade.ticker.toUpperCase() === ticker.toUpperCase()
+            );
+            // Temporarily update trades array for immediate table update
+            const originalTrades = trades;
+            trades = filteredTrades;
+            updateTradesTable();
+            // Restore original trades array - API call will update it properly
+            trades = originalTrades;
+        } else {
+            // If no trades loaded yet, just update the table (it will be empty)
+            updateTradesTable();
+        }
+        
+        // Show loading state for cost basis table while API call is in progress
+        const costBasisContainer = document.getElementById('cost-basis-table-container');
+        if (costBasisContainer && ticker) {
+            // Show a minimal loading indicator
+            const loadingHtml = `
+                <div class="text-center text-muted py-3">
+                    <i class="fas fa-spinner fa-spin me-2"></i>
+                    Loading cost basis for ${ticker}...
+                </div>
+            `;
+            costBasisContainer.innerHTML = loadingHtml;
+        }
+        
         // Reload all data with the ticker filter to ensure everything is in sync
         // This ensures the dashboard, trades table, and cost basis table all update
         // based on both the selected account and ticker filter
