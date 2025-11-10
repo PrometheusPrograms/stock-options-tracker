@@ -4399,15 +4399,21 @@ function clearUniversalTickerFilter() {
         
         // Then reload all data in background to ensure everything is in sync
         // Run all loads in parallel to reduce delay
-        // Note: loadCostBasis will update the display when it completes, but showAllSymbolsFromTrades
-        // already shows all symbols immediately, so there's no visible delay
+        // Delay loadCostBasis slightly to allow immediate display to show first
         Promise.all([
             loadTrades(),
-            loadSummary(),
-            loadCostBasis(null) // Pass null to load all cost basis data - this will refresh the display when done
+            loadSummary()
         ]).catch(error => {
             console.error('Error loading data after clearing ticker filter:', error);
         });
+        
+        // Load cost basis after a short delay to allow immediate display to show
+        // This prevents the API call from overwriting the immediate display too quickly
+        setTimeout(() => {
+            loadCostBasis(null).catch(error => {
+                console.error('Error loading cost basis after clearing ticker filter:', error);
+            });
+        }, 100); // Small delay to allow immediate display to render
     }
 }
 
