@@ -4388,25 +4388,7 @@ function setUniversalTickerFilter(ticker) {
         // Set the global symbol filter to match the input value
         window.symbolFilter = ticker || '';
         
-        // Immediate feedback: filter existing trades table instantly
-        // This provides instant visual feedback while API calls happen in background
-        if (trades && trades.length > 0) {
-            // Filter trades array in memory for immediate display
-            const filteredTrades = trades.filter(trade => 
-                trade.ticker && trade.ticker.toUpperCase() === ticker.toUpperCase()
-            );
-            // Temporarily update trades array for immediate table update
-            const originalTrades = trades;
-            trades = filteredTrades;
-            updateTradesTable();
-            // Restore original trades array - API call will update it properly
-            trades = originalTrades;
-        } else {
-            // If no trades loaded yet, just update the table (it will be empty)
-            updateTradesTable();
-        }
-        
-        // Show loading state for cost basis table while API call is in progress
+        // Show loading state for cost basis table immediately
         const costBasisContainer = document.getElementById('cost-basis-table-container');
         if (costBasisContainer && ticker) {
             // Show a minimal loading indicator
@@ -4418,6 +4400,28 @@ function setUniversalTickerFilter(ticker) {
             `;
             costBasisContainer.innerHTML = loadingHtml;
         }
+        
+        // Defer trades table update to avoid blocking UI
+        // Use requestAnimationFrame to batch DOM updates
+        requestAnimationFrame(() => {
+            // Immediate feedback: filter existing trades table instantly
+            // This provides instant visual feedback while API calls happen in background
+            if (trades && trades.length > 0) {
+                // Filter trades array in memory for immediate display
+                const filteredTrades = trades.filter(trade => 
+                    trade.ticker && trade.ticker.toUpperCase() === ticker.toUpperCase()
+                );
+                // Temporarily update trades array for immediate table update
+                const originalTrades = trades;
+                trades = filteredTrades;
+                updateTradesTable();
+                // Restore original trades array - API call will update it properly
+                trades = originalTrades;
+            } else {
+                // If no trades loaded yet, just update the table (it will be empty)
+                updateTradesTable();
+            }
+        });
         
         // Reload all data with the ticker filter to ensure everything is in sync
         // This ensures the dashboard, trades table, and cost basis table all update
@@ -4506,26 +4510,29 @@ function clearUniversalTickerFilter() {
         window.symbolFilter = '';
         
         // Immediate restore: restore cached data if available for instant display
-        // Use structuredClone for better performance, fallback to JSON for compatibility
-        if (cachedTrades) {
-            try {
-                trades = structuredClone ? structuredClone(cachedTrades) : JSON.parse(JSON.stringify(cachedTrades));
-            } catch (e) {
-                trades = JSON.parse(JSON.stringify(cachedTrades)); // Fallback
+        // Use requestAnimationFrame to batch DOM updates and avoid blocking
+        requestAnimationFrame(() => {
+            // Use structuredClone for better performance, fallback to JSON for compatibility
+            if (cachedTrades) {
+                try {
+                    trades = structuredClone ? structuredClone(cachedTrades) : JSON.parse(JSON.stringify(cachedTrades));
+                } catch (e) {
+                    trades = JSON.parse(JSON.stringify(cachedTrades)); // Fallback
+                }
+                updateTradesTable(); // Update immediately with cached data
+            } else {
+                // Fallback: use existing trades array (filtered)
+                updateTradesTable();
             }
-            updateTradesTable(); // Update immediately with cached data
-        } else {
-            // Fallback: use existing trades array (filtered)
-            updateTradesTable();
-        }
-        
-        // Restore cached cost basis if available
-        if (cachedCostBasis && cachedCostBasis.length > 0) {
-            showAllSymbols(cachedCostBasis); // Restore immediately with cached data
-        } else {
-            // Fallback: show symbols from trades data
-            showAllSymbolsFromTrades();
-        }
+            
+            // Restore cached cost basis if available
+            if (cachedCostBasis && cachedCostBasis.length > 0) {
+                showAllSymbols(cachedCostBasis); // Restore immediately with cached data
+            } else {
+                // Fallback: show symbols from trades data
+                showAllSymbolsFromTrades();
+            }
+        });
         
         // Then reload all data in background to ensure everything is in sync
         // Run all loads in parallel to reduce delay
