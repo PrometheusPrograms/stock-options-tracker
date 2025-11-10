@@ -4783,6 +4783,20 @@ def import_cost_basis_excel():
             return None
         date_str = date_str.strip()
         try:
+            # Try DD-MMM-YY format (e.g., "08-APR-20")
+            if '-' in date_str and len(date_str.split('-')) == 3:
+                parts = date_str.split('-')
+                if len(parts) == 3:
+                    day, month_str, year = parts
+                    # Try to parse as DD-MMM-YY
+                    try:
+                        month_num = datetime.strptime(month_str, '%b').month
+                        if len(year) == 2:
+                            year = '20' + year
+                        return datetime.strptime(f"{year}-{month_num:02d}-{day.zfill(2)}", '%Y-%m-%d')
+                    except ValueError:
+                        pass
+            # Try MM/DD/YYYY or MM/DD/YY format
             if '/' in date_str:
                 parts = date_str.split('/')
                 if len(parts) == 3:
@@ -4790,7 +4804,8 @@ def import_cost_basis_excel():
                     if len(year) == 2:
                         year = '20' + year
                     return datetime.strptime(f"{year}-{month.zfill(2)}-{day.zfill(2)}", '%Y-%m-%d')
-            elif '-' in date_str:
+            # Try YYYY-MM-DD format
+            elif '-' in date_str and len(date_str) == 10:
                 return datetime.strptime(date_str, '%Y-%m-%d')
         except ValueError:
             pass
