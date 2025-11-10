@@ -4600,8 +4600,6 @@ function toggleCostBasis() {
                                                 // Store the offset for future use
                                             }
                                         }
-                                        // Don't call positionCostBasisToggle() here - cost basis is expanded, so it's hidden
-                                        // We just need to store the position for when it's collapsed again
                                     });
                                 });
                             });
