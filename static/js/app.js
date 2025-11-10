@@ -820,6 +820,11 @@ async function loadSummary() {
         // Update bankroll chart
         updateBankroll();
     } catch (error) {
+        // Ignore abort errors
+        if (error.name === 'AbortError') {
+            console.log('Summary request aborted');
+            return;
+        }
         console.error('Error loading summary:', error);
     }
 }
@@ -1316,6 +1321,11 @@ async function loadCostBasis(ticker = null) {
             }
         }
     } catch (error) {
+        // Ignore abort errors
+        if (error.name === 'AbortError') {
+            console.log('Cost basis request aborted');
+            return;
+        }
         console.error('Error loading cost basis:', error);
     }
 }
