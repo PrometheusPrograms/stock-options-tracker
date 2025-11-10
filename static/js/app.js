@@ -697,6 +697,7 @@ async function loadTrades() {
         
         // Get account filter
         const accountFilter = document.getElementById('universal-account-filter')?.value || '';
+        console.log('[DEBUG] loadTrades - accountFilter:', accountFilter);
         
         // Get ticker filter - check both window.symbolFilter and input value
         const universalTickerInput = document.getElementById('universal-ticker-filter');
@@ -709,6 +710,7 @@ async function loadTrades() {
         const params = new URLSearchParams();
         if (accountFilter) {
             params.append('account_id', accountFilter);
+            console.log('[DEBUG] loadTrades - adding account_id to params:', accountFilter);
         }
         if (tickerFilter) {
             params.append('ticker', tickerFilter);
@@ -1261,10 +1263,12 @@ async function loadCostBasis(ticker = null) {
         
         // Get account filter
         const accountFilter = document.getElementById('universal-account-filter')?.value || '';
+        console.log('[DEBUG] loadCostBasis - accountFilter:', accountFilter, 'ticker:', ticker);
         
         const params = new URLSearchParams();
         if (accountFilter) {
             params.append('account_id', accountFilter);
+            console.log('[DEBUG] loadCostBasis - adding account_id to params:', accountFilter);
         }
         if (ticker) params.append('ticker', ticker);
         params.append('commission', commission.toString());

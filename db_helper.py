@@ -205,6 +205,7 @@ class DatabaseHelper:
         if account_id:
             query += ' AND st.account_id = :account_id'
             params['account_id'] = account_id
+            print(f'[DEBUG] db_helper.get_trades_filtered - filtering by account_id: {account_id}')
         
         if ticker:
             query += ' AND s.ticker = :ticker'
