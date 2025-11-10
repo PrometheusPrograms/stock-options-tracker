@@ -2971,8 +2971,14 @@ def get_cost_basis():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Get account_id filter if provided
-        account_id = request.args.get('account_id', type=int)
+        # Get account_id filter if provided - handle both string and int conversion
+        account_id_arg = request.args.get('account_id')
+        account_id = None
+        if account_id_arg:
+            try:
+                account_id = int(account_id_arg)
+            except (ValueError, TypeError):
+                account_id = None
         
         # Query cost_basis table directly instead of trades table
         if ticker:
