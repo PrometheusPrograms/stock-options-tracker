@@ -4848,16 +4848,7 @@ window.addEventListener('scroll', function() {
                 costBasisFloatingToggle.style.right = '0px';
             }
         }
-        const tradesFloatingToggle = document.getElementById('trades-floating-toggle');
-        const tradesColumn = document.getElementById('trades-column');
-        // Update stored position if trades is visible, or reposition toggle if collapsed
-        if (tradesColumn && tradesColumn.classList.contains('show')) {
-            // Trades is visible - update stored position
-            positionTradesToggle();
-        } else if (tradesFloatingToggle && tradesFloatingToggle.style.display !== 'none') {
-            // Trades is collapsed - reposition toggle using stored position
-            positionTradesToggle();
-        }
+        // Floating toggle removed - no longer needed
     }, 16); // Throttle to ~60fps (16ms)
 }, { passive: true });
 
@@ -4897,14 +4888,7 @@ window.addEventListener('resize', function() {
         }
         const tradesFloatingToggle = document.getElementById('trades-floating-toggle');
         const tradesColumn = document.getElementById('trades-column');
-        // Update stored position if trades table is visible, or reposition toggle if collapsed
-        if (tradesColumn && tradesColumn.classList.contains('show')) {
-            // Trades is visible - update stored position
-            positionTradesToggle();
-        } else if (tradesFloatingToggle && tradesFloatingToggle.style.display !== 'none') {
-            // Trades is collapsed - reposition toggle using stored position
-            positionTradesToggle();
-        }
+        // Floating toggle removed - no longer needed
         // Recalculate cost basis table height on window resize
         setCostBasisTableHeight();
         // Update column widths on resize
