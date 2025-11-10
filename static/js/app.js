@@ -5949,8 +5949,9 @@ async function handleExcelUpload(event) {
     }
     
     try {
-        // Use the same endpoint for both types - backend will need to handle import_type parameter
-        const response = await fetch('/api/import-excel', {
+        // Determine which endpoint to use based on import type
+        const endpoint = importType === 'cost-basis' ? '/api/import-cost-basis-excel' : '/api/import-excel';
+        const response = await fetch(endpoint, {
             method: 'POST',
             body: formData
         });
