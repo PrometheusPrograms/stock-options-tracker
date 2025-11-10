@@ -4698,7 +4698,11 @@ def import_excel():
             os.unlink(excel_path)
         
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f'Error importing Excel: {e}')
+        print(f'Traceback: {error_detail}')
+        return jsonify({'success': False, 'error': f'Failed to import Excel: {str(e)}'}), 500
 
 @app.route('/api/import-cost-basis-excel', methods=['POST'])
 def import_cost_basis_excel():
