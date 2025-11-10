@@ -3018,6 +3018,11 @@ def get_cost_basis():
         
         cost_basis_entries = cursor.fetchall()
         
+        print(f'[DEBUG] Cost basis query returned {len(cost_basis_entries)} entries')
+        if cost_basis_entries:
+            sample_entry = dict(cost_basis_entries[0])
+            print(f'[DEBUG] First entry - account_id: {sample_entry.get("account_id")}, account_name: {sample_entry.get("account_name")}, ticker: {sample_entry.get("ticker")}')
+        
         # Convert to list of dicts for processing
         entries = [dict(entry) for entry in cost_basis_entries]
         
@@ -3025,14 +3030,20 @@ def get_cost_basis():
         ticker_groups = {}
         for entry in entries:
             ticker = entry['ticker']
-            account_id = entry.get('account_id')
+            entry_account_id = entry.get('account_id')
             account_name = entry.get('account_name', 'Unknown')
+            
+            # If filtering by account_id, only include entries that match
+            if account_id and entry_account_id != account_id:
+                print(f'[DEBUG] Skipping entry - entry_account_id: {entry_account_id}, filter_account_id: {account_id}')
+                continue
+            
             # Create a unique key for ticker + account combination
-            key = f"{ticker}_{account_id}"
+            key = f"{ticker}_{entry_account_id}"
             if key not in ticker_groups:
                 ticker_groups[key] = {
                     'trades': [],
-                    'account_id': account_id,
+                    'account_id': entry_account_id,
                     'account_name': account_name
                 }
             ticker_groups[key]['trades'].append(entry)
