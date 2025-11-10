@@ -4238,6 +4238,16 @@ function setupUniversalControls() {
             importTypeCostBasis.addEventListener('click', function(e) {
                 e.stopPropagation();
             });
+            // Add change event listener to debug radio button state
+            importTypeCostBasis.addEventListener('change', function(e) {
+                console.log('Cost Basis radio button changed - checked:', e.target.checked);
+            });
+        }
+        if (importTypeTrades) {
+            // Add change event listener to debug radio button state
+            importTypeTrades.addEventListener('change', function(e) {
+                console.log('Trades radio button changed - checked:', e.target.checked);
+            });
         }
         
         // Function to reset radio button selections - default to Trades
