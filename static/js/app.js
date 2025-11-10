@@ -4570,9 +4570,6 @@ function toggleCostBasis() {
                             toggleIcon.classList.remove('fa-chevron-left');
                             toggleIcon.classList.add('fa-chevron-right');
                         }
-                        if (floatingToggle) {
-                            floatingToggle.style.display = 'none';
-                        }
                         if (collapsedCardIcon) {
                             collapsedCardIcon.classList.remove('fa-chevron-left');
                             collapsedCardIcon.classList.add('fa-chevron-right');
@@ -4620,9 +4617,6 @@ function toggleCostBasis() {
             if (toggleIcon) {
                 toggleIcon.classList.remove('fa-chevron-left');
                 toggleIcon.classList.add('fa-chevron-right');
-            }
-            if (floatingToggle) {
-                floatingToggle.style.display = 'none';
             }
             if (collapsedCardIcon) {
                 collapsedCardIcon.classList.remove('fa-chevron-left');
