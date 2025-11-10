@@ -259,6 +259,7 @@ def init_db():
             trade_date TEXT NOT NULL,
             expiration_date TEXT NOT NULL,
             num_of_contracts INTEGER NOT NULL,
+            num_of_shares INTEGER DEFAULT NULL,
             credit_debit REAL NOT NULL,
             total_premium REAL NOT NULL,
             days_to_expiration INTEGER NOT NULL,
