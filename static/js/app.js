@@ -4402,15 +4402,15 @@ function setupUniversalControls() {
             }
             
             // Close the import menu after file is selected
+            // NOTE: Don't reset radio buttons here - preserve the user's selection
+            // The reset will happen when the dropdown is closed via other means
             const importSubmenuToggle = document.getElementById('import-submenu-toggle');
             const importSubmenu = document.getElementById('import-submenu');
             if (importSubmenuToggle && importSubmenu) {
                 const parent = importSubmenuToggle.closest('.dropdown-submenu');
                 if (parent) {
                     parent.classList.remove('show');
-                    // Reset radio button selections - default to Trades
-                    if (importTypeTrades) importTypeTrades.checked = true; // Default to Trades
-                    if (importTypeCostBasis) importTypeCostBasis.checked = false;
+                    // Don't reset radio buttons here - user's selection should be preserved
                 }
             }
         });
