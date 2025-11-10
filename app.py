@@ -2995,9 +2995,11 @@ def get_cost_basis():
         print(f'[DEBUG] Cost basis query - account_id_arg: {account_id_arg}, account_id: {account_id}')
         
         # Query cost_basis table directly instead of trades table
+        # Also include dividend entries from cash_flows table
         if ticker:
+            # Query cost_basis entries
             query = '''
-                SELECT cb.*, t.ticker, tr.trade_status as status, tr.trade_type, cb.account_id, a.account_name
+                SELECT cb.*, t.ticker, tr.trade_status as status, tr.trade_type, cb.account_id, a.account_name, 'cost_basis' as entry_type
                 FROM cost_basis cb
                 JOIN tickers t ON cb.ticker_id = t.id
                 LEFT JOIN trades tr ON cb.trade_id = tr.id
@@ -3008,11 +3010,38 @@ def get_cost_basis():
             if account_id:
                 query += ' AND cb.account_id = ?'
                 params.append(account_id)
-            query += ' ORDER BY cb.transaction_date ASC'
-            cursor.execute(query, params)
+            
+            # Query dividend entries from cash_flows
+            dividend_query = '''
+                SELECT 
+                    cf.id, cf.account_id, cf.transaction_date, cf.amount, cf.description,
+                    t.ticker, NULL as status, NULL as trade_type, a.account_name, 'dividend' as entry_type,
+                    NULL as trade_id, NULL as cash_flow_id, NULL as shares, NULL as cost_per_share,
+                    NULL as total_amount, NULL as running_basis, NULL as running_shares, NULL as basis_per_share,
+                    t.id as ticker_id
+                FROM cash_flows cf
+                JOIN tickers t ON cf.ticker_id = t.id
+                LEFT JOIN accounts a ON cf.account_id = a.id
+                WHERE t.ticker = ? AND cf.transaction_type = 'Dividend'
+            '''
+            dividend_params = [ticker]
+            if account_id:
+                dividend_query += ' AND cf.account_id = ?'
+                dividend_params.append(account_id)
+            
+            # Combine both queries with UNION
+            combined_query = f'''
+                {query}
+                UNION ALL
+                {dividend_query}
+                ORDER BY transaction_date ASC
+            '''
+            combined_params = params + dividend_params
+            cursor.execute(combined_query, combined_params)
         else:
+            # Query cost_basis entries
             query = '''
-                SELECT cb.*, t.ticker, tr.trade_status as status, tr.trade_type, cb.account_id, a.account_name
+                SELECT cb.*, t.ticker, tr.trade_status as status, tr.trade_type, cb.account_id, a.account_name, 'cost_basis' as entry_type
                 FROM cost_basis cb
                 JOIN tickers t ON cb.ticker_id = t.id
                 LEFT JOIN trades tr ON cb.trade_id = tr.id
@@ -3023,8 +3052,34 @@ def get_cost_basis():
             if account_id:
                 query += ' AND cb.account_id = ?'
                 params.append(account_id)
-            query += ' ORDER BY t.ticker, cb.transaction_date ASC'
-            cursor.execute(query, params)
+            
+            # Query dividend entries from cash_flows
+            dividend_query = '''
+                SELECT 
+                    cf.id, cf.account_id, cf.transaction_date, cf.amount, cf.description,
+                    t.ticker, NULL as status, NULL as trade_type, a.account_name, 'dividend' as entry_type,
+                    NULL as trade_id, NULL as cash_flow_id, NULL as shares, NULL as cost_per_share,
+                    NULL as total_amount, NULL as running_basis, NULL as running_shares, NULL as basis_per_share,
+                    t.id as ticker_id
+                FROM cash_flows cf
+                JOIN tickers t ON cf.ticker_id = t.id
+                LEFT JOIN accounts a ON cf.account_id = a.id
+                WHERE cf.transaction_type = 'Dividend'
+            '''
+            dividend_params = []
+            if account_id:
+                dividend_query += ' AND cf.account_id = ?'
+                dividend_params.append(account_id)
+            
+            # Combine both queries with UNION
+            combined_query = f'''
+                {query}
+                UNION ALL
+                {dividend_query}
+                ORDER BY t.ticker, transaction_date ASC
+            '''
+            combined_params = params + dividend_params
+            cursor.execute(combined_query, combined_params)
         
         cost_basis_entries = cursor.fetchall()
         
@@ -3105,34 +3160,61 @@ def get_cost_basis():
                     company_name = ticker
                     print(f'Error fetching company name for {ticker}: {e}')
             
-            # Map cost_basis entries to trade structure
+            # Map cost_basis entries and dividends to trade structure
             mapped_trades = []
             # Calculate running totals by summing shares and amounts
             calculated_running_shares = 0
             calculated_running_basis = 0
             for entry in entries_list:
-                shares = entry.get('shares', 0) or 0
-                amount = entry.get('total_amount', 0) or 0
-                calculated_running_shares += shares
-                calculated_running_basis += amount
+                entry_type = entry.get('entry_type', 'cost_basis')
                 
-                # Calculate basis per share for this entry
-                basis_per_share = calculated_running_basis / calculated_running_shares if calculated_running_shares != 0 else calculated_running_basis
-                
-                trade = {
-                    'id': entry.get('id'),
-                    'trade_date': entry.get('transaction_date'),
-                    'trade_description': entry.get('description'),
-                    'shares': shares,
-                    'cost_per_share': entry.get('cost_per_share'),
-                    'amount': amount,
-                    'running_basis': calculated_running_basis,
-                    'running_basis_per_share': basis_per_share,
-                    'running_shares': calculated_running_shares,
-                    'trade_status': entry.get('status'),  # From linked trade
-                    'trade_type': entry.get('trade_type')  # From linked trade
-                }
-                mapped_trades.append(trade)
+                if entry_type == 'dividend':
+                    # Handle dividend entries
+                    amount = entry.get('amount', 0) or 0
+                    # Dividends don't affect shares, but they do affect the basis (they're income)
+                    # For display purposes, we'll show the dividend amount but keep shares unchanged
+                    calculated_running_basis += amount  # Dividends increase basis (they're income)
+                    
+                    trade = {
+                        'id': entry.get('id'),
+                        'trade_date': entry.get('transaction_date'),
+                        'trade_description': entry.get('description', 'Dividend'),
+                        'shares': 0,  # Dividends don't affect share count
+                        'cost_per_share': 0,
+                        'amount': amount,
+                        'running_basis': calculated_running_basis,
+                        'running_basis_per_share': calculated_running_basis / calculated_running_shares if calculated_running_shares != 0 else calculated_running_basis,
+                        'running_shares': calculated_running_shares,  # Shares unchanged
+                        'trade_status': None,
+                        'trade_type': 'Dividend',
+                        'is_dividend': True
+                    }
+                    mapped_trades.append(trade)
+                else:
+                    # Handle cost_basis entries (trades)
+                    shares = entry.get('shares', 0) or 0
+                    amount = entry.get('total_amount', 0) or 0
+                    calculated_running_shares += shares
+                    calculated_running_basis += amount
+                    
+                    # Calculate basis per share for this entry
+                    basis_per_share = calculated_running_basis / calculated_running_shares if calculated_running_shares != 0 else calculated_running_basis
+                    
+                    trade = {
+                        'id': entry.get('id'),
+                        'trade_date': entry.get('transaction_date'),
+                        'trade_description': entry.get('description'),
+                        'shares': shares,
+                        'cost_per_share': entry.get('cost_per_share'),
+                        'amount': amount,
+                        'running_basis': calculated_running_basis,
+                        'running_basis_per_share': basis_per_share,
+                        'running_shares': calculated_running_shares,
+                        'trade_status': entry.get('status'),  # From linked trade
+                        'trade_type': entry.get('trade_type'),  # From linked trade
+                        'is_dividend': False
+                    }
+                    mapped_trades.append(trade)
             
             # Calculate totals from the calculated running totals (more reliable than database values)
             if mapped_trades:
