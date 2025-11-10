@@ -1644,7 +1644,6 @@ function updateTradesTable() {
     // Build chains of related trades
     // First, build parent-child relationships
     // Use a map that can store multiple children per parent (for chains)
-    // Exclude expired trades from chains - they shouldn't be part of roll chains
     const parentToChildrenMap = new Map(); // Maps parent trade id to array of child trades
     
     filteredTrades.forEach(trade => {
@@ -1680,7 +1679,6 @@ function updateTradesTable() {
     
     // Build chains: find all chains of related trades
     // For each trade that has a parent, find the root of its chain and build the full chain
-    // Exclude expired trades from chains - they shouldn't be part of roll chains
     filteredTrades.forEach(trade => {
         // Skip if already processed as part of another chain
         if (processedChildTrades.has(trade.id)) {
@@ -1745,7 +1743,6 @@ function updateTradesTable() {
         
         // Also check if there are any trades that should be part of this chain
         // (e.g., trades that have the last trade in the chain as their parent)
-        // Exclude expired trades
         if (chain.length > 0) {
             const lastTradeInChain = chain[chain.length - 1];
             // Check if any other trades have this trade as their parent
