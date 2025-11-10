@@ -4540,18 +4540,17 @@ def import_excel():
                     }
                     
                     # Insert trade
-                    # Note: trade_parent_id column doesn't exist in the database, so we don't insert it
                     cursor.execute('''
                         INSERT INTO trades 
                         (account_id, ticker_id, trade_date, expiration_date, num_of_contracts, 
                          credit_debit, total_premium, days_to_expiration, current_price, 
                          strike_price, trade_status, trade_type, price_per_share, total_amount,
-                         commission_per_share, net_credit_per_share, risk_capital_per_share, margin_capital, margin_percent, ARORC, trade_type_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         commission_per_share, net_credit_per_share, risk_capital_per_share, margin_capital, margin_percent, ARORC, trade_type_id, trade_parent_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (account_id, ticker_id, trade_date, expiration_date, num_of_contracts,
                           credit_debit, total_premium, days_to_expiration, current_price,
                           strike_price, trade_status, trade_type, current_price, total_premium,
-                          commission, net_credit_per_share, risk_capital_per_share, margin_capital, margin_percent, arorc, trade_type_id))
+                          commission, net_credit_per_share, risk_capital_per_share, margin_capital, margin_percent, arorc, trade_type_id, trade_parent_id))
                     
                     trade_id = cursor.lastrowid
                     
