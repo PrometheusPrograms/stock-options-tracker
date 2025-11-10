@@ -4875,6 +4875,7 @@ def import_cost_basis_excel():
                 total_amount = 0
                 
                 # Insert trade
+                # For BTO stock trades, num_of_contracts = num_of_shares
                 cursor.execute('''
                     INSERT INTO trades 
                     (account_id, ticker_id, trade_date, expiration_date, num_of_contracts, num_of_shares,
@@ -4886,6 +4887,8 @@ def import_cost_basis_excel():
                       premium, total_premium, days_to_expiration, current_price, strike_price,
                       'open', 'BTO', 0, price_per_share, total_amount,
                       0, 0, 100.0, None, trade_type_id))
+                
+                print(f'Inserted trade with ID: {cursor.lastrowid}', flush=True)
                 
                 trade_id = cursor.lastrowid
                 
@@ -4969,9 +4972,11 @@ def import_cost_basis_excel():
     except Exception as e:
         import traceback
         error_detail = traceback.format_exc()
-        print(f'Error importing cost basis: {e}')
-        print(f'Traceback: {error_detail}')
-        return jsonify({'success': False, 'error': f'Failed to import cost basis: {str(e)}'}), 500
+        print(f'Error importing cost basis: {e}', flush=True)
+        print(f'Traceback: {error_detail}', flush=True)
+        # Return more detailed error message
+        error_msg = str(e) if str(e) else 'Unknown error occurred'
+        return jsonify({'success': False, 'error': f'Failed to import cost basis: {error_msg}'}), 500
 
 if __name__ == '__main__':
     # Run migrations first to ensure schema is up to date
