@@ -4639,60 +4639,6 @@ function toggleCostBasis() {
     updateCollapsedCardVisibility();
 }
 
-function positionCostBasisToggle() {
-    const floatingToggle = document.getElementById('cost-basis-floating-toggle');
-    const tradesCard = document.getElementById('trades');
-    const tradesColumn = document.getElementById('trades-column');
-    const costBasisColumn = document.getElementById('cost-basis-column');
-    const container = document.querySelector('.trades-cost-container');
-    
-    if (!floatingToggle || !container) return;
-    
-    // Check if cost basis is collapsed - if so, use stored position
-    const isCostBasisCollapsed = costBasisColumn && !costBasisColumn.classList.contains('show');
-    
-    if (isCostBasisCollapsed) {
-        // Cost basis is collapsed - use stored position
-        if (storedCostBasisHeaderPosition !== null) {
-            floatingToggle.style.top = `${storedCostBasisHeaderPosition}px`;
-            floatingToggle.style.transform = 'translateY(0)';
-            floatingToggle.style.right = '0px';
-        }
-        return; // Don't recalculate if cost basis is collapsed
-    }
-    
-    // Cost basis is expanded - check if trades table is visible (expanded)
-    const isTradesVisible = tradesColumn && tradesColumn.classList.contains('show');
-    
-    if (isTradesVisible && tradesCard) {
-        // Trades table is visible - get current position relative to container
-        const tradesHeader = tradesCard.querySelector('.card-header');
-        
-        if (tradesHeader) {
-            // Get positions relative to viewport
-            const headerRect = tradesHeader.getBoundingClientRect();
-            const containerRect = container.getBoundingClientRect();
-            
-            // Calculate position relative to container (not viewport)
-            // Align with top of header instead of middle
-            const headerTop = headerRect.top;
-            const containerTop = containerRect.top;
-            const offsetFromContainer = headerTop - containerTop;
-            
-            // Store the offset for when cost basis table is collapsed
-            storedCostBasisHeaderPosition = offsetFromContainer;
-        }
-    } else {
-        // Trades table is collapsed - use stored offset relative to container
-        if (storedCostBasisHeaderPosition !== null) {
-            floatingToggle.style.top = `${storedCostBasisHeaderPosition}px`;
-            floatingToggle.style.transform = 'translateY(0)';
-        }
-    }
-    
-    // Always position at right edge
-    floatingToggle.style.right = '0px';
-}
 
 // Update position on scroll with throttling to prevent lag
 // Since toggles use position: absolute relative to container, they scroll with the page
