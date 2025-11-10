@@ -4543,18 +4543,54 @@ def import_excel():
                         'strike_price': strike_price
                     }
                     
-                    # Insert trade
-                    cursor.execute('''
-                        INSERT INTO trades 
-                        (account_id, ticker_id, trade_date, expiration_date, num_of_contracts, 
-                         credit_debit, total_premium, days_to_expiration, current_price, 
-                         strike_price, trade_status, trade_type, price_per_share, total_amount,
-                         commission_per_share, net_credit_per_share, risk_capital_per_share, margin_capital, margin_percent, ARORC, trade_type_id, trade_parent_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (account_id, ticker_id, trade_date, expiration_date, num_of_contracts,
-                          credit_debit, total_premium, days_to_expiration, current_price,
-                          strike_price, trade_status, trade_type, current_price, total_premium,
-                          commission, net_credit_per_share, risk_capital_per_share, margin_capital, margin_percent, arorc, trade_type_id, trade_parent_id))
+                    # Insert trade using flexible schema-aware approach
+                    # Get actual columns from the trades table (excluding auto-generated ones)
+                    cursor.execute("PRAGMA table_info(trades)")
+                    table_columns = [col[1] for col in cursor.fetchall()]
+                    # Exclude columns that are auto-generated or shouldn't be inserted
+                    exclude_columns = {'id', 'created_at'}
+                    insert_columns = [col for col in table_columns if col not in exclude_columns]
+                    
+                    # Build the INSERT statement dynamically
+                    columns_str = ', '.join(insert_columns)
+                    placeholders_str = ', '.join(['?' for _ in insert_columns])
+                    
+                    # Prepare values in the same order as columns
+                    # Map of column names to values
+                    values_map = {
+                        'account_id': account_id,
+                        'ticker_id': ticker_id,
+                        'trade_date': trade_date,
+                        'expiration_date': expiration_date,
+                        'num_of_contracts': num_of_contracts,
+                        'num_of_shares': None,  # Will be set if column exists
+                        'credit_debit': credit_debit,
+                        'total_premium': total_premium,
+                        'days_to_expiration': days_to_expiration,
+                        'current_price': current_price,
+                        'strike_price': strike_price,
+                        'trade_status': trade_status,
+                        'trade_type': trade_type,
+                        'price_per_share': current_price,
+                        'total_amount': total_premium,
+                        'commission_per_share': commission,
+                        'net_credit_per_share': net_credit_per_share,
+                        'risk_capital_per_share': risk_capital_per_share,
+                        'margin_capital': margin_capital,
+                        'margin_percent': margin_percent,
+                        'ARORC': arorc,
+                        'trade_type_id': trade_type_id,
+                        'trade_parent_id': trade_parent_id
+                    }
+                    
+                    # Build values list in the same order as columns
+                    values = [values_map.get(col, None) for col in insert_columns]
+                    
+                    # Execute the dynamic INSERT
+                    cursor.execute(f'''
+                        INSERT INTO trades ({columns_str})
+                        VALUES ({placeholders_str})
+                    ''', values)
                     
                     trade_id = cursor.lastrowid
                     
