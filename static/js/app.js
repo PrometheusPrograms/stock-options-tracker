@@ -4351,19 +4351,29 @@ function setupUniversalControls() {
     const menuExcelUpload = document.getElementById('menu-excel-upload');
     if (menuExcelUpload) {
         menuExcelUpload.addEventListener('change', function(event) {
+            // Get fresh references to radio buttons to ensure we have the current state
             const importTypeTrades = document.getElementById('import-type-trades');
             const importTypeCostBasis = document.getElementById('import-type-cost-basis');
             
-            // Debug logging
-            console.log('File upload triggered - importTypeTrades.checked:', importTypeTrades?.checked, 'importTypeCostBasis.checked:', importTypeCostBasis?.checked);
+            // Debug logging - check both the element and querySelector to verify state
+            const tradesChecked = importTypeTrades?.checked;
+            const costBasisChecked = importTypeCostBasis?.checked;
+            const tradesCheckedViaQuery = document.querySelector('#import-type-trades:checked') !== null;
+            const costBasisCheckedViaQuery = document.querySelector('#import-type-cost-basis:checked') !== null;
             
-            // Check if any button is selected
-            if (!importTypeTrades?.checked && !importTypeCostBasis?.checked) {
+            console.log('File upload triggered - importTypeTrades.checked:', tradesChecked, 'importTypeCostBasis.checked:', costBasisChecked);
+            console.log('Via querySelector - trades:', tradesCheckedViaQuery, 'cost-basis:', costBasisCheckedViaQuery);
+            
+            // Check if any button is selected - use querySelector as fallback
+            const isCostBasisSelected = costBasisChecked || costBasisCheckedViaQuery;
+            const isTradesSelected = tradesChecked || tradesCheckedViaQuery;
+            
+            if (!isTradesSelected && !isCostBasisSelected) {
                 // If no button is selected, default to Trades and select it
                 if (importTypeTrades) importTypeTrades.checked = true;
                 console.log('No import type selected, defaulting to trades');
                 handleExcelUpload(event);
-            } else if (importTypeCostBasis && importTypeCostBasis.checked) {
+            } else if (isCostBasisSelected) {
                 // Call cost basis import function
                 console.log('Cost basis import selected, calling handleCostBasisUpload');
                 handleCostBasisUpload(event);
