@@ -4353,7 +4353,7 @@ function setupUniversalControls() {
                 importTypeTrades.checked = true;
                 handleExcelUpload(event);
             } else if (importTypeCostBasis && importTypeCostBasis.checked) {
-                // Call cost basis import function (to be implemented)
+                // Call cost basis import function
                 handleCostBasisUpload(event);
             } else {
                 // Call trades import function (existing)
@@ -5997,6 +5997,88 @@ async function handleExcelUpload(event) {
                 await loadTrades();
                 await loadSummary();
             }
+        } else {
+            console.error('Import failed:', result.error);
+            alert('Error importing Excel file: ' + result.error);
+        }
+    } catch (error) {
+        console.error('Upload error:', error);
+        alert('Error uploading file: ' + error.message);
+    }
+    
+    // Reset file input
+    event.target.value = '';
+    
+    // Close dropdown menu if from menu upload
+    if (event.target.id === 'menu-excel-upload') {
+        const dropdown = bootstrap.Dropdown.getInstance(document.getElementById('header-menu-toggle'));
+        if (dropdown) {
+            dropdown.hide();
+        }
+    }
+}
+
+async function handleCostBasisUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    // Get account ID from menu if available
+    const importAccountSelect = document.getElementById('import-account-select');
+    
+    let accountId = null;
+    
+    // Check if this is from the menu upload
+    if (event.target.id === 'menu-excel-upload') {
+        if (importAccountSelect) {
+            accountId = importAccountSelect.value;
+            if (!accountId) {
+                alert('Please select an account before importing.');
+                event.target.value = '';
+                return;
+            }
+        }
+    }
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    if (accountId) {
+        formData.append('account_id', accountId);
+    }
+    
+    try {
+        const response = await fetch('/api/import-cost-basis-excel', {
+            method: 'POST',
+            body: formData
+        });
+        
+        console.log('Response status:', response.status);
+        
+        // Check if response is OK before reading body
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Error response body:', errorText);
+            alert('Error uploading file: Server returned ' + response.status);
+            return;
+        }
+        
+        const result = await response.json();
+        
+        // Print to console for debugging
+        console.log('Import result:', result);
+        
+        if (result.success) {
+            let message = result.message || 'Successfully imported cost basis entry.';
+            if (result.trade_id) {
+                message += `\nTrade ID: ${result.trade_id}`;
+            }
+            if (result.cost_basis_id) {
+                message += `\nCost Basis ID: ${result.cost_basis_id}`;
+            }
+            alert(message);
+            // Reload data
+            await loadCostBasis();
+            await loadTrades();
+            await loadSummary();
         } else {
             console.error('Import failed:', result.error);
             alert('Error importing Excel file: ' + result.error);
