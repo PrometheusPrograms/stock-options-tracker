@@ -1328,6 +1328,11 @@ def get_trades():
             end_date=end_date
         )
         
+        print(f'[DEBUG] Trades query returned {len(trades)} trades')
+        if trades:
+            sample_trade = trades[0]
+            print(f'[DEBUG] First trade - account_id: {sample_trade.get("account_id")}, account_name: {sample_trade.get("account_name")}, ticker: {sample_trade.get("ticker")}')
+        
         # Add computed fields for backward compatibility
         trades_list = []
         for trade_dict in trades:
