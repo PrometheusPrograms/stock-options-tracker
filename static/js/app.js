@@ -2067,15 +2067,28 @@ function updateTradesTable() {
             firstCell.style.whiteSpace = 'normal';
             firstCell.style.wordWrap = 'break-word';
             firstCell.style.verticalAlign = 'middle';
-            // Use CSS variables for dark mode compatibility
-            firstCell.style.setProperty('background-color', 'var(--table-header-bg)', 'important');
-            firstCell.style.setProperty('background', 'var(--table-header-bg)', 'important');
-            firstCell.style.setProperty('color', 'var(--text-color)', 'important');
-            // Force visible borders and high z-index to cover scrolling columns
-            firstCell.style.setProperty('border-left', '1px solid var(--border-color)', 'important');
-            firstCell.style.setProperty('border-right', '2px solid var(--border-color)', 'important');
-            firstCell.style.setProperty('border-top', '1px solid var(--border-color)', 'important');
-            firstCell.style.setProperty('border-bottom', '1px solid var(--border-color)', 'important');
+            // Check if dark mode is active
+            const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
+            
+            // Use white background in light mode (original behavior), dark in dark mode
+            if (isDarkMode) {
+                firstCell.style.setProperty('background-color', 'var(--table-header-bg)', 'important');
+                firstCell.style.setProperty('background', 'var(--table-header-bg)', 'important');
+                firstCell.style.setProperty('color', 'var(--text-color)', 'important');
+                firstCell.style.setProperty('border-left', '1px solid var(--border-color)', 'important');
+                firstCell.style.setProperty('border-right', '2px solid var(--border-color)', 'important');
+                firstCell.style.setProperty('border-top', '1px solid var(--border-color)', 'important');
+                firstCell.style.setProperty('border-bottom', '1px solid var(--border-color)', 'important');
+            } else {
+                // Light mode: use white background (original behavior)
+                firstCell.style.setProperty('background-color', '#ffffff', 'important');
+                firstCell.style.setProperty('background', '#ffffff', 'important');
+                firstCell.style.setProperty('color', '#212529', 'important');
+                firstCell.style.setProperty('border-left', '1px solid #dee2e6', 'important');
+                firstCell.style.setProperty('border-right', '2px solid #dee2e6', 'important');
+                firstCell.style.setProperty('border-top', '1px solid #dee2e6', 'important');
+                firstCell.style.setProperty('border-bottom', '1px solid #dee2e6', 'important');
+            }
             firstCell.style.setProperty('border-style', 'solid', 'important');
             firstCell.style.setProperty('position', 'sticky', 'important');
             firstCell.style.setProperty('left', '0', 'important');
@@ -4192,6 +4205,11 @@ function setupThemeToggle() {
                     themeIcon.classList.remove('fa-moon');
                     themeIcon.classList.add('fa-sun');
                 }
+            }
+            
+            // Re-render the trades table to update first column colors
+            if (typeof updateTradesTable === 'function') {
+                updateTradesTable();
             }
         });
     }
