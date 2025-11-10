@@ -4233,10 +4233,10 @@ function setupUniversalControls() {
             });
         }
         
-        // Function to reset radio button selections
+        // Function to reset radio button selections - default to Trades
         function resetImportTypeSelection() {
             if (importTypeTrades) {
-                importTypeTrades.checked = false;
+                importTypeTrades.checked = true; // Default to Trades
             }
             if (importTypeCostBasis) {
                 importTypeCostBasis.checked = false;
@@ -4367,8 +4367,8 @@ function setupUniversalControls() {
                 const parent = importSubmenuToggle.closest('.dropdown-submenu');
                 if (parent) {
                     parent.classList.remove('show');
-                    // Reset radio button selections
-                    if (importTypeTrades) importTypeTrades.checked = false;
+                    // Reset radio button selections - default to Trades
+                    if (importTypeTrades) importTypeTrades.checked = true; // Default to Trades
                     if (importTypeCostBasis) importTypeCostBasis.checked = false;
                 }
             }
