@@ -2969,31 +2969,31 @@ def get_cost_basis():
         # Query cost_basis table directly instead of trades table
         if ticker:
             query = '''
-                SELECT cb.*, t.ticker, tr.trade_status as status, tr.trade_type, tr.account_id, a.account_name
+                SELECT cb.*, t.ticker, tr.trade_status as status, tr.trade_type, cb.account_id, a.account_name
                 FROM cost_basis cb
                 JOIN tickers t ON cb.ticker_id = t.id
                 LEFT JOIN trades tr ON cb.trade_id = tr.id
-                LEFT JOIN accounts a ON tr.account_id = a.id
+                LEFT JOIN accounts a ON cb.account_id = a.id
                 WHERE t.ticker = ? AND t.ticker IS NOT NULL AND t.ticker != ""
             '''
             params = [ticker]
             if account_id:
-                query += ' AND tr.account_id = ?'
+                query += ' AND cb.account_id = ?'
                 params.append(account_id)
             query += ' ORDER BY cb.transaction_date ASC'
             cursor.execute(query, params)
         else:
             query = '''
-                SELECT cb.*, t.ticker, tr.trade_status as status, tr.trade_type, tr.account_id, a.account_name
+                SELECT cb.*, t.ticker, tr.trade_status as status, tr.trade_type, cb.account_id, a.account_name
                 FROM cost_basis cb
                 JOIN tickers t ON cb.ticker_id = t.id
                 LEFT JOIN trades tr ON cb.trade_id = tr.id
-                LEFT JOIN accounts a ON tr.account_id = a.id
+                LEFT JOIN accounts a ON cb.account_id = a.id
                 WHERE t.ticker IS NOT NULL AND t.ticker != ""
             '''
             params = []
             if account_id:
-                query += ' AND tr.account_id = ?'
+                query += ' AND cb.account_id = ?'
                 params.append(account_id)
             query += ' ORDER BY t.ticker, cb.transaction_date ASC'
             cursor.execute(query, params)
