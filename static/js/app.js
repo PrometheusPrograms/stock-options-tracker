@@ -4370,36 +4370,76 @@ function setupUniversalControls() {
     }
     
     // Setup menu Excel upload
+    // Store the selected import type when the file input is clicked (before file dialog opens)
+    let storedImportType = null;
     const menuExcelUpload = document.getElementById('menu-excel-upload');
+    const menuExcelUploadLabel = document.querySelector('label[for="menu-excel-upload"]');
+    
+    // Store import type when file input label is clicked (before file dialog opens)
+    if (menuExcelUploadLabel) {
+        menuExcelUploadLabel.addEventListener('click', function(e) {
+            // Store the current radio button state before file dialog opens
+            const importTypeCostBasis = document.getElementById('import-type-cost-basis');
+            const importTypeTrades = document.getElementById('import-type-trades');
+            
+            // Use querySelector to get the actual checked state
+            const costBasisChecked = document.querySelector('#import-type-cost-basis:checked') !== null;
+            const tradesChecked = document.querySelector('#import-type-trades:checked') !== null;
+            
+            if (costBasisChecked) {
+                storedImportType = 'cost-basis';
+                console.log('Stored import type: cost-basis (before file dialog)');
+            } else if (tradesChecked) {
+                storedImportType = 'trades';
+                console.log('Stored import type: trades (before file dialog)');
+            } else {
+                storedImportType = 'trades'; // Default
+                console.log('Stored import type: trades (default, before file dialog)');
+            }
+        });
+    }
+    
     if (menuExcelUpload) {
         menuExcelUpload.addEventListener('change', function(event) {
-            // Get fresh references to radio buttons to ensure we have the current state
-            // Use querySelector to get the actual checked state from the DOM
-            const importTypeTrades = document.getElementById('import-type-trades');
-            const importTypeCostBasis = document.getElementById('import-type-cost-basis');
+            // First check if we have a stored import type (from before file dialog opened)
+            let importType = storedImportType;
             
-            // Use querySelector to check the actual DOM state - this is more reliable
-            const tradesCheckedViaQuery = document.querySelector('#import-type-trades:checked') !== null;
-            const costBasisCheckedViaQuery = document.querySelector('#import-type-cost-basis:checked') !== null;
+            // If no stored type, check current DOM state
+            if (!importType) {
+                const importTypeTrades = document.getElementById('import-type-trades');
+                const importTypeCostBasis = document.getElementById('import-type-cost-basis');
+                
+                // Use querySelector to check the actual DOM state - this is more reliable
+                const tradesCheckedViaQuery = document.querySelector('#import-type-trades:checked') !== null;
+                const costBasisCheckedViaQuery = document.querySelector('#import-type-cost-basis:checked') !== null;
+                
+                // Also check the element properties as fallback
+                const tradesChecked = importTypeTrades?.checked;
+                const costBasisChecked = importTypeCostBasis?.checked;
+                
+                // Use querySelector result as primary source of truth
+                const isCostBasisSelected = costBasisCheckedViaQuery || costBasisChecked;
+                const isTradesSelected = tradesCheckedViaQuery || tradesChecked;
+                
+                console.log('File upload triggered - importTypeTrades.checked:', tradesChecked, 'importTypeCostBasis.checked:', costBasisChecked);
+                console.log('Via querySelector - trades:', tradesCheckedViaQuery, 'cost-basis:', costBasisCheckedViaQuery);
+                console.log('Final decision - isCostBasisSelected:', isCostBasisSelected, 'isTradesSelected:', isTradesSelected);
+                
+                if (isCostBasisSelected) {
+                    importType = 'cost-basis';
+                } else if (isTradesSelected) {
+                    importType = 'trades';
+                } else {
+                    importType = 'trades'; // Default
+                }
+            } else {
+                console.log('Using stored import type:', importType);
+            }
             
-            // Also check the element properties as fallback
-            const tradesChecked = importTypeTrades?.checked;
-            const costBasisChecked = importTypeCostBasis?.checked;
+            // Clear stored type after use
+            storedImportType = null;
             
-            // Use querySelector result as primary source of truth
-            const isCostBasisSelected = costBasisCheckedViaQuery || costBasisChecked;
-            const isTradesSelected = tradesCheckedViaQuery || tradesChecked;
-            
-            console.log('File upload triggered - importTypeTrades.checked:', tradesChecked, 'importTypeCostBasis.checked:', costBasisChecked);
-            console.log('Via querySelector - trades:', tradesCheckedViaQuery, 'cost-basis:', costBasisCheckedViaQuery);
-            console.log('Final decision - isCostBasisSelected:', isCostBasisSelected, 'isTradesSelected:', isTradesSelected);
-            
-            if (!isTradesSelected && !isCostBasisSelected) {
-                // If no button is selected, default to Trades and select it
-                if (importTypeTrades) importTypeTrades.checked = true;
-                console.log('No import type selected, defaulting to trades');
-                handleExcelUpload(event);
-            } else if (isCostBasisSelected) {
+            if (importType === 'cost-basis') {
                 // Call cost basis import function
                 console.log('Cost basis import selected, calling handleCostBasisUpload');
                 handleCostBasisUpload(event);
