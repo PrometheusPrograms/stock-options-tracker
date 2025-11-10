@@ -2234,7 +2234,7 @@ function updateTradesTable() {
                                onfocus="handleDateInputFocus(this)" 
                                onkeydown="handleTabNavigation(event, ${trade.id}, 3)"
                                onblur="handleDateInputBlurForRollField(this, ${trade.id})"
-                               style="width: 100px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem; text-overflow: clip !important; overflow: visible !important; white-space: normal !important;">
+                               style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem; text-overflow: clip !important; overflow: visible !important; white-space: normal !important;">
                     `;
                     break;
                 case 4: // Price - Editable for all trades
@@ -2273,7 +2273,7 @@ function updateTradesTable() {
                                onfocus="handleDateInputFocus(this)" 
                                onkeydown="handleTabNavigation(event, ${trade.id}, 5)"
                                onblur="handleDateInputBlurForRollField(this, ${trade.id})"
-                               style="width: 100px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem; text-overflow: clip !important; overflow: visible !important; white-space: normal !important;">
+                               style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem; text-overflow: clip !important; overflow: visible !important; white-space: normal !important;">
                     `;
                     break;
                 case 6: // DTE (was Days to Exp) - Read-only (calculated)
@@ -2332,7 +2332,7 @@ function updateTradesTable() {
                                onfocus="this.select()"
                                onkeydown="handleTabNavigation(event, ${trade.id}, 9)"
                                oninput="autoSaveTradeField(${trade.id}, 'num_of_contracts', this.value)"
-                               style="width: 60px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
+                               style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
                     `;
                     break;
                 case 10: // Shares - Read-only (calculated from num_of_contracts)
