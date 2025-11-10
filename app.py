@@ -5202,6 +5202,7 @@ def import_cost_basis_excel():
                         row = 11
                         processed_data = set()  # Track processed data to prevent duplicates (based on content, not row number)
                         print(f"Sheet '{sheet_name}': Starting to process rows from row 11", flush=True)
+                        print(f"Sheet '{sheet_name}': Ticker = {ticker}, Ticker ID = {ticker_id}", flush=True)
                         while True:
                             # Check if row B is blank
                             description = cells.get((row, 2), "").strip()
@@ -5214,6 +5215,7 @@ def import_cost_basis_excel():
                             
                             # Check if it's a dividend (case-insensitive, check for DIVIDEND anywhere in description)
                             description_upper = description.upper()
+                            print(f"Sheet '{sheet_name}', Row {row}: Checking for dividend - description_upper = '{description_upper}', contains 'DIVIDEND' = {('DIVIDEND' in description_upper)}", flush=True)
                             if 'DIVIDEND' in description_upper:
                                 try:
                                     # Get date and amount to create a unique key for duplicate detection
