@@ -53,13 +53,13 @@
         
         .sticky-control-bar {
             position: sticky;
-            top: 90px; /* Position right below sticky banner (banner height ~90px) */
+            top: 63px; /* Reduced from 90px (30% reduction) - Position right below condensed sticky banner */
             z-index: 98; /* Below banner (z-index: 999) but above content */
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 1rem;
+            padding: 0.7rem; /* Reduced from 1rem (30% reduction) */
             box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-            margin-top: -1.5rem; /* Pull up to fill gap */
-            margin-bottom: 1.5rem; /* Add margin below for spacing to dashboard */
+            margin-top: -1.05rem; /* Reduced from -1.5rem (30% reduction) - Pull up to fill gap */
+            margin-bottom: 1.05rem; /* Reduced from 1.5rem (30% reduction) */
         }
         
         /* Date range button styling - remove outline on click and add selected state */
@@ -67,6 +67,8 @@
             outline: none !important;
             box-shadow: none !important;
             border: 1px solid rgba(255, 255, 255, 0.3) !important;
+            font-size: 0.6125rem !important; /* Match condensed layout */
+            padding: 0.175rem 0.35rem !important; /* Match condensed layout */
         }
         
         .date-range-btn:focus,
@@ -91,10 +93,10 @@
         .sticky-control-bar::before {
             content: '';
             position: absolute;
-            top: -1.5rem;
+            top: -1.05rem; /* Reduced from -1.5rem (30% reduction) */
             left: 0;
             right: 0;
-            height: 1.5rem;
+            height: 1.05rem; /* Reduced from 1.5rem (30% reduction) */
             background-color: #f5f7fa; /* Match page background */
             z-index: -1;
         }
@@ -102,7 +104,7 @@
         .control-bar-content {
             display: flex;
             flex-wrap: wrap;
-            gap: 1rem;
+            gap: 0.7rem; /* Reduced from 1rem (30% reduction) */
             align-items: center;
             justify-content: center;
         }
@@ -110,25 +112,25 @@
         .control-group {
             display: flex;
             align-items: center;
-            gap: 0.5rem;
+            gap: 0.35rem; /* Reduced from 0.5rem (30% reduction) */
         }
         
         .control-group label {
             color: white;
             font-weight: 500;
-            font-size: 0.875rem;
+            font-size: 0.6125rem; /* Reduced from 0.875rem (30% reduction) */
             white-space: nowrap;
         }
         
         .quick-add-buttons {
             display: flex;
-            gap: 0.25rem;
+            gap: 0.175rem; /* Reduced from 0.25rem (30% reduction) */
             flex-wrap: wrap;
         }
         
         .quick-add-btn {
-            font-size: 0.75rem;
-            padding: 0.25rem 0.5rem;
+            font-size: 0.525rem; /* Reduced from 0.75rem (30% reduction) */
+            padding: 0.175rem 0.35rem; /* Reduced from 0.25rem 0.5rem (30% reduction) */
         }
         
         /* Flex container for trades and cost basis */
@@ -187,150 +189,10 @@
             max-width: 100%;
         }
         
-        /* Floating toggle button for collapsed cost basis */
-        .cost-basis-collapsed-toggle {
-            position: absolute;
-            right: 0;
-            z-index: 1000;
-            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
-            color: white;
-            border: none;
-            padding: 1rem 0.5rem;
-            border-radius: 8px 0 0 8px;
-            cursor: pointer;
-            box-shadow: -2px 0 10px rgba(0,0,0,0.2);
-            transition: all 0.3s ease;
-            animation: slideInFromRight 0.3s ease;
-        }
-        
-        .cost-basis-collapsed-toggle:hover {
-            right: 5px;
-            box-shadow: -4px 0 15px rgba(0,0,0,0.3);
-        }
-        
         /* Make trades-cost-container position relative for absolute positioning of toggles */
         .trades-cost-container {
             position: relative;
         }
-        
-        /* Floating toggle button for collapsed trades */
-        .trades-collapsed-toggle {
-            position: absolute;
-            left: 0;
-            z-index: 1000;
-            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
-            color: white;
-            border: none;
-            padding: 1rem 0.5rem;
-            border-radius: 0 8px 8px 0;
-            cursor: pointer;
-            box-shadow: 2px 0 10px rgba(0,0,0,0.2);
-            transition: all 0.3s ease;
-            animation: slideInFromLeft 0.3s ease;
-        }
-        
-        .trades-collapsed-toggle:hover {
-            left: 5px;
-            box-shadow: 4px 0 15px rgba(0,0,0,0.3);
-        }
-        
-        @keyframes slideInFromRight {
-            from {
-                right: -50px;
-                opacity: 0;
-            }
-            to {
-                right: 0;
-                opacity: 1;
-            }
-        }
-        
-        @keyframes slideInFromLeft {
-            from {
-                left: -50px;
-                opacity: 0;
-            }
-            to {
-                left: 0;
-                opacity: 1;
-            }
-        }
-        .floating-nav {
-            position: fixed;
-            left: 20px;
-            top: calc(100vh / 3);
-            width: 50px;
-            background: #212529;
-            border-radius: 12px;
-            padding: 10px 8px;
-            z-index: 1000;
-            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
-            cursor: move;
-            user-select: none;
-            border: 2px solid rgba(255, 255, 255, 0.2);
-            backdrop-filter: blur(20px);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        
-        .drag-handle {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 5px 0;
-            color: #ffffff !important;
-            cursor: grab;
-            font-size: 24px;
-            opacity: 1 !important;
-            transition: all 0.2s ease;
-            margin-bottom: 5px;
-        }
-        
-        .drag-handle i {
-            color: #ffffff !important;
-            font-size: 18px !important;
-        }
-        
-        .drag-handle:hover {
-            background-color: rgba(13, 110, 253, 0.2);
-            transform: scale(1.1);
-        }
-        
-        .drag-handle:active {
-            cursor: grabbing;
-        }
-        
-        .nav-item {
-            width: 34px;
-            height: 34px;
-            margin: 5px 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            border-radius: 8px;
-            transition: all 0.2s ease;
-            color: #ffffff;
-        }
-        
-        .nav-item:hover {
-            background: rgba(255, 255, 255, 0.2);
-            transform: scale(1.1);
-        }
-        
-        .nav-item i {
-            font-size: 14px;
-        }
-        
-        .nav-item.active {
-            background: #0d6efd;
-            color: white;
-            box-shadow: 0 0 15px rgba(13, 110, 253, 0.8);
-            transform: scale(1.05);
-            border: 1px solid rgba(13, 110, 253, 0.5);
-        }
-        
         /* Dropdown submenu styling */
         .dropdown-submenu {
             position: relative;
@@ -481,18 +343,18 @@
             background-color: rgba(13, 110, 253, 0.1) !important;
         }
         
-        /* Cost basis ticker card - fixed width of 60px (fits 4 characters) */
+        /* Cost basis ticker card - fixed width of 42px (condensed layout) */
         .cost-basis-ticker-card {
-            width: 60px !important;
-            min-width: 60px !important;
-            max-width: 60px !important;
-            height: 80px !important;
+            width: 42px !important;
+            min-width: 42px !important;
+            max-width: 42px !important;
+            height: 56px !important;
             overflow: hidden !important;
         }
         
         .cost-basis-ticker-card .card-body {
             overflow: hidden !important;
-            padding: 0.5rem !important;
+            padding: 0.35rem !important; /* Reduced from 0.5rem (30% reduction) */
             height: 100% !important;
             display: flex !important;
             flex-direction: column !important;
@@ -509,25 +371,11 @@
             width: 100% !important;
             display: block !important;
             text-align: center !important;
+            font-size: 0.6125rem !important; /* Match condensed layout */
         }
     </style>
 </head>
 <body>
-    <!-- Floating Navigation Bar -->
-    <div class="floating-nav" id="floatingNav">
-        <div class="drag-handle">
-            <i class="fas fa-ellipsis-h"></i>
-        </div>
-        <div class="nav-item" onclick="scrollToSection('dashboard')" title="Dashboard">
-            <i class="fas fa-tachometer-alt"></i>
-        </div>
-        <div class="nav-item" onclick="scrollToSection('trades')" title="Trades">
-            <i class="fas fa-chart-line"></i>
-        </div>
-        <div class="nav-item" onclick="scrollToSection('cost-basis')" title="Cost Basis">
-            <i class="fas fa-calculator"></i>
-        </div>
-    </div>
 
     <div class="page-wrapper">
         <!-- Header Banner -->
@@ -537,7 +385,7 @@
                     🔥🔥🔥🔥 Tracker
                 </h1>
                 <div class="position-absolute" style="right: 20px; top: 50%; transform: translateY(-50%);">
-                    <button class="btn btn-link text-white p-0" type="button" id="header-menu-toggle" data-bs-toggle="dropdown" aria-expanded="false" style="cursor: pointer; font-size: 2.25rem; text-decoration: none; border: none; outline: none; width: 3rem; padding: 0.5rem;">
+                    <button class="btn btn-link text-white p-0" type="button" id="header-menu-toggle" data-bs-toggle="dropdown" aria-expanded="false" style="cursor: pointer; font-size: 1.575rem; text-decoration: none; border: none; outline: none; width: 2.1rem; padding: 0.35rem;">
                         <i class="fas fa-bars"></i>
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end" id="header-menu-dropdown" style="min-width: 250px;">
@@ -592,7 +440,7 @@
                 <!-- Account Filter -->
                 <div class="control-group">
                     <label for="universal-account-filter">Account:</label>
-                    <select class="form-select form-select-sm" id="universal-account-filter" style="width: 150px;">
+                    <select class="form-select form-select-sm" id="universal-account-filter" style="width: 105px; font-size: 0.6125rem; padding: 0.175rem 0.35rem;">
                         <option value="">All</option>
                     </select>
                 </div>
@@ -626,10 +474,10 @@
                 <div class="control-group">
                     <label for="universal-ticker-filter">Symbol:</label>
                     <div style="position: relative;">
-                        <input type="text" class="form-control form-control-sm" id="universal-ticker-filter" placeholder="Filter by ticker..." style="width: 150px;" autocomplete="off">
+                        <input type="text" class="form-control form-control-sm" id="universal-ticker-filter" placeholder="Filter by ticker..." style="width: 105px; font-size: 0.6125rem; padding: 0.175rem 0.35rem;" autocomplete="off">
                         <div id="universal-ticker-suggestions" class="dropdown-menu" style="display: none;"></div>
                     </div>
-                    <button id="clear-universal-ticker" class="btn btn-sm btn-light" onclick="clearUniversalTickerFilter()" style="display: none;">
+                    <button id="clear-universal-ticker" class="btn btn-sm btn-light" onclick="clearUniversalTickerFilter()" style="display: none; font-size: 0.6125rem; padding: 0.175rem 0.35rem;">
                         <i class="fas fa-times"></i>
                     </button>
                 </div>
@@ -637,11 +485,11 @@
                 <!-- Date Filters -->
                 <div class="control-group">
                     <label for="universal-start-date">Start:</label>
-                    <input type="date" class="form-control form-control-sm" id="universal-start-date" style="width: 140px;">
+                    <input type="date" class="form-control form-control-sm" id="universal-start-date" style="width: 98px; font-size: 0.6125rem; padding: 0.175rem 0.35rem;">
                 </div>
                 <div class="control-group">
                     <label for="universal-end-date">End:</label>
-                    <input type="date" class="form-control form-control-sm" id="universal-end-date" style="width: 140px;">
+                    <input type="date" class="form-control form-control-sm" id="universal-end-date" style="width: 98px; font-size: 0.6125rem; padding: 0.175rem 0.35rem;">
                 </div>
                 
                 <!-- Quick Date Buttons -->
@@ -814,7 +662,7 @@
                         <div class="d-flex align-items-center justify-content-between">
                             <div class="d-flex align-items-center">
                                 <i class="fas fa-chevron-down section-toggle-icon" id="dashboardToggleIcon" data-bs-toggle="collapse" data-bs-target="#dashboardCollapse" aria-expanded="true" aria-controls="dashboardCollapse"></i>
-                                <h5 class="mb-0 section-title" style="font-size: 1.875rem; font-weight: bold;">
+                                <h5 class="mb-0 section-title" style="font-size: 1.3125rem; font-weight: bold;">
                                     <i class="fas fa-tachometer-alt me-2"></i>
                                     Dashboard
                                 </h5>
@@ -1021,15 +869,6 @@
         <!-- Trades and Cost Basis Section -->
         <div class="container-fluid px-0">
             <div class="trades-cost-container mb-5" style="margin-top: 2.25rem;">
-                <!-- Floating Toggle Button for Collapsed Cost Basis -->
-                <button class="cost-basis-collapsed-toggle" id="cost-basis-floating-toggle" onclick="toggleCostBasis()" style="display: none;">
-                    <i class="fas fa-chevron-left fa-lg" id="cost-basis-floating-toggle-icon"></i>
-                </button>
-                
-                <!-- Floating Toggle Button for Collapsed Trades -->
-                <button class="trades-collapsed-toggle" id="trades-floating-toggle" onclick="toggleTrades()" style="display: none;">
-                    <i class="fas fa-chevron-right fa-lg" id="trades-floating-toggle-icon"></i>
-                </button>
                 <!-- Trades Card (on the left, horizontally collapsible) -->
                 <div id="trades-column" class="collapse show flex-shrink-0 transition-width me-3">
                     <div class="card section-card" id="trades" style="width: 100%;">
@@ -1038,19 +877,19 @@
                             <button class="btn btn-sm btn-light me-3" id="trades-toggle-btn" onclick="toggleTrades()">
                                 <i class="fas fa-chevron-left" id="trades-toggle-icon"></i>
                             </button>
-                            <h5 class="mb-0 section-title" style="font-size: 1.875rem; font-weight: bold;">
+                            <h5 class="mb-0 section-title" style="font-size: 1.3125rem; font-weight: bold;">
                                 <i class="fas fa-chart-line me-2"></i>
                                 Trades
                             </h5>
                             <!-- Status Filter -->
                             <div class="d-flex align-items-center ms-3" style="gap: 1px;">
                                 <label for="status-filter" class="form-label mb-0 me-1 text-white">Status:</label>
-                                <select class="form-select form-select-sm status-filter" id="status-filter" style="width: 120px;">
+                                <select class="form-select form-select-sm status-filter" id="status-filter" style="width: 90px;">
                                     <option value="">All</option>
-                                    <option value="open">Open</option>
-                                    <option value="closed">Closed</option>
                                     <option value="assigned">Assigned</option>
+                                    <option value="closed">Closed</option>
                                     <option value="expired">Expired</option>
+                                    <option value="open">Open</option>
                                     <option value="roll">Roll</option>
                                 </select>
                             </div>
@@ -1079,7 +918,7 @@
                         <div class="card-header bg-success text-white compact d-flex justify-content-between align-items-center">
                             <div class="d-flex align-items-center">
                                 <div style="width: 2.5rem; margin-right: 1rem;"></div>
-                                <h5 class="mb-0 section-title" style="font-size: 1.875rem; font-weight: bold;">
+                                <h5 class="mb-0 section-title" style="font-size: 1.3125rem; font-weight: bold;">
                                     <i class="fas fa-calculator me-2"></i>
                                     Cost Basis
                                 </h5>
@@ -1455,173 +1294,6 @@
     <script src="{{ url_for('static', filename='js/app.js') }}?v=382"></script>
     
     <script>
-        // Global variable to track current section
-        let currentSection = 'dashboard';
-        let isManualNavigation = false;
-        
-        // Floating navigation scroll function
-        function scrollToSection(sectionId) {
-            const element = document.getElementById(sectionId);
-            if (element) {
-                isManualNavigation = true;
-                
-                // Dynamically calculate the sticky banner wrapper height
-                const bannerWrapper = document.querySelector('.header-banner-wrapper');
-                const bannerHeight = bannerWrapper ? bannerWrapper.offsetHeight : 150;
-                
-                const elementPosition = element.getBoundingClientRect().top + window.pageYOffset;
-                const offsetPosition = elementPosition - bannerHeight;
-                
-                window.scrollTo({
-                    top: offsetPosition,
-                    behavior: 'smooth'
-                });
-            }
-            
-            // Update global currentSection variable
-            const sections = ['dashboard', 'trades', 'cost-basis'];
-            const sectionIndex = sections.indexOf(sectionId);
-            
-            // Update active nav item immediately
-            document.querySelectorAll('.nav-item').forEach((item, index) => {
-                item.classList.remove('active');
-                if (index === sectionIndex) {
-                    item.classList.add('active');
-                }
-            });
-            
-            // Update global variable
-            currentSection = sectionId;
-            
-            // Reset flag after a delay to allow smooth scroll to complete
-            setTimeout(() => {
-                isManualNavigation = false;
-            }, 1000);
-        }
-        
-        // Debug function to check section widths
-        function logSectionWidths() {
-            const dashboard = document.getElementById('dashboard');
-            const trades = document.getElementById('trades');
-            const costBasis = document.getElementById('cost-basis');
-            
-            console.log('Dashboard width:', dashboard ? dashboard.offsetWidth : 'N/A');
-            console.log('Trades width:', trades ? trades.offsetWidth : 'N/A');
-            console.log('Cost Basis width:', costBasis ? costBasis.offsetWidth : 'N/A');
-        }
-        
-        // Log widths when DOM is loaded
-        window.addEventListener('load', function() {
-            setTimeout(logSectionWidths, 1000);
-            
-            // Make floating nav draggable
-            makeFloatingNavDraggable();
-        });
-        
-        // Make floating nav draggable
-        function makeFloatingNavDraggable() {
-            const nav = document.getElementById('floatingNav');
-            let isDragging = false;
-            let currentX;
-            let currentY;
-            let initialX;
-            let initialY;
-            let xOffset = 0;
-            let yOffset = 0;
-            
-            nav.addEventListener('mousedown', dragStart);
-            document.addEventListener('mousemove', drag);
-            document.addEventListener('mouseup', dragEnd);
-            
-            function dragStart(e) {
-                // Don't drag if clicking on nav items (but allow dragging from handle)
-                if (e.target.closest('.nav-item')) {
-                    return;
-                }
-                
-                // Allow dragging from handle or nav background
-                if (e.target.closest('.drag-handle') || e.target === nav || (nav.contains(e.target) && !e.target.closest('.nav-item'))) {
-                    initialX = e.clientX - xOffset;
-                    initialY = e.clientY - yOffset;
-                    isDragging = true;
-                }
-            }
-            
-            function drag(e) {
-                if (isDragging) {
-                    e.preventDefault();
-                    currentX = e.clientX - initialX;
-                    currentY = e.clientY - initialY;
-                    
-                    xOffset = currentX;
-                    yOffset = currentY;
-                    
-                    setTranslate(currentX, currentY, nav);
-                }
-            }
-            
-            function dragEnd(e) {
-                initialX = currentX;
-                initialY = currentY;
-                isDragging = false;
-            }
-            
-            function setTranslate(xPos, yPos, el) {
-                el.style.left = xPos + 'px';
-                el.style.top = yPos + 'px';
-            }
-        }
-        
-        // Update active nav item based on scroll position
-        let lastScrollY = 0;
-        
-        window.addEventListener('scroll', function() {
-            // Don't override manual navigation until it completes
-            if (isManualNavigation) {
-                return;
-            }
-            
-            const sections = ['dashboard', 'trades', 'cost-basis'];
-            const navItems = document.querySelectorAll('.nav-item');
-            
-            const scrollPosition = window.scrollY;
-            const scrollDirection = scrollPosition > lastScrollY ? 'down' : 'up';
-            lastScrollY = scrollPosition;
-            
-            let foundSection = '';
-            const viewportCenter = scrollPosition + window.innerHeight / 2;
-            
-            // Simple approach: check each section from bottom to top
-            for (let i = sections.length - 1; i >= 0; i--) {
-                const sectionId = sections[i];
-                const element = document.getElementById(sectionId);
-                
-                if (element) {
-                    const rect = element.getBoundingClientRect();
-                    const sectionTop = rect.top + scrollPosition;
-                    const sectionBottom = sectionTop + element.offsetHeight;
-                    
-                    // If viewport center is within this section's bounds
-                    if (viewportCenter >= sectionTop && viewportCenter < sectionBottom) {
-                        foundSection = sectionId;
-                        break;
-                    }
-                }
-            }
-            
-            // Update currentSection
-            if (foundSection) {
-                currentSection = foundSection;
-            }
-            
-            // Update active nav item
-            navItems.forEach((item, index) => {
-                item.classList.remove('active');
-                if (sections[index] === currentSection) {
-                    item.classList.add('active');
-                }
-            });
-        });
     </script>
 </body>
 </html>
