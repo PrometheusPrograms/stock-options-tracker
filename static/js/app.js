@@ -4219,34 +4219,42 @@ function setupUniversalControls() {
         const tradesLabel = importTypeTrades ? document.querySelector('label[for="import-type-trades"]') : null;
         const costBasisLabel = importTypeCostBasis ? document.querySelector('label[for="import-type-cost-basis"]') : null;
         
-        if (tradesLabel) {
-            tradesLabel.addEventListener('click', function(e) {
-                e.stopPropagation();
-            });
-        }
-        if (costBasisLabel) {
-            costBasisLabel.addEventListener('click', function(e) {
-                e.stopPropagation();
-            });
-        }
+        // Add change event listeners to track radio button state changes
         if (importTypeTrades) {
-            importTypeTrades.addEventListener('click', function(e) {
-                e.stopPropagation();
+            importTypeTrades.addEventListener('change', function(e) {
+                console.log('Trades radio button changed - checked:', e.target.checked);
             });
         }
         if (importTypeCostBasis) {
-            importTypeCostBasis.addEventListener('click', function(e) {
-                e.stopPropagation();
-            });
-            // Add change event listener to debug radio button state
             importTypeCostBasis.addEventListener('change', function(e) {
                 console.log('Cost Basis radio button changed - checked:', e.target.checked);
             });
         }
+        
+        // Prevent clicks on labels/radio buttons from closing the dropdown menu
+        // But allow the default behavior (checking the radio button) to work
+        if (tradesLabel) {
+            tradesLabel.addEventListener('click', function(e) {
+                e.stopPropagation(); // Prevent dropdown from closing
+                // Don't prevent default - let the label click check the radio button
+            });
+        }
+        if (costBasisLabel) {
+            costBasisLabel.addEventListener('click', function(e) {
+                e.stopPropagation(); // Prevent dropdown from closing
+                // Don't prevent default - let the label click check the radio button
+            });
+        }
         if (importTypeTrades) {
-            // Add change event listener to debug radio button state
-            importTypeTrades.addEventListener('change', function(e) {
-                console.log('Trades radio button changed - checked:', e.target.checked);
+            importTypeTrades.addEventListener('click', function(e) {
+                e.stopPropagation(); // Prevent dropdown from closing
+                // Don't prevent default - let the radio button be checked
+            });
+        }
+        if (importTypeCostBasis) {
+            importTypeCostBasis.addEventListener('click', function(e) {
+                e.stopPropagation(); // Prevent dropdown from closing
+                // Don't prevent default - let the radio button be checked
             });
         }
         
