@@ -6110,37 +6110,4 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// ============================================================================
-// COST BASIS IMPORT FUNCTION (Placeholder - to be implemented)
-// ============================================================================
-
-async function handleCostBasisUpload(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-    
-    // Get account ID from menu
-    const importAccountSelect = document.getElementById('import-account-select');
-    let accountId = null;
-    
-    if (event.target.id === 'menu-excel-upload') {
-        if (importAccountSelect) {
-            accountId = importAccountSelect.value;
-            if (!accountId) {
-                alert('Please select an account before importing.');
-                event.target.value = '';
-                return;
-            }
-        }
-    }
-    
-    // TODO: Implement cost basis import logic
-    alert('Cost Basis import functionality will be implemented soon. For now, please use the Trades import.');
-    event.target.value = '';
-    
-    // Close the dropdown after import attempt
-    const dropdown = bootstrap.Dropdown.getInstance(document.getElementById('header-menu-toggle'));
-    if (dropdown) {
-        dropdown.hide();
-    }
-}
 
