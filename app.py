@@ -767,11 +767,19 @@ def get_bankroll_summary():
         cursor = conn.cursor()
         
         # Get starting bankroll from accounts table
-        cursor.execute('''
-            SELECT COALESCE(starting_balance, 0) as total
-            FROM accounts
-            WHERE id = ?
-        ''', (account_id,))
+        if account_id:
+            # Filter by specific account
+            cursor.execute('''
+                SELECT COALESCE(SUM(starting_balance), 0) as total
+                FROM accounts
+                WHERE id = ?
+            ''', (account_id,))
+        else:
+            # Sum all accounts
+            cursor.execute('''
+                SELECT COALESCE(SUM(starting_balance), 0) as total
+                FROM accounts
+            ''')
         starting_bankroll = cursor.fetchone()['total']
         
         # Build query for premiums based on date filters and account
@@ -781,9 +789,12 @@ def get_bankroll_summary():
                 ELSE -credit_debit 
             END), 0) as total_premiums
             FROM trades
-            WHERE trade_status != 'roll' AND account_id = ?
+            WHERE trade_status != 'roll'
         '''
-        query_params = [account_id]
+        query_params = []
+        if account_id:
+            query += ' AND account_id = ?'
+            query_params.append(account_id)
         
         if start_date:
             query += ' AND trade_date >= ?'
