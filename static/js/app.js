@@ -4622,12 +4622,6 @@ function toggleCostBasis() {
             }
             // Update column widths after expanding cost basis
             updateColumnWidths();
-            // Update stored position after expansion (use requestAnimationFrame to ensure DOM is updated)
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    positionCostBasisToggle();
-                });
-            });
         }
     }
     
