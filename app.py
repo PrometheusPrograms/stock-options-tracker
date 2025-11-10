@@ -275,8 +275,12 @@ def init_db():
             risk_capital_per_share REAL DEFAULT 0,
             margin_percent REAL DEFAULT 100.0,
             ARORC NUMERIC(10,4) DEFAULT NULL,
+            trade_type_id INTEGER,
+            trade_parent_id INTEGER,
             FOREIGN KEY (ticker_id) REFERENCES tickers(id),
-            FOREIGN KEY (account_id) REFERENCES accounts(id)
+            FOREIGN KEY (account_id) REFERENCES accounts(id),
+            FOREIGN KEY (trade_type_id) REFERENCES trade_types(id),
+            FOREIGN KEY (trade_parent_id) REFERENCES trades(id)
         )
     ''')
     
