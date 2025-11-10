@@ -4809,14 +4809,29 @@ def import_cost_basis_excel():
                         return datetime.strptime(f"{year}-{month_num:02d}-{day.zfill(2)}", '%Y-%m-%d')
                     except ValueError:
                         pass
-            # Try MM/DD/YYYY or MM/DD/YY format
+            # Try DD/MM/YY or DD/MM/YYYY format (day/month/year)
+            if '/' in date_str:
+                parts = date_str.split('/')
+                if len(parts) == 3:
+                    day, month, year = parts
+                    if len(year) == 2:
+                        year = '20' + year
+                    # Try DD/MM/YY format first (day/month/year)
+                    try:
+                        return datetime.strptime(f"{year}-{month.zfill(2)}-{day.zfill(2)}", '%Y-%m-%d')
+                    except ValueError:
+                        pass
+            # Try MM/DD/YYYY or MM/DD/YY format (month/day/year) as fallback
             if '/' in date_str:
                 parts = date_str.split('/')
                 if len(parts) == 3:
                     month, day, year = parts
                     if len(year) == 2:
                         year = '20' + year
-                    return datetime.strptime(f"{year}-{month.zfill(2)}-{day.zfill(2)}", '%Y-%m-%d')
+                    try:
+                        return datetime.strptime(f"{year}-{month.zfill(2)}-{day.zfill(2)}", '%Y-%m-%d')
+                    except ValueError:
+                        pass
             # Try YYYY-MM-DD format
             elif '-' in date_str and len(date_str) == 10:
                 return datetime.strptime(date_str, '%Y-%m-%d')
