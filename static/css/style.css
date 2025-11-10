@@ -33,6 +33,10 @@
     --space-xl: 2rem;       /* 32px */
     --space-xxl: 3rem;      /* 48px */
     
+    /* Loading Spinner */
+    --spinner-size: 20px;
+    --spinner-color: var(--primary-color);
+    
     /* Common spacing values found in app */
     --space-title: 15px;
     --space-header: 25px;
@@ -41,6 +45,7 @@
     /* Light Mode Colors */
     --primary-color: #667eea;
     --primary-color-alt: #007bff;
+    --ticker-card-color: #000000;
     --primary-color-dark: #0056b3;
     --secondary-color: #764ba2;
     --accent-color: #f093fb;
@@ -77,6 +82,7 @@
     /* Dark Mode Colors */
     --primary-color: #7c8ef5;
     --primary-color-alt: #4dabf7;
+    --ticker-card-color: #ffffff;
     --primary-color-dark: #5c7cfa;
     --secondary-color: #8b6fb8;
     --accent-color: #f5a3d3;
@@ -110,7 +116,8 @@ body {
     background-color: var(--background-color);
     color: var(--text-color);
     font-family: var(--font-family);
-    transition: background-color 0.3s ease, color 0.3s ease;
+    transition: background-color 0.15s ease, color 0.15s ease;
+    will-change: background-color, color;
 }
 
 /* ========= Spacing Scale Classes ========= */
@@ -171,7 +178,8 @@ body {
     margin: 0 auto;
     width: 100%;
     background-color: var(--background-color);
-    transition: background-color 0.3s ease;
+    transition: background-color 0.15s ease;
+    will-change: background-color;
 }
 
 /* ========= 4. Header Banner ========= */
@@ -199,7 +207,8 @@ body {
     width: calc(100% + 20px);
     margin-left: -10px;
     margin-right: -10px;
-    transition: background-color 0.3s ease;
+    transition: background-color 0.15s ease;
+    will-change: background-color;
 }
 
 /* ========= 5. Cards & Headers ========= */
@@ -208,7 +217,8 @@ body {
     border: 1px solid var(--card-border);
     background-color: var(--card-bg);
     box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
-    transition: box-shadow 0.15s ease-in-out, background-color 0.3s ease, border-color 0.3s ease;
+    transition: box-shadow 0.15s ease-in-out, background-color 0.15s ease, border-color 0.15s ease;
+    will-change: box-shadow, background-color, border-color;
     animation: fadeIn 0.3s ease-in-out;
     color: var(--text-color);
 }
@@ -230,7 +240,8 @@ body {
     border-bottom: 1px solid var(--card-border);
     border-radius: 0.5rem 0.5rem 0 0;
     padding: 1.05rem 0.7rem; /* Reduced from 1.5rem 1rem (30% reduction) */
-    transition: background-color 0.3s ease, border-color 0.3s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+    will-change: background-color, border-color;
 }
 
 /* Compact header variant for tighter layouts */
@@ -243,7 +254,8 @@ body {
 #trades,
 #cost-basis {
     border: 1px solid var(--border-color);
-    transition: border-color 0.3s ease;
+    transition: border-color 0.15s ease;
+    will-change: border-color;
 }
 
 /* Ensure dashboard card has proper top margin to avoid overlapping with sticky control bar */
@@ -484,12 +496,26 @@ body {
 }
 
 /* Table Components */
+/* Ensure all table elements transition at the same speed for synchronized dark mode toggle */
+.table,
+.table th,
+.table td,
+.table thead th,
+.table tbody td,
+.table-fixed,
+.table-fixed th,
+.table-fixed td {
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    will-change: background-color, color, border-color;
+}
+
 .table-fixed {
     table-layout: fixed;
     /* width will be set dynamically by JavaScript */
     background-color: var(--table-bg);
     color: var(--text-color);
-    transition: background-color 0.3s ease, color 0.3s ease;
+    transition: background-color 0.15s ease, color 0.15s ease;
+    will-change: background-color, color;
 }
 
 .table-fixed td {
@@ -502,7 +528,8 @@ body {
     border: 1px solid var(--border-color);
     background-color: var(--table-bg);
     color: var(--text-color);
-    transition: border-color 0.3s ease, background-color 0.3s ease, color 0.3s ease;
+    transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+    will-change: border-color, background-color, color;
 }
 
 .table-fixed td:first-child:not(:empty) {
@@ -522,7 +549,8 @@ table#trades-table-main.table-fixed td {
     white-space: normal !important;
     background-color: var(--table-bg);
     color: var(--text-color);
-    transition: background-color 0.3s ease, color 0.3s ease;
+    transition: background-color 0.15s ease, color 0.15s ease;
+    will-change: background-color, color;
 }
 
 #trades-table-main.table-fixed td:first-child:not(:empty),
@@ -662,6 +690,60 @@ table#trades-table-main.table-fixed td:first-child {
     color: var(--text-color) !important;
 }
 
+/* Account dropdown in sticky control bar - arrow on left */
+#universal-account-filter,
+.sticky-control-bar .form-select {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") !important;
+    background-repeat: no-repeat !important;
+    background-position: left 0.25rem center !important; /* Left align the arrow */
+    background-size: 0.5rem 0.5rem !important;
+    padding-left: 1.5rem !important; /* Add left padding for arrow */
+    padding-right: 0.35rem !important; /* Keep right padding */
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+}
+
+/* Account dropdown in sticky control bar - white arrow in dark mode */
+[data-theme="dark"] #universal-account-filter,
+[data-theme="dark"] .sticky-control-bar .form-select {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23ffffff' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") !important;
+}
+
+/* Account dropdown in trades table - arrow on left */
+#trades-table-main .form-select[data-field="account_id"],
+#trades-table-main .form-select.text-center[data-field="account_id"],
+#trades-table-main select[data-field="account_id"] {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") !important;
+    background-repeat: no-repeat !important;
+    background-position: left 0.25rem center !important; /* Left align the arrow */
+    background-size: 0.5rem 0.5rem !important;
+    padding-left: 1.5rem !important; /* Add left padding for arrow */
+    padding-right: 0.25rem !important; /* Keep right padding */
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+}
+
+/* Account dropdown in trades table - white arrow in dark mode */
+[data-theme="dark"] #trades-table-main .form-select[data-field="account_id"],
+[data-theme="dark"] #trades-table-main .form-select.text-center[data-field="account_id"],
+[data-theme="dark"] #trades-table-main select[data-field="account_id"],
+[data-theme="dark"] #trades-table-main .new-trade-account-select {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23ffffff' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") !important;
+}
+
+/* New trade account select - arrow on left */
+#trades-table-main .new-trade-account-select {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M2 5l6 6 6-6'/%3e%3c/svg%3e") !important;
+    background-repeat: no-repeat !important;
+    background-position: left 0.25rem center !important; /* Left align the arrow */
+    background-size: 0.5rem 0.5rem !important;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+}
+
 /* Status dropdown options - condensed layout */
 /* Consolidated rules for both header and table dropdowns */
 /* Note: Native select elements have limited styling support for options */
@@ -778,13 +860,15 @@ table#trades-table-main.table-fixed td:first-child {
     background-color: var(--dropdown-bg);
     border: 1px solid var(--border-color);
     color: var(--text-color);
-    transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    will-change: background-color, border-color, color;
 }
 
 .dropdown-item {
     border-bottom: 1px solid var(--border-color);
     color: var(--text-color);
-    transition: background-color 0.15s ease-in-out, color 0.3s ease;
+    transition: background-color 0.15s ease-in-out, color 0.15s ease;
+    will-change: background-color, color;
 }
 
 .dropdown-item:hover {
@@ -815,7 +899,8 @@ table#trades-table-main.table-fixed td:first-child {
 
 /* Symbol Cards */
 .symbol-card {
-    transition: all 0.3s ease;
+    transition: all 0.15s ease;
+    will-change: transform, box-shadow, border-color;
     border: 2px solid transparent;
 }
 
@@ -862,7 +947,8 @@ table#trades-table-main.table-fixed td:first-child {
     border: 1px solid var(--input-border);
     background-color: var(--input-bg);
     color: var(--text-color);
-    transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out, background-color 0.3s ease, color 0.3s ease;
+    transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out, background-color 0.15s ease, color 0.15s ease;
+    will-change: border-color, box-shadow, background-color, color;
 }
 
 .form-control:focus {
@@ -876,7 +962,8 @@ table#trades-table-main.table-fixed td:first-child {
     background-color: var(--input-bg);
     color: var(--text-color);
     border-color: var(--input-border);
-    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    will-change: background-color, color, border-color;
 }
 
 .form-select {
@@ -888,7 +975,8 @@ h1 {
     color: var(--text-color);
     font-weight: 600;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-    transition: color 0.3s ease;
+    transition: color 0.15s ease;
+    will-change: color;
 }
 
 [data-theme="dark"] h1 {
@@ -899,7 +987,8 @@ h1 {
 .card-title {
     font-weight: 600;
     color: var(--text-color);
-    transition: color 0.3s ease;
+    transition: color 0.15s ease;
+    will-change: color;
 }
 
 .card-header .card-title {
@@ -938,7 +1027,8 @@ h1 {
     background-color: var(--modal-bg);
     color: var(--text-color);
     border: 1px solid var(--border-color);
-    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    will-change: background-color, color, border-color;
 }
 
 [data-theme="dark"] .modal-content {
@@ -947,12 +1037,14 @@ h1 {
 
 .modal-header {
     border-bottom: 1px solid var(--border-color);
-    transition: border-color 0.3s ease;
+    transition: border-color 0.15s ease;
+    will-change: border-color;
 }
 
 .modal-footer {
     border-top: 1px solid var(--border-color);
-    transition: border-color 0.3s ease;
+    transition: border-color 0.15s ease;
+    will-change: border-color;
 }
 
 /* Button Group Styling */
@@ -993,7 +1085,10 @@ h1 {
 #cost-basis-summary .table {
     border: 10px solid var(--border-color);
     border-radius: 0.5rem;
-    transition: border-color 0.3s ease;
+    background-color: var(--table-bg);
+    color: var(--text-color);
+    transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+    will-change: border-color, background-color, color;
 }
 
 #cost-basis-summary .table th {
@@ -1003,7 +1098,8 @@ h1 {
     background-color: var(--table-header-bg);
     color: var(--text-color);
     border-color: var(--border-color);
-    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    will-change: background-color, color, border-color;
 }
 
 #cost-basis-summary .table td {
@@ -1012,7 +1108,8 @@ h1 {
     background-color: var(--table-bg);
     color: var(--text-color);
     border-color: var(--border-color);
-    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    will-change: background-color, color, border-color;
 }
 
 /* Cost Basis Table Borders */
@@ -1024,7 +1121,8 @@ h1 {
     font-size: 0.6125rem !important; /* Match trades table font size */
     background-color: var(--table-bg);
     color: var(--text-color);
-    transition: border-color 0.3s ease, background-color 0.3s ease, color 0.3s ease;
+    transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+    will-change: border-color, background-color, color;
 }
 
 #cost-basis-table-container .table th,
@@ -1033,7 +1131,8 @@ h1 {
     border-bottom: 2px solid var(--border-color);
     background-color: var(--table-header-bg);
     color: var(--text-color);
-    transition: border-color 0.3s ease, background-color 0.3s ease, color 0.3s ease;
+    transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+    will-change: border-color, background-color, color;
 }
 
 #cost-basis-table-container .table td,
@@ -1043,7 +1142,8 @@ h1 {
     padding: 0.35rem 0.525rem; /* Match trades table cell padding */
     background-color: var(--table-bg);
     color: var(--text-color);
-    transition: border-color 0.3s ease, background-color 0.3s ease, color 0.3s ease;
+    transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+    will-change: border-color, background-color, color;
 }
 
 #cost-basis-table-container .table thead th,
@@ -1053,7 +1153,8 @@ h1 {
     font-size: 0.6125rem; /* Match cost basis table cell font size */
     background-color: var(--table-header-bg);
     color: var(--text-color);
-    transition: border-color 0.3s ease, background-color 0.3s ease, color 0.3s ease;
+    transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+    will-change: border-color, background-color, color;
 }
 
 /* Cost Basis Table Fixed Height - Show 10 rows (height set dynamically via JS) */
@@ -1070,7 +1171,8 @@ h1 {
     top: 0;
     z-index: 10;
     background-color: var(--table-header-bg);
-    transition: background-color 0.3s ease;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    will-change: background-color, color, border-color;
 }
 
 /* Number Styling */
@@ -1097,19 +1199,22 @@ h1 {
 
 /* Custom Scrollbar */
 .table-responsive::-webkit-scrollbar {
-    height: 8px;
+    width: 8px;  /* Width for vertical scrollbar */
+    height: 8px; /* Height for horizontal scrollbar */
 }
 
 .table-responsive::-webkit-scrollbar-track {
     background: var(--light-color-alt);
     border-radius: 4px;
-    transition: background-color 0.3s ease;
+    transition: background-color 0.15s ease;
+    will-change: background-color;
 }
 
 .table-responsive::-webkit-scrollbar-thumb {
     background: var(--text-muted);
     border-radius: 4px;
-    transition: background-color 0.3s ease;
+    transition: background-color 0.15s ease;
+    will-change: background-color;
 }
 
 .table-responsive::-webkit-scrollbar-thumb:hover {
@@ -1125,7 +1230,8 @@ h1 {
     cursor: pointer;
     padding: 0.5rem;
     border-radius: 0.375rem;
-    transition: color 0.3s ease, transform 0.15s ease-in-out, filter 0.3s ease;
+    transition: color 0.15s ease, transform 0.15s ease-in-out, filter 0.15s ease;
+    will-change: color, transform, filter;
     outline: none;
     box-shadow: none;
 }
@@ -1194,7 +1300,8 @@ table#trades-table-main tbody td:first-child,
     box-shadow: 3px 0 8px rgba(0,0,0,0.15), 2px 0 0 0 var(--table-bg);
     isolation: isolate;
     overflow: visible !important;
-    transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+    transition: background-color 0.15s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+    will-change: background-color, background, border-color, color, box-shadow;
 }
 
 #trades-table-main thead th:first-child,
@@ -1207,7 +1314,8 @@ table#trades-table-main thead th:first-child {
     border-top: 1px solid var(--border-color) !important;
     border-bottom: 1px solid var(--border-color) !important;
     isolation: isolate;
-    transition: background-color 0.3s ease, border-color 0.3s ease;
+    transition: background-color 0.15s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+    will-change: background-color, background, border-color, color, box-shadow;
 }
 
 /* In dark mode, make first column match rest of table exactly */
@@ -1266,7 +1374,8 @@ table#trades-table-main.table-sm tbody tr td:first-child,
     border-image: none !important;
     z-index: 100 !important;
     isolation: isolate;
-    transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    will-change: background-color, border-color, color;
 }
 
 /* Make second column (spacer) sticky */
@@ -1277,7 +1386,8 @@ table#trades-table-main.table-sm tbody tr td:first-child,
     background: var(--background-color) !important;
     z-index: 9;
     box-shadow: 2px 0 5px rgba(0,0,0,0.1);
-    transition: background-color 0.3s ease;
+    transition: background-color 0.15s ease, background 0.15s ease;
+    will-change: background-color, background;
 }
 
 /* Ensure scrolling columns behind first column don't show their left borders */
@@ -1298,7 +1408,8 @@ table#trades-table-main.table-sm tbody tr td:first-child,
     background-color: var(--table-bg);
     z-index: 101;
     pointer-events: none;
-    transition: background-color 0.3s ease;
+    transition: background-color 0.15s ease;
+    will-change: background-color;
 }
 
 /* Ensure ::after pseudo-element matches in dark mode */
@@ -1382,7 +1493,8 @@ table#trades-table-main td input.form-control {
     background-color: var(--table-header-bg) !important;
     color: var(--text-color) !important;
     border-color: var(--border-color) !important;
-    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    will-change: background-color, color, border-color;
 }
 
 /* Responsive Design */
@@ -1439,6 +1551,15 @@ table#trades-table-main td input.form-control {
 /* Ensure cost basis section content matches trades condensed layout */
 #cost-basis .card-body {
     padding: 0.7rem !important; /* Match trades card body padding */
+}
+
+/* Cost basis ticker card text color in dark mode */
+[data-theme="dark"] .cost-basis-ticker-card .cost-basis-ticker-text,
+[data-theme="dark"] .cost-basis-ticker-card h6,
+[data-theme="dark"] .cost-basis-ticker-card .card-body h6,
+[data-theme="dark"] .symbol-card .card-title,
+[data-theme="dark"] .symbol-card h6 {
+    color: #ffffff !important;
 }
 
 /* Condense cost basis ticker and summary card bodies */
@@ -1511,6 +1632,53 @@ table#trades-table-main td input.form-control {
 #cost-basis .card.shadow-sm {
     width: 100% !important;
     max-width: 100% !important;
+}
+
+/* ========= Loading Spinner ========= */
+.trade-loading-spinner {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10000;
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 1rem 1.5rem;
+    border-radius: 8px;
+    display: none;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.875rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(4px);
+}
+
+.trade-loading-spinner.show {
+    display: flex;
+}
+
+.trade-loading-spinner .spinner {
+    width: var(--spinner-size);
+    height: var(--spinner-size);
+    border: 3px solid rgba(255, 255, 255, 0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+[data-theme="dark"] .trade-loading-spinner {
+    background-color: rgba(0, 0, 0, 0.85);
+    color: var(--text-color);
+}
+
+[data-theme="dark"] .trade-loading-spinner .spinner {
+    border-top-color: var(--primary-color-alt);
 }
 
 

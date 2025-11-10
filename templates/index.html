@@ -9,7 +9,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=172">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=175">
     <style>
         /* Remove grey background from $ symbol in input groups */
         .input-group-text {
@@ -456,16 +456,16 @@
                         <button class="btn btn-sm btn-light quick-add-btn" onclick="openBTOModal()">
                             <i class="fas fa-plus me-1"></i>BTO
                         </button>
-                        <button class="btn btn-sm btn-light quick-add-btn" onclick="openROCTCallModal()">
+                        <button class="btn btn-sm btn-light quick-add-btn" onclick="addNewROCColumn()">
                             <i class="fas fa-plus me-1"></i>ROC
                         </button>
-                        <button class="btn btn-sm btn-light quick-add-btn" onclick="openROCTCallModal()">
+                        <button class="btn btn-sm btn-light quick-add-btn" onclick="addNewROCTCallColumn()">
                             <i class="fas fa-plus me-1"></i>ROCT CALL
                         </button>
-                        <button class="btn btn-sm btn-light quick-add-btn" onclick="openROCTPutModal()">
+                        <button class="btn btn-sm btn-light quick-add-btn" onclick="addNewROCTPutColumn()">
                             <i class="fas fa-plus me-1"></i>ROCT PUT
                         </button>
-                        <button class="btn btn-sm btn-light quick-add-btn" onclick="openROCTPutModal()">
+                        <button class="btn btn-sm btn-light quick-add-btn" onclick="addNewROPColumn()">
                             <i class="fas fa-plus me-1"></i>ROP
                         </button>
                         <button class="btn btn-sm btn-light quick-add-btn" onclick="openSTCModal()">
@@ -1294,8 +1294,14 @@
 
     <!-- Alert Container -->
 
+    <!-- Loading Spinner -->
+    <div id="trade-loading-spinner" class="trade-loading-spinner">
+        <div class="spinner"></div>
+        <span>Updating tables, please wait...</span>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}?v=386"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=431"></script>
     
     <script>
     </script>
