@@ -4057,10 +4057,14 @@ function setupUniversalControls() {
             // Reload all data with the ticker filter to ensure everything is in sync
             // This ensures the dashboard, trades table, and cost basis table all update
             // based on both the selected account and ticker filter
-            loadTrades();
-            loadSummary();
-            // Always call loadCostBasis - it handles both ticker and null cases
-            loadCostBasis(symbol || null);
+            // Run all loads in parallel to reduce delay
+            Promise.all([
+                loadTrades(),
+                loadSummary(),
+                loadCostBasis(symbol || null) // Always call loadCostBasis - it handles both ticker and null cases
+            ]).catch(error => {
+                console.error('Error loading data after selecting ticker:', error);
+            });
         });
         
         // Show/hide clear button
