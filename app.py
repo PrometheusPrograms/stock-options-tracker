@@ -4824,16 +4824,26 @@ def import_cost_basis_excel():
                         val = cell_value(c)
                         cells[(idx, col)] = val
                 
+                # Debug: Print all cells in rows 1 and 11 for troubleshooting
+                print(f"Debug - Cells in row 1: {[(k, v) for k, v in cells.items() if k[0] == 1]}", flush=True)
+                print(f"Debug - Cells in row 11: {[(k, v) for k, v in cells.items() if k[0] == 11]}", flush=True)
+                
                 # Read specific cells
                 # B1: ticker symbol
                 ticker = cells.get((1, 2), "").strip().upper()
                 if not ticker:
-                    raise ValueError("Ticker symbol not found in cell B1")
+                    # Show what was found in row 1, column B
+                    found_b1 = cells.get((1, 2), "")
+                    raise ValueError(f"Ticker symbol not found in cell B1. Found: '{found_b1}'")
                 
                 # B11: check if "buy" or "BTO"
                 buy_indicator = cells.get((11, 2), "").strip().upper()
                 if buy_indicator not in ["BUY", "BTO"]:
-                    raise ValueError(f"Buy indicator not found in cell B11. Found: '{buy_indicator}'. Expected 'buy' or 'BTO'")
+                    # Show what was found in row 11, column B, and nearby cells
+                    found_b11 = cells.get((11, 2), "")
+                    found_a11 = cells.get((11, 1), "")
+                    found_c11 = cells.get((11, 3), "")
+                    raise ValueError(f"Buy indicator not found in cell B11. Found: '{found_b11}'. Expected 'buy' or 'BTO'. Nearby cells - A11: '{found_a11}', C11: '{found_c11}'")
                 
                 # Column C: transaction_date (for cost_basis)
                 transaction_date = cells.get((11, 3), "").strip()
