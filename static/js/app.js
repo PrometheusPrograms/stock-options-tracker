@@ -4529,23 +4529,26 @@ function clearUniversalTickerFilter() {
         
         // Then reload all data in background to ensure everything is in sync
         // Run all loads in parallel to reduce delay
-        Promise.all([
-            loadTrades(),
-            loadSummary()
-        ]).catch(error => {
-            console.error('Error loading data after clearing ticker filter:', error);
+        // Use requestAnimationFrame to defer API calls until after immediate UI update
+        requestAnimationFrame(() => {
+            Promise.all([
+                loadTrades(),
+                loadSummary()
+            ]).catch(error => {
+                console.error('Error loading data after clearing ticker filter:', error);
+            });
+            
+            // Refresh cost basis in background after a longer delay
+            // This allows the immediate cached display to stay visible and prevents flicker
+            setTimeout(() => {
+                // Only refresh if user hasn't selected a new ticker
+                if (!window.symbolFilter || window.symbolFilter.trim() === '') {
+                    loadCostBasis(null).catch(error => {
+                        console.error('Error loading cost basis after clearing ticker filter:', error);
+                    });
+                }
+            }, 1000); // Longer delay to allow immediate display to stay visible longer
         });
-        
-        // Refresh cost basis in background after a delay
-        // This allows the immediate cached display to stay visible
-        setTimeout(() => {
-            // Only refresh if user hasn't selected a new ticker
-            if (!window.symbolFilter || window.symbolFilter.trim() === '') {
-                loadCostBasis(null).catch(error => {
-                    console.error('Error loading cost basis after clearing ticker filter:', error);
-                });
-            }
-        }, 500); // Short delay to allow cached display to render
     }
 }
 
