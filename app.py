@@ -4746,12 +4746,245 @@ def import_excel():
 
 @app.route('/api/import-cost-basis-excel', methods=['POST'])
 def import_cost_basis_excel():
-    """Import cost basis from Excel file"""
+    """Import cost basis from Excel file - processes multiple rows per sheet and multiple sheets"""
     import zipfile
     import re
     import tempfile
     from xml.etree import ElementTree as ET
     from datetime import datetime
+    
+    def cell_value(c, shared_strings):
+        """Extract cell value from XML element"""
+        v = c.find("{*}v")
+        if v is None:
+            return ""
+        if c.attrib.get("t") == "s":
+            try:
+                idx = int(v.text)
+                return shared_strings[idx] if idx < len(shared_strings) else ""
+            except (ValueError, IndexError):
+                return ""
+        return v.text if v.text else ""
+    
+    def col_num(ref):
+        """Convert Excel column reference (A, B, C...) to number (1, 2, 3...)"""
+        m = re.match(r"([A-Z]+)", ref)
+        if not m:
+            return 1
+        col = m.group(1)
+        n = 0
+        for ch in col:
+            n = n * 26 + (ord(ch) - 64)
+        return n
+    
+    def parse_date(date_str):
+        """Parse date string in various formats"""
+        if not date_str or not date_str.strip():
+            return None
+        date_str = date_str.strip()
+        try:
+            if '/' in date_str:
+                parts = date_str.split('/')
+                if len(parts) == 3:
+                    month, day, year = parts
+                    if len(year) == 2:
+                        year = '20' + year
+                    return datetime.strptime(f"{year}-{month.zfill(2)}-{day.zfill(2)}", '%Y-%m-%d')
+            elif '-' in date_str:
+                return datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            pass
+        return None
+    
+    def get_trade_type(description):
+        """Extract trade type from description in column B"""
+        if not description:
+            return None
+        desc_upper = description.strip().upper()
+        if 'DIVIDEND' in desc_upper:
+            return 'DIVIDEND'
+        if 'BUY' in desc_upper or desc_upper.startswith('BTO'):
+            return 'BUY'
+        if 'SELL' in desc_upper or desc_upper.startswith('STC'):
+            return 'SELL'
+        if desc_upper.startswith('BTO'):
+            return 'BTO'
+        if desc_upper.startswith('STC'):
+            return 'STC'
+        return None
+    
+    def process_trade_row(cursor, db, cells, row, ticker_id, account_id, ticker_symbol):
+        """Process a single trade row (BUY/SELL/BTO/STC)"""
+        # Column B: description (already checked for trade type)
+        description = cells.get((row, 2), "").strip()
+        trade_type_str = get_trade_type(description)
+        
+        if trade_type_str not in ['BUY', 'SELL', 'BTO', 'STC']:
+            return None
+        
+        # Map to standard trade types
+        if trade_type_str == 'BUY':
+            trade_type = 'BTO'
+        elif trade_type_str == 'SELL':
+            trade_type = 'STC'
+        else:
+            trade_type = trade_type_str
+        
+        # Column C: transaction_date
+        transaction_date_str = cells.get((row, 3), "").strip()
+        transaction_date_obj = parse_date(transaction_date_str)
+        if not transaction_date_obj:
+            print(f"Warning: Invalid date in row {row}, column C: '{transaction_date_str}'", flush=True)
+            return None
+        transaction_date = transaction_date_obj.strftime('%Y-%m-%d')
+        
+        # Column E: shares (for cost_basis.shares)
+        shares_str = cells.get((row, 5), "").strip()
+        if not shares_str:
+            print(f"Warning: No shares value in row {row}, column E", flush=True)
+            return None
+        try:
+            shares = int(float(shares_str))
+        except (ValueError, TypeError):
+            print(f"Warning: Invalid shares value in row {row}, column E: '{shares_str}'", flush=True)
+            return None
+        
+        # Column F: num_of_shares (for trades.num_of_shares)
+        num_of_shares_str = cells.get((row, 6), "").strip()
+        num_of_shares = shares  # Default to shares if F is empty
+        if num_of_shares_str:
+            try:
+                num_of_shares = int(float(num_of_shares_str))
+            except (ValueError, TypeError):
+                pass  # Use shares as fallback
+        
+        # Get trade type ID
+        cursor.execute('SELECT id FROM trade_types WHERE type_name = ?', (trade_type,))
+        trade_type_row = cursor.fetchone()
+        trade_type_id = trade_type_row['id'] if trade_type_row else None
+        
+        if trade_type_id is None:
+            print(f"Warning: Trade type '{trade_type}' not found in trade_types table", flush=True)
+            return None
+        
+        # Set up trade fields
+        trade_date = transaction_date
+        expiration_date = transaction_date
+        days_to_expiration = 0
+        price_per_share = 0
+        premium = 0
+        current_price = 0
+        strike_price = 0
+        total_premium = 0
+        total_amount = 0
+        
+        # Insert trade
+        cursor.execute('''
+            INSERT INTO trades 
+            (account_id, ticker_id, trade_date, expiration_date, num_of_contracts, num_of_shares,
+             credit_debit, total_premium, days_to_expiration, current_price, strike_price,
+             trade_status, trade_type, commission_per_share, price_per_share, total_amount,
+             net_credit_per_share, risk_capital_per_share, margin_percent, ARORC, trade_type_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (account_id, ticker_id, trade_date, expiration_date, num_of_shares, num_of_shares,
+              premium, total_premium, days_to_expiration, current_price, strike_price,
+              'open', trade_type, 0, price_per_share, total_amount,
+              0, 0, 100.0, None, trade_type_id))
+        
+        trade_id = cursor.lastrowid
+        print(f'Inserted trade {trade_id} - Type: {trade_type}, Date: {transaction_date}, Shares: {shares}', flush=True)
+        
+        # Get current running totals for cost basis
+        cursor.execute('''
+            SELECT running_basis, running_shares 
+            FROM cost_basis 
+            WHERE ticker_id = ? AND account_id = ?
+            ORDER BY transaction_date DESC, rowid DESC
+            LIMIT 1
+        ''', (ticker_id, account_id))
+        
+        last_entry = cursor.fetchone()
+        if last_entry:
+            running_basis = last_entry['running_basis']
+            running_shares = last_entry['running_shares']
+        else:
+            running_basis = 0
+            running_shares = 0
+        
+        # Calculate running totals based on trade type
+        if trade_type in ['BTO', 'BUY']:
+            new_running_shares = running_shares + shares
+        else:  # STC, SELL
+            new_running_shares = running_shares - shares
+        
+        new_running_basis = running_basis + total_amount
+        basis_per_share = new_running_basis / new_running_shares if new_running_shares != 0 else 0
+        
+        # Insert cost basis entry
+        cursor.execute('''
+            INSERT INTO cost_basis 
+            (account_id, ticker_id, trade_id, cash_flow_id, transaction_date, description, shares, cost_per_share, 
+             total_amount, running_basis, running_shares, basis_per_share)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (account_id, ticker_id, trade_id, None, transaction_date, 
+              f"{trade_type} {shares} {ticker_symbol}", shares, price_per_share,
+              total_amount, new_running_basis, new_running_shares, basis_per_share))
+        
+        cost_basis_id = cursor.lastrowid
+        
+        # Create cash flow entry
+        transaction_type = 'PREMIUM_DEBIT' if trade_type in ['BTO', 'BUY'] else 'PREMIUM_CREDIT'
+        cursor.execute('''
+            INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (account_id, transaction_date, transaction_type, round(total_amount, 2), 
+              f"{trade_type} {shares} {ticker_symbol}", trade_id, ticker_id))
+        
+        cash_flow_id = cursor.lastrowid
+        
+        # Update cost_basis entry to link to cash_flow
+        cursor.execute('''
+            UPDATE cost_basis SET cash_flow_id = ? 
+            WHERE id = ?
+        ''', (cash_flow_id, cost_basis_id))
+        
+        return {'trade_id': trade_id, 'cost_basis_id': cost_basis_id, 'cash_flow_id': cash_flow_id}
+    
+    def process_dividend_row(cursor, cells, row, ticker_id, account_id, ticker_symbol):
+        """Process a dividend row"""
+        # Column B: description (should contain "Dividend")
+        description = cells.get((row, 2), "").strip()
+        
+        # Column C: transaction_date
+        transaction_date_str = cells.get((row, 3), "").strip()
+        transaction_date_obj = parse_date(transaction_date_str)
+        if not transaction_date_obj:
+            print(f"Warning: Invalid date in row {row}, column C for dividend: '{transaction_date_str}'", flush=True)
+            return None
+        transaction_date = transaction_date_obj.strftime('%Y-%m-%d')
+        
+        # Column G: amount
+        amount_str = cells.get((row, 7), "").strip()
+        if not amount_str:
+            print(f"Warning: No amount value in row {row}, column G for dividend", flush=True)
+            return None
+        try:
+            amount = float(amount_str)
+        except (ValueError, TypeError):
+            print(f"Warning: Invalid amount value in row {row}, column G: '{amount_str}'", flush=True)
+            return None
+        
+        # Insert cash flow entry for dividend
+        cursor.execute('''
+            INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (account_id, transaction_date, 'Dividend', round(amount, 2), 
+              f"Dividend {ticker_symbol}", None, ticker_id))
+        
+        cash_flow_id = cursor.lastrowid
+        print(f'Inserted dividend cash flow {cash_flow_id} - Date: {transaction_date}, Amount: {amount}', flush=True)
+        
+        return {'cash_flow_id': cash_flow_id}
     
     try:
         if 'file' not in request.files:
@@ -4761,7 +4994,7 @@ def import_cost_basis_excel():
         if file.filename == '':
             return jsonify({'success': False, 'error': 'No file selected'}), 400
         
-        # Get account_id from request (default to 9 for backward compatibility)
+        # Get account_id from request
         account_id = request.form.get('account_id', type=int)
         if not account_id:
             account_id = 9  # Default to Rule One account
@@ -4772,6 +5005,11 @@ def import_cost_basis_excel():
             excel_path = tmp_file.name
         
         try:
+            # Get database connection
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            db = get_db_helper()
+            
             # Read workbook XML
             with zipfile.ZipFile(excel_path, "r") as z:
                 # Shared strings for Excel text values
@@ -4780,237 +5018,106 @@ def import_cost_basis_excel():
                     shared_xml = ET.parse(z.open("xl/sharedStrings.xml"))
                     shared_strings = [t.text for t in shared_xml.findall(".//{*}t")]
                 
-                # Find the first sheet
+                # Find all sheets
                 wb = ET.parse(z.open("xl/workbook.xml"))
                 sheets = wb.findall(".//{*}sheet")
                 if not sheets:
                     raise ValueError("Couldn't find any sheets in the workbook")
                 
-                # Use the first sheet
-                sheet_index = 1
-                sheet_name = sheets[0].attrib.get("name", "Sheet1")
-                print(f"Reading from first sheet: '{sheet_name}' (sheet index {sheet_index})", flush=True)
+                total_trades = 0
+                total_dividends = 0
+                errors = []
                 
-                sheet_xml = ET.parse(z.open(f"xl/worksheets/sheet{sheet_index}.xml"))
-                
-                def cell_value(c):
-                    v = c.find("{*}v")
-                    if v is None:
-                        return ""
-                    if c.attrib.get("t") == "s":
-                        idx = int(v.text)
-                        return shared_strings[idx] if idx < len(shared_strings) else ""
-                    return v.text
-                
-                def col_num(ref):
-                    m = re.match(r"([A-Z]+)", ref)
-                    if not m:
-                        return 1
-                    col = m.group(1)
-                    n = 0
-                    for ch in col:
-                        n = n * 26 + (ord(ch) - 64)
-                    return n
-                
-                # Collect all cells from the sheet
-                cells = {}
-                for r in sheet_xml.findall(".//{*}row"):
-                    idx = int(r.attrib["r"])
-                    for c in r.findall("{*}c"):
-                        ref = c.attrib.get("r")
-                        if not ref:
+                # Process each sheet
+                for sheet_idx, sheet in enumerate(sheets, 1):
+                    sheet_name = sheet.attrib.get("name", f"Sheet{sheet_idx}")
+                    print(f"Processing sheet {sheet_idx}: '{sheet_name}'", flush=True)
+                    
+                    try:
+                        sheet_xml = ET.parse(z.open(f"xl/worksheets/sheet{sheet_idx}.xml"))
+                        
+                        # Collect all cells from the sheet
+                        cells = {}
+                        for r in sheet_xml.findall(".//{*}row"):
+                            idx = int(r.attrib["r"])
+                            for c in r.findall("{*}c"):
+                                ref = c.attrib.get("r")
+                                if not ref:
+                                    continue
+                                col = col_num(ref)
+                                val = cell_value(c, shared_strings)
+                                cells[(idx, col)] = val
+                        
+                        # Get ticker from B1
+                        ticker = cells.get((1, 2), "").strip().upper()
+                        if not ticker:
+                            print(f"Sheet '{sheet_name}': No ticker found in B1, skipping", flush=True)
                             continue
-                        col = col_num(ref)
-                        val = cell_value(c)
-                        cells[(idx, col)] = val
+                        
+                        print(f"Sheet '{sheet_name}': Ticker = {ticker}", flush=True)
+                        ticker_id = db.create_or_get_ticker(ticker, ticker)
+                        cursor.execute('SELECT ticker FROM tickers WHERE id = ?', (ticker_id,))
+                        ticker_result = cursor.fetchone()
+                        ticker_symbol = ticker_result['ticker'] if ticker_result else ticker
+                        
+                        # Start at row 11 and process rows until blank
+                        row = 11
+                        while True:
+                            # Check if row B is blank
+                            description = cells.get((row, 2), "").strip()
+                            if not description:
+                                # Blank row found, move to next sheet
+                                break
+                            
+                            # Check if it's a dividend
+                            if 'DIVIDEND' in description.upper():
+                                try:
+                                    result = process_dividend_row(cursor, cells, row, ticker_id, account_id, ticker_symbol)
+                                    if result:
+                                        total_dividends += 1
+                                except Exception as e:
+                                    error_msg = f"Sheet '{sheet_name}', Row {row}: {str(e)}"
+                                    errors.append(error_msg)
+                                    print(f"Error processing dividend: {error_msg}", flush=True)
+                                row += 1
+                                continue
+                            
+                            # Check if it's a trade type (BUY, SELL, BTO, STC)
+                            trade_type = get_trade_type(description)
+                            if trade_type in ['BUY', 'SELL', 'BTO', 'STC']:
+                                try:
+                                    result = process_trade_row(cursor, db, cells, row, ticker_id, account_id, ticker_symbol)
+                                    if result:
+                                        total_trades += 1
+                                except Exception as e:
+                                    error_msg = f"Sheet '{sheet_name}', Row {row}: {str(e)}"
+                                    errors.append(error_msg)
+                                    print(f"Error processing trade: {error_msg}", flush=True)
+                                row += 1
+                            else:
+                                # Not a trade type, move to next row
+                                row += 1
+                    
+                    except Exception as e:
+                        error_msg = f"Sheet '{sheet_name}': {str(e)}"
+                        errors.append(error_msg)
+                        print(f"Error processing sheet: {error_msg}", flush=True)
+                        continue
                 
-                # Debug: Print all cells in rows 1 and 11 for troubleshooting
-                print(f"Debug - Cells in row 1: {[(k, v) for k, v in cells.items() if k[0] == 1]}", flush=True)
-                print(f"Debug - Cells in row 11: {[(k, v) for k, v in cells.items() if k[0] == 11]}", flush=True)
-                
-                # Read specific cells
-                # B1: ticker symbol
-                ticker = cells.get((1, 2), "").strip().upper()
-                if not ticker:
-                    # Show what was found in row 1, column B
-                    found_b1 = cells.get((1, 2), "")
-                    raise ValueError(f"Ticker symbol not found in cell B1. Found: '{found_b1}'")
-                
-                # B11: check if "buy" or "BTO"
-                buy_indicator = cells.get((11, 2), "").strip().upper()
-                if buy_indicator not in ["BUY", "BTO"]:
-                    # Show what was found in row 11, column B, and nearby cells
-                    found_b11 = cells.get((11, 2), "")
-                    found_a11 = cells.get((11, 1), "")
-                    found_c11 = cells.get((11, 3), "")
-                    raise ValueError(f"Buy indicator not found in cell B11. Found: '{found_b11}'. Expected 'buy' or 'BTO'. Nearby cells - A11: '{found_a11}', C11: '{found_c11}'")
-                
-                # Column C: transaction_date (for cost_basis)
-                transaction_date = cells.get((11, 3), "").strip()
-                if not transaction_date:
-                    raise ValueError("Transaction date not found in cell C11")
-                
-                # Column E: shares (for cost_basis.shares)
-                shares_str = cells.get((11, 5), "").strip()
-                if not shares_str:
-                    raise ValueError("Shares not found in cell E11")
-                try:
-                    shares = int(float(shares_str))  # Handle both int and float strings
-                except ValueError:
-                    raise ValueError(f"Invalid shares value in cell E11: '{shares_str}'")
-                
-                # Column F: num_of_shares (for trades.num_of_shares)
-                num_of_shares_str = cells.get((11, 6), "").strip()
-                if not num_of_shares_str:
-                    raise ValueError("Number of shares not found in cell F11")
-                try:
-                    num_of_shares = int(float(num_of_shares_str))  # Handle both int and float strings
-                except ValueError:
-                    raise ValueError(f"Invalid number of shares value in cell F11: '{num_of_shares_str}'")
-                
-                # Parse transaction_date - handle various formats
-                try:
-                    # Try common date formats
-                    if '/' in transaction_date:
-                        # Format: MM/DD/YYYY or MM/DD/YY
-                        parts = transaction_date.split('/')
-                        if len(parts) == 3:
-                            month, day, year = parts
-                            if len(year) == 2:
-                                year = '20' + year
-                            transaction_date_obj = datetime.strptime(f"{year}-{month.zfill(2)}-{day.zfill(2)}", '%Y-%m-%d')
-                        else:
-                            raise ValueError(f"Invalid date format: {transaction_date}")
-                    elif '-' in transaction_date:
-                        # Format: YYYY-MM-DD
-                        transaction_date_obj = datetime.strptime(transaction_date, '%Y-%m-%d')
-                    else:
-                        raise ValueError(f"Unrecognized date format: {transaction_date}")
-                    transaction_date_formatted = transaction_date_obj.strftime('%Y-%m-%d')
-                except ValueError as e:
-                    raise ValueError(f"Invalid transaction date format in cell C11: '{transaction_date}'. Error: {str(e)}")
-                
-                print(f"Importing cost basis - Ticker: {ticker}, Date: {transaction_date_formatted}, Shares: {shares}, Num of Shares: {num_of_shares}", flush=True)
-                
-                # Get database connection
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                
-                # Get or create ticker
-                db = get_db_helper()
-                ticker_id = db.create_or_get_ticker(ticker, ticker)
-                
-                # Get BTO trade type ID
-                cursor.execute('SELECT id FROM trade_types WHERE type_name = ?', ('BTO',))
-                trade_type_row = cursor.fetchone()
-                trade_type_id = trade_type_row['id'] if trade_type_row else None
-                
-                if trade_type_id is None:
-                    conn.close()
-                    return jsonify({'success': False, 'error': 'BTO trade type not found in trade_types table'}), 400
-                
-                # For BTO stock trades, use transaction_date as both trade_date and expiration_date
-                trade_date = transaction_date_formatted
-                expiration_date = transaction_date_formatted
-                days_to_expiration = 0
-                
-                # For BTO trades, we need to calculate price_per_share from cost basis
-                # Since we don't have the price directly, we'll need to get it from cost basis
-                # For now, we'll set it to 0 and calculate it later from cost basis
-                price_per_share = 0  # Will be calculated from cost basis
-                premium = 0  # Will be calculated from cost basis
-                current_price = 0
-                strike_price = 0
-                total_premium = 0
-                total_amount = 0
-                
-                # Insert trade
-                # For BTO stock trades, num_of_contracts = num_of_shares
-                cursor.execute('''
-                    INSERT INTO trades 
-                    (account_id, ticker_id, trade_date, expiration_date, num_of_contracts, num_of_shares,
-                     credit_debit, total_premium, days_to_expiration, current_price, strike_price,
-                     trade_status, trade_type, commission_per_share, price_per_share, total_amount,
-                     net_credit_per_share, risk_capital_per_share, margin_percent, ARORC, trade_type_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (account_id, ticker_id, trade_date, expiration_date, num_of_shares, num_of_shares,
-                      premium, total_premium, days_to_expiration, current_price, strike_price,
-                      'open', 'BTO', 0, price_per_share, total_amount,
-                      0, 0, 100.0, None, trade_type_id))
-                
-                print(f'Inserted trade with ID: {cursor.lastrowid}', flush=True)
-                
-                trade_id = cursor.lastrowid
-                
-                # Get current running totals for cost basis
-                cursor.execute('''
-                    SELECT running_basis, running_shares 
-                    FROM cost_basis 
-                    WHERE ticker_id = ? AND account_id = ?
-                    ORDER BY transaction_date DESC, rowid DESC
-                    LIMIT 1
-                ''', (ticker_id, account_id))
-                
-                last_entry = cursor.fetchone()
-                if last_entry:
-                    running_basis = last_entry['running_basis']
-                    running_shares = last_entry['running_shares']
-                else:
-                    running_basis = 0
-                    running_shares = 0
-                
-                # For BTO, we're buying shares, so add to running totals
-                # We need to calculate total_amount from shares and price
-                # Since we don't have price directly, we'll set it to 0 for now
-                # The price will need to be calculated from the cost basis entry
-                total_amount = 0  # Will be calculated from cost basis
-                new_running_basis = running_basis + total_amount
-                new_running_shares = running_shares + shares
-                
-                # Calculate basis per share
-                basis_per_share = new_running_basis / new_running_shares if new_running_shares != 0 else 0
-                
-                # Get ticker for description
-                cursor.execute('SELECT ticker FROM tickers WHERE id = ?', (ticker_id,))
-                ticker_result = cursor.fetchone()
-                ticker_symbol = ticker_result['ticker'] if ticker_result else ticker
-                
-                # Insert cost basis entry
-                cursor.execute('''
-                    INSERT INTO cost_basis 
-                    (account_id, ticker_id, trade_id, cash_flow_id, transaction_date, description, shares, cost_per_share, 
-                     total_amount, running_basis, running_shares, basis_per_share)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (account_id, ticker_id, trade_id, None, transaction_date_formatted, 
-                      f"BTO {shares} {ticker_symbol}", shares, price_per_share,
-                      total_amount, new_running_basis, new_running_shares, basis_per_share))
-                
-                cost_basis_id = cursor.lastrowid
-                
-                # Create cash flow entry for BTO (PREMIUM_DEBIT - buying stock)
-                cursor.execute('''
-                    INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (account_id, transaction_date_formatted, 'PREMIUM_DEBIT', round(total_amount, 2), 
-                      f"BTO {shares} {ticker_symbol}", trade_id, ticker_id))
-                
-                cash_flow_id = cursor.lastrowid
-                
-                # Update cost_basis entry to link to cash_flow
-                cursor.execute('''
-                    UPDATE cost_basis SET cash_flow_id = ? 
-                    WHERE id = ?
-                ''', (cash_flow_id, cost_basis_id))
-                
+                # Commit all changes
                 conn.commit()
                 conn.close()
                 
+                message = f'Successfully imported {total_trades} trades and {total_dividends} dividends'
+                if errors:
+                    message += f'. {len(errors)} errors occurred.'
+                
                 return jsonify({
                     'success': True,
-                    'message': f'Successfully imported cost basis for {ticker}',
-                    'trade_id': trade_id,
-                    'cost_basis_id': cost_basis_id,
-                    'cash_flow_id': cash_flow_id
+                    'message': message,
+                    'trades_imported': total_trades,
+                    'dividends_imported': total_dividends,
+                    'errors': errors if errors else []
                 })
         
         finally:
@@ -5024,7 +5131,6 @@ def import_cost_basis_excel():
         error_detail = traceback.format_exc()
         print(f'Error importing cost basis: {e}', flush=True)
         print(f'Traceback: {error_detail}', flush=True)
-        # Return more detailed error message
         error_msg = str(e) if str(e) else 'Unknown error occurred'
         return jsonify({'success': False, 'error': f'Failed to import cost basis: {error_msg}'}), 500
 

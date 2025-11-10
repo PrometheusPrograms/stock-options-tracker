@@ -6145,12 +6145,15 @@ async function handleCostBasisUpload(event) {
         console.log('Import result:', result);
         
         if (result.success) {
-            let message = result.message || 'Successfully imported cost basis entry.';
-            if (result.trade_id) {
-                message += `\nTrade ID: ${result.trade_id}`;
+            let message = result.message || 'Successfully imported cost basis entries.';
+            if (result.trades_imported !== undefined) {
+                message += `\nTrades imported: ${result.trades_imported}`;
             }
-            if (result.cost_basis_id) {
-                message += `\nCost Basis ID: ${result.cost_basis_id}`;
+            if (result.dividends_imported !== undefined) {
+                message += `\nDividends imported: ${result.dividends_imported}`;
+            }
+            if (result.errors && result.errors.length > 0) {
+                message += `\n\nErrors:\n${result.errors.join('\n')}`;
             }
             alert(message);
             // Reload data
