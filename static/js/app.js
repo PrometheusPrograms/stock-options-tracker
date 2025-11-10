@@ -4344,11 +4344,15 @@ function setupUniversalControls() {
         // Use a single document click listener to avoid duplicates
         let clickOutsideHandler = function(e) {
             // Check if click is outside the import menu and its toggle
+            // Don't reset if clicking on file input or its label
+            const isFileInputClick = e.target.id === 'menu-excel-upload' || 
+                                     e.target.closest('label[for="menu-excel-upload"]') !== null ||
+                                     e.target.closest('#menu-excel-upload') !== null;
+            
             if (parent && !importSubmenu.contains(e.target) && 
                 !importSubmenuToggle.contains(e.target) && 
                 !parent.contains(e.target) &&
-                e.target.id !== 'menu-excel-upload' && // Don't close when clicking file input label
-                e.target.closest('label[for="menu-excel-upload"]') === null) { // Don't close when clicking label
+                !isFileInputClick) { // Don't close/reset when clicking file input or label
                 parent.classList.remove('show');
                 resetImportTypeSelection(); // Reset when closing
             }
