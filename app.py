@@ -345,7 +345,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             account_id INTEGER NOT NULL,
             transaction_date TEXT NOT NULL,
-            transaction_type TEXT NOT NULL CHECK(transaction_type IN ('DEPOSIT', 'WITHDRAWAL', 'PREMIUM_CREDIT', 'PREMIUM_DEBIT', 'ASSIGNMENT', 'SELL PUT', 'SELL CALL')),
+            transaction_type TEXT NOT NULL CHECK(transaction_type IN ('DEPOSIT', 'WITHDRAWAL', 'PREMIUM_CREDIT', 'PREMIUM_DEBIT', 'ASSIGNMENT', 'SELL PUT', 'SELL CALL', 'Dividend')),
             amount NUMERIC(12,2) NOT NULL,
             description TEXT,
             trade_id INTEGER,
@@ -381,7 +381,7 @@ def init_db():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     account_id INTEGER NOT NULL,
                     transaction_date TEXT NOT NULL,
-                    transaction_type TEXT NOT NULL CHECK(transaction_type IN ('DEPOSIT', 'WITHDRAWAL', 'PREMIUM_CREDIT', 'PREMIUM_DEBIT', 'ASSIGNMENT', 'SELL PUT', 'SELL CALL')),
+                    transaction_type TEXT NOT NULL CHECK(transaction_type IN ('DEPOSIT', 'WITHDRAWAL', 'PREMIUM_CREDIT', 'PREMIUM_DEBIT', 'ASSIGNMENT', 'SELL PUT', 'SELL CALL', 'Dividend')),
                     amount NUMERIC(12,2) NOT NULL,
                     description TEXT,
                     trade_id INTEGER,
@@ -5055,7 +5055,15 @@ def import_cost_basis_excel():
                             continue
                         
                         print(f"Sheet '{sheet_name}': Ticker = {ticker}", flush=True)
-                        ticker_id = db.create_or_get_ticker(ticker, ticker)
+                        # Use the same cursor to get or create ticker to avoid database locking
+                        cursor.execute('SELECT id FROM tickers WHERE UPPER(ticker) = UPPER(?)', (ticker,))
+                        ticker_row = cursor.fetchone()
+                        if ticker_row:
+                            ticker_id = ticker_row['id']
+                        else:
+                            # Create new ticker using the same cursor
+                            cursor.execute('INSERT INTO tickers (ticker, company_name) VALUES (?, ?)', (ticker.upper(), ticker))
+                            ticker_id = cursor.lastrowid
                         cursor.execute('SELECT ticker FROM tickers WHERE id = ?', (ticker_id,))
                         ticker_result = cursor.fetchone()
                         ticker_symbol = ticker_result['ticker'] if ticker_result else ticker
