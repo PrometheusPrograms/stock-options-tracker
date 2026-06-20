@@ -38,6 +38,9 @@ ENV/
 *.sqlite
 *.sqlite3
 
+# Schwab API tokens
+schwab_tokens.json
+
 # IDE
 .vscode/
 .idea/

@@ -51,3 +51,10 @@ if __name__ == '__main__':
     print("Clearing cash_flows, trades, and cost_basis tables...")
     clear_tables()
 
+
+
+
+
+
+
+

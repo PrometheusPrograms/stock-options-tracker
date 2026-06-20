@@ -72,3 +72,10 @@ LEFT JOIN accounts a ON t.account_id = a.id;
 -- Re-enable foreign key checks
 PRAGMA foreign_keys = ON;
 
+
+
+
+
+
+
+

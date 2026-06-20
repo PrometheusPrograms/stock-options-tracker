@@ -56,10 +56,10 @@ def fix_trade_type_and_parent_ids():
     
     # Get all trades with status='roll' that don't have a parent
     cursor.execute('''
-        SELECT id, account_id, ticker_id, trade_date, trade_type
+        SELECT id, account_id, ticker_id, date_trade_open, trade_type
         FROM trades
         WHERE trade_status = 'roll' AND trade_parent_id IS NULL
-        ORDER BY account_id, ticker_id, trade_date
+        ORDER BY account_id, ticker_id, date_trade_open
     ''')
     roll_trades_without_parent = cursor.fetchall()
     
@@ -68,7 +68,7 @@ def fix_trade_type_and_parent_ids():
         roll_trade_id = roll_trade['id']
         account_id = roll_trade['account_id']
         ticker_id = roll_trade['ticker_id']
-        trade_date = roll_trade['trade_date']
+        date_trade_open = roll_trade['date_trade_open']
         
         # Find the most recent trade with the same account and ticker that is NOT a roll trade
         # or is a roll trade but has a parent (i.e., the original trade)
@@ -80,10 +80,10 @@ def fix_trade_type_and_parent_ids():
                 trade_status != 'roll' 
                 OR (trade_status = 'roll' AND trade_parent_id IS NOT NULL)
             )
-            AND trade_date <= ?
-            ORDER BY trade_date DESC, id DESC
+            AND date_trade_open <= ?
+            ORDER BY date_trade_open DESC, id DESC
             LIMIT 1
-        ''', (account_id, ticker_id, roll_trade_id, trade_date))
+        ''', (account_id, ticker_id, roll_trade_id, date_trade_open))
         
         parent_trade = cursor.fetchone()
         
@@ -93,7 +93,7 @@ def fix_trade_type_and_parent_ids():
             fixed_parent_id_count += 1
             print(f"  Fixed trade {roll_trade_id}: set trade_parent_id={parent_trade_id}")
         else:
-            print(f"  WARNING: Could not find parent trade for roll trade {roll_trade_id} (account={account_id}, ticker_id={ticker_id}, date={trade_date})")
+            print(f"  WARNING: Could not find parent trade for roll trade {roll_trade_id} (account={account_id}, ticker_id={ticker_id}, date={date_trade_open})")
     
     conn.commit()
     conn.close()

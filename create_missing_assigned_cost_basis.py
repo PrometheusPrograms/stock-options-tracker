@@ -19,7 +19,7 @@ def create_assigned_cost_basis_entry(cursor, trade):
         account_id = trade_dict.get('account_id', 9)
         ticker_id = trade_dict['ticker_id']
         trade_id = trade_dict['id']
-        trade_date = trade_dict['trade_date']
+        date_trade_open = trade_dict['date_trade_open']
         trade_type = trade_dict['trade_type']
         num_of_contracts = trade_dict['num_of_contracts']
         strike_price = trade_dict['strike_price']
@@ -158,5 +158,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
 
 

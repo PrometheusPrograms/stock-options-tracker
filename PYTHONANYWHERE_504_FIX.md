@@ -62,3 +62,9 @@ After making changes:
 3. Check error log for any issues
 4. Test the app - it should load without 504 errors
 
+
+
+
+
+
+

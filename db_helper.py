@@ -165,11 +165,13 @@ class DatabaseHelper:
         return self.execute_one('SELECT * FROM tickers WHERE id = :ticker_id', {'ticker_id': ticker_id})
     
     def get_trade(self, trade_id: int) -> Optional[Dict[str, Any]]:
-        """Get a single trade by ID with joined ticker info"""
+        """Get a single trade by ID with all joined related data (ticker, account, trade_type)"""
         return self.execute_one('''
-            SELECT st.*, t.ticker, t.company_name 
+            SELECT st.*, t.ticker, t.company_name, tt.type_name, a.account_name
             FROM trades st 
             JOIN tickers t ON st.ticker_id = t.id 
+            LEFT JOIN trade_types tt ON st.trade_type_id = tt.id
+            LEFT JOIN accounts a ON st.account_id = a.id
             WHERE st.id = :trade_id
         ''', {'trade_id': trade_id})
     
@@ -212,39 +214,77 @@ class DatabaseHelper:
             params['ticker'] = ticker.upper()
         
         if start_date:
-            query += ' AND st.trade_date >= :start_date'
+            query += ' AND st.date_trade_open >= :start_date'
             params['start_date'] = start_date
         
         if end_date:
-            query += ' AND st.trade_date <= :end_date'
+            query += ' AND st.date_trade_open <= :end_date'
             params['end_date'] = end_date
         
-        query += ''' ORDER BY st.trade_date DESC, 
+        query += ''' ORDER BY st.date_trade_open DESC, 
                      CASE WHEN a.account_name = 'Rule One' THEN 0 ELSE 1 END,
                      a.account_name'''
         
         return self.execute_query(query, params)
     
-    def get_commission_rate(self, account_id: int, trade_date: str) -> float:
+    def get_commission_rate(self, account_id: int, date_trade_open: str) -> float:
         """
-        Get commission rate in effect for an account on a given date
+        Get commission rate in effect for an account on a given date.
+        
+        Commission rate selection logic:
+        - Finds the commission with the latest effective_date that is <= trade_date
+        - Example: If commissions are effective on 1/10/2020 and 11/15/2025:
+          * Trades on or between 1/10/2020 and before 11/15/2025 use the 1/10/2020 commission
+          * Trades on or after 11/15/2025 use the 11/15/2025 commission
         
         Args:
             account_id: Account ID
-            trade_date: Trade date (YYYY-MM-DD)
+            date_trade_open: Trade open date (YYYY-MM-DD)
         
         Returns:
             Commission rate (float) or 0.0 if not found
         """
+        print(f'[DEBUG] get_commission_rate called with account_id={account_id}, date_trade_open={date_trade_open}', flush=True)
+        
+        # First, check what commissions exist for this account
+        all_commissions = self.execute_query('''
+            SELECT id, account_id, effective_date, commission_rate 
+            FROM commissions 
+            WHERE account_id = :account_id
+            ORDER BY effective_date DESC
+        ''', {'account_id': account_id})
+        
+        print(f'[DEBUG] Found {len(all_commissions)} commission entries for account_id={account_id}:', flush=True)
+        for comm in all_commissions:
+            print(f'  - id={comm["id"]}, effective_date={comm["effective_date"]}, commission_rate={comm["commission_rate"]}', flush=True)
+        
+        # Ensure account_id is an integer
+        account_id = int(account_id)
+        
+        # Ensure date_trade_open is in YYYY-MM-DD format
+        if not isinstance(date_trade_open, str) or len(date_trade_open) != 10:
+            print(f'[DEBUG] Invalid date_trade_open format: {date_trade_open}', flush=True)
+            return 0.0
+        
+        # Find the commission rate with the latest effective_date that is <= trade_date
+        # This ensures that:
+        # - Trades on or after an effective_date use that commission rate
+        # - Trades before the next effective_date continue using the previous commission rate
         result = self.execute_one('''
             SELECT commission_rate 
             FROM commissions 
-            WHERE account_id = :account_id AND effective_date <= :trade_date
+            WHERE account_id = :account_id AND effective_date <= :date_trade_open
             ORDER BY effective_date DESC
             LIMIT 1
-        ''', {'account_id': account_id, 'trade_date': trade_date})
+        ''', {'account_id': account_id, 'date_trade_open': date_trade_open})
         
-        return result['commission_rate'] if result else 0.0
+        if result:
+            print(f'[DEBUG] Commission found: {result["commission_rate"]} for account_id={account_id}, date_trade_open={date_trade_open}', flush=True)
+            return float(result['commission_rate'])
+        else:
+            print(f'[DEBUG] No commission found for account_id={account_id}, date_trade_open={date_trade_open}', flush=True)
+            print(f'[DEBUG] Query was: SELECT commission_rate FROM commissions WHERE account_id={account_id} AND effective_date <= "{date_trade_open}" ORDER BY effective_date DESC LIMIT 1', flush=True)
+            return 0.0
     
     def create_or_get_ticker(self, ticker: str, company_name: Optional[str] = None) -> int:
         """
@@ -268,6 +308,99 @@ class DatabaseHelper:
             {'ticker': ticker.upper(), 'company_name': company_name}
         )
         return ticker_id
+    
+    # Cache management methods
+    
+    def refresh_trade_statistics_cache(self, account_id: Optional[int] = None):
+        """
+        Refresh trade statistics cache by computing from trades table directly
+        If account_id is None, refreshes for all accounts
+        """
+        # Clear existing cache for this account or all accounts
+        if account_id:
+            self.execute_update(
+                'DELETE FROM trade_statistics_cache WHERE account_id = :account_id',
+                {'account_id': account_id}
+            )
+            query = '''
+                INSERT INTO trade_statistics_cache 
+                (account_id, status, trade_count, total_premium, avg_premium, 
+                 total_commission, net_premium, first_trade_date, last_trade_date, cache_key)
+                SELECT 
+                    account_id, 
+                    trade_status as status,
+                    COUNT(*) as trade_count,
+                    SUM(total_premium) as total_premium,
+                    AVG(total_premium) as avg_premium,
+                    SUM(commission_per_share * num_of_contracts * 100) as total_commission,
+                    SUM(total_premium - (commission_per_share * num_of_contracts * 100)) as net_premium,
+                    MIN(date_trade_open) as first_trade_date,
+                    MAX(date_trade_open) as last_trade_date,
+                    account_id || '_' || COALESCE(trade_status, 'NULL') as cache_key
+                FROM trades
+                WHERE trade_status != 'roll' AND account_id = :account_id
+                GROUP BY account_id, trade_status
+            '''
+            params = {'account_id': account_id}
+        else:
+            self.execute_update('DELETE FROM trade_statistics_cache')
+            query = '''
+                INSERT INTO trade_statistics_cache 
+                (account_id, status, trade_count, total_premium, avg_premium, 
+                 total_commission, net_premium, first_trade_date, last_trade_date, cache_key)
+                SELECT 
+                    account_id, 
+                    trade_status as status,
+                    COUNT(*) as trade_count,
+                    SUM(total_premium) as total_premium,
+                    AVG(total_premium) as avg_premium,
+                    SUM(commission_per_share * num_of_contracts * 100) as total_commission,
+                    SUM(total_premium - (commission_per_share * num_of_contracts * 100)) as net_premium,
+                    MIN(date_trade_open) as first_trade_date,
+                    MAX(date_trade_open) as last_trade_date,
+                    account_id || '_' || COALESCE(trade_status, 'NULL') as cache_key
+                FROM trades
+                WHERE trade_status != 'roll'
+                GROUP BY account_id, trade_status
+            '''
+            params = None
+        
+        self.execute_update(query, params)
+    
+    def get_trade_statistics_cache(self, account_id: Optional[int] = None, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get cached trade statistics
+        """
+        query = 'SELECT * FROM trade_statistics_cache WHERE 1=1'
+        params = {}
+        
+        if account_id:
+            query += ' AND account_id = :account_id'
+            params['account_id'] = account_id
+        
+        if status:
+            query += ' AND status = :status'
+            params['status'] = status
+        
+        return self.execute_query(query, params if params else None)
+    
+    def invalidate_metrics_cache(self, account_id: Optional[int] = None):
+        """
+        Invalidate metrics cache (delete all or for specific account)
+        Cache will be refreshed on next read or via scheduled refresh
+        """
+        if account_id:
+            self.execute_update(
+                'DELETE FROM trade_statistics_cache WHERE account_id = :account_id',
+                {'account_id': account_id}
+            )
+            self.execute_update(
+                'DELETE FROM bankroll_allocation_cache WHERE account_id = :account_id',
+                {'account_id': account_id}
+            )
+        else:
+            self.execute_update('DELETE FROM trade_statistics_cache')
+            self.execute_update('DELETE FROM bankroll_allocation_cache')
 
 
 # Global database helper instance

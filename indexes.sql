@@ -14,13 +14,13 @@ CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
 CREATE INDEX IF NOT EXISTS idx_trades_ticker ON trades(ticker_id);
 
 -- Filter by trade date ranges (very common)
-CREATE INDEX IF NOT EXISTS idx_trades_trade_date ON trades(trade_date);
+CREATE INDEX IF NOT EXISTS idx_trades_date_trade_open ON trades(date_trade_open);
 
 -- Composite: account + status (common query pattern)
 CREATE INDEX IF NOT EXISTS idx_trades_account_status ON trades(account_id, status);
 
 -- Composite: account + trade date (for date filtering per account)
-CREATE INDEX IF NOT EXISTS idx_trades_account_date ON trades(account_id, trade_date);
+CREATE INDEX IF NOT EXISTS idx_trades_account_date ON trades(account_id, date_trade_open);
 
 -- Filter by trade type
 CREATE INDEX IF NOT EXISTS idx_trades_type ON trades(trade_type);
@@ -29,7 +29,7 @@ CREATE INDEX IF NOT EXISTS idx_trades_type ON trades(trade_type);
 CREATE INDEX IF NOT EXISTS idx_trades_created ON trades(created_at DESC);
 
 -- Composite: account + status + date (most common filter combo)
-CREATE INDEX IF NOT EXISTS idx_trades_account_status_date ON trades(account_id, status, trade_date);
+CREATE INDEX IF NOT EXISTS idx_trades_account_status_date ON trades(account_id, status, date_trade_open);
 
 -- ============================================================================
 -- COST_BASIS TABLE INDEXES

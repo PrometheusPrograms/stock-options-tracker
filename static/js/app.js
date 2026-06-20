@@ -3,7 +3,7 @@ let cachedTrades = null; // Cache original unfiltered trades data
 let cachedCostBasis = null; // Cache original unfiltered cost basis data
 let currentFilter = { startDate: null, endDate: null, period: 'all' };
 let statusFilter = '';
-let sortColumn = 'trade_date'; // Default to sorting by trade date
+let sortColumn = 'date_trade_open'; // Default to sorting by trade date
 let sortDirection = 'desc'; // Default to descending (newest first)
 let commission = 0.0;
 let statusMonitorInterval = null;
@@ -15,6 +15,312 @@ let premiumChart = null;
 let tradesAbortController = null;
 let costBasisAbortController = null;
 let summaryAbortController = null;
+
+// ============================================================================
+// CENTRALIZED FETCH UTILITY
+// ============================================================================
+
+/**
+ * Centralized fetch utility with cancellation, timeout, and unified error handling
+ * @param {string} url - The URL to fetch
+ * @param {Object} options - Fetch options
+ * @param {string} options.method - HTTP method (default: 'GET')
+ * @param {Object} options.headers - Request headers
+ * @param {Object} options.body - Request body (will be JSON stringified if object)
+ * @param {AbortSignal} options.signal - AbortSignal for cancellation
+ * @param {number} options.timeout - Request timeout in milliseconds (default: 30000)
+ * @param {number} options.retries - Number of retry attempts (default: 0)
+ * @param {number} options.retryDelay - Delay between retries in milliseconds (default: 1000)
+ * @param {string} options.requestId - Unique identifier for this request (for cancellation tracking)
+ * @param {boolean} options.silent - If true, don't log errors (default: false)
+ * @returns {Promise<Response>} - Fetch response
+ */
+// Track active requests for cancellation
+const activeRequests = new Map();
+
+const apiFetch = async function apiFetch(url, options = {}) {
+    const {
+        method = 'GET',
+        headers = {},
+        body = null,
+        signal = null,
+        timeout = 30000,
+        retries = 0,
+        retryDelay = 1000,
+        requestId = null,
+        silent = false
+    } = options;
+    
+    // Create AbortController for timeout
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => {
+        timeoutController.abort();
+    }, timeout);
+    
+    // Combine signals if both provided
+    let combinedSignal = timeoutController.signal;
+    if (signal) {
+        const combinedController = new AbortController();
+        const abortHandler = () => combinedController.abort();
+        signal.addEventListener('abort', abortHandler);
+        timeoutController.signal.addEventListener('abort', abortHandler);
+        combinedSignal = combinedController.signal;
+    }
+    
+    // Prepare request options
+    const fetchOptions = {
+        method,
+        headers: {
+            'Content-Type': 'application/json',
+            ...headers
+        },
+        signal: combinedSignal
+    };
+    
+    // Handle body - stringify if object, remove Content-Type if FormData
+    if (body !== null) {
+        if (body instanceof FormData) {
+            delete fetchOptions.headers['Content-Type']; // Let browser set multipart boundary
+            fetchOptions.body = body;
+        } else if (typeof body === 'object') {
+            fetchOptions.body = JSON.stringify(body);
+        } else {
+            fetchOptions.body = body;
+        }
+    }
+    
+    // Track request if requestId provided
+    if (requestId) {
+        activeRequests.set(requestId, { controller: timeoutController, url });
+    }
+    
+    let lastError = null;
+    let attempt = 0;
+    
+    while (attempt <= retries) {
+        try {
+            if (attempt > 0 && !silent) {
+                console.log(`Retrying request to ${url} (attempt ${attempt + 1}/${retries + 1})`);
+            }
+            
+            const response = await fetch(url, fetchOptions);
+            
+            // Clear timeout on success
+            clearTimeout(timeoutId);
+            
+            // Remove from active requests
+            if (requestId) {
+                activeRequests.delete(requestId);
+            }
+            
+            // Check if response is OK
+            if (!response.ok) {
+                let errorMessage = `Request failed with status ${response.status}`;
+                try {
+                    const errorData = await response.json();
+                    if (errorData.error) {
+                        errorMessage = errorData.error;
+                    }
+                } catch (e) {
+                    // If response is not JSON, try text
+                    try {
+                        const errorText = await response.text();
+                        if (errorText) {
+                            errorMessage = errorText;
+                        }
+                    } catch (e2) {
+                        // Ignore parsing errors
+                    }
+                }
+                
+                const error = new Error(errorMessage);
+                error.status = response.status;
+                error.response = response;
+                
+                // Don't retry on client errors (4xx) except 408, 429
+                if (response.status >= 400 && response.status < 500 && 
+                    response.status !== 408 && response.status !== 429) {
+                    if (!silent) {
+                        console.error(`API Error (${response.status}):`, errorMessage);
+                    }
+                    throw error;
+                }
+                
+                // Retry on server errors (5xx) or specific client errors
+                if (attempt < retries) {
+                    lastError = error;
+                    await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
+                    attempt++;
+                    continue;
+                }
+                
+                throw error;
+            }
+            
+            return response;
+            
+        } catch (error) {
+            // Clear timeout on error
+            clearTimeout(timeoutId);
+            
+            // Remove from active requests
+            if (requestId) {
+                activeRequests.delete(requestId);
+            }
+            
+            // Handle abort errors (timeout or manual cancellation)
+            if (error.name === 'AbortError') {
+                if (!silent) {
+                    console.log(`Request to ${url} was aborted`);
+                }
+                const abortError = new Error('Request was cancelled or timed out');
+                abortError.name = 'AbortError';
+                abortError.aborted = true;
+                throw abortError;
+            }
+            
+            // Handle network errors
+            if (error instanceof TypeError && error.message.includes('fetch')) {
+                lastError = new Error('Network error: Unable to connect to server');
+                lastError.originalError = error;
+                
+                // Retry on network errors
+                if (attempt < retries) {
+                    await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
+                    attempt++;
+                    continue;
+                }
+                
+                if (!silent) {
+                    console.error('Network error:', lastError.message);
+                }
+                throw lastError;
+            }
+            
+            // Re-throw other errors
+            if (attempt < retries) {
+                lastError = error;
+                await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
+                attempt++;
+                continue;
+            }
+            
+            if (!silent) {
+                console.error(`Error fetching ${url}:`, error);
+            }
+            throw error;
+        }
+    }
+    
+    // If we exhausted retries, throw last error
+    if (lastError) {
+        throw lastError;
+    }
+};
+
+/**
+ * Cancel an active request by requestId
+ * @param {string} requestId - The request ID to cancel
+ */
+function cancelRequest(requestId) {
+    const request = activeRequests.get(requestId);
+    if (request) {
+        request.controller.abort();
+        activeRequests.delete(requestId);
+    }
+}
+
+/**
+ * Cancel all active requests
+ */
+function cancelAllRequests() {
+    activeRequests.forEach((request) => {
+        request.controller.abort();
+    });
+    activeRequests.clear();
+}
+
+/**
+ * Debounce utility function
+ * @param {Function} func - Function to debounce
+ * @param {number} wait - Wait time in milliseconds
+ * @param {boolean} immediate - If true, call function immediately on first invocation
+ * @returns {Function} - Debounced function
+ */
+function debounce(func, wait, immediate = false) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            timeout = null;
+            if (!immediate) func.apply(this, args);
+        };
+        const callNow = immediate && !timeout;
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+        if (callNow) func.apply(this, args);
+    };
+}
+
+/**
+ * Show loading spinner overlay
+ * @param {string} message - Optional message to display
+ */
+function showLoadingSpinner(message = 'Loading...') {
+    const spinner = document.getElementById('trade-loading-spinner');
+    if (spinner) {
+        const messageSpan = spinner.querySelector('span');
+        if (messageSpan) {
+            messageSpan.textContent = message;
+        }
+        spinner.classList.add('show');
+    }
+}
+
+/**
+ * Hide loading spinner overlay
+ */
+function hideLoadingSpinner() {
+    const spinner = document.getElementById('trade-loading-spinner');
+    if (spinner) {
+        spinner.classList.remove('show');
+    }
+}
+
+/**
+ * Add fade-in animation to an element
+ * @param {HTMLElement} element - Element to animate
+ * @param {number} duration - Animation duration in milliseconds (default: 300)
+ */
+function fadeIn(element, duration = 300) {
+    if (!element) return;
+    
+    element.style.opacity = '0';
+    element.style.transition = `opacity ${duration}ms ease-in-out`;
+    
+    // Force reflow to ensure initial state is applied
+    element.offsetHeight;
+    
+    // Trigger fade-in
+    requestAnimationFrame(() => {
+        element.style.opacity = '1';
+    });
+}
+
+/**
+ * Apply fade-in animation to multiple elements
+ * @param {NodeList|Array} elements - Elements to animate
+ * @param {number} duration - Animation duration in milliseconds (default: 300)
+ */
+function fadeInElements(elements, duration = 300) {
+    if (!elements || elements.length === 0) return;
+    
+    Array.from(elements).forEach((element, index) => {
+        // Stagger animations slightly for visual effect
+        setTimeout(() => {
+            fadeIn(element, duration);
+        }, index * 50);
+    });
+}
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -123,11 +429,24 @@ function parseDisplayDate(displayDate) {
 
 async function getCompanyName(ticker) {
     try {
-        const response = await fetch(`/api/company-search?q=${ticker}`);
-        const companies = await response.json();
+        // First try the company-info endpoint which may have cached data and is faster
+        const response = await apiFetch(`/api/company-info/${ticker}`, {
+            silent: true
+        });
+        const data = await response.json();
+        if (data && data.name && data.name !== ticker) {
+            return data.name;
+        }
+        // Fallback to company-search if company-info doesn't have it
+        const searchResponse = await apiFetch(`/api/company-search?q=${ticker}`, {
+            silent: true
+        });
+        const companies = await searchResponse.json();
         return companies.find(c => c.symbol === ticker)?.name || ticker;
     } catch (error) {
-        console.error('Error fetching company name:', error);
+        if (error.name !== 'AbortError') {
+            console.error('Error fetching company name:', error);
+        }
         return ticker;
     }
 }
@@ -206,10 +525,9 @@ async function submitTradeForm(formType, action = 'addAndClose') {
         console.log('[DEBUG] submitTradeForm - sending data:', data);
         console.log('[DEBUG] submitTradeForm - accountId:', data.accountId, 'tradeDate:', data.tradeDate);
         
-        const response = await fetch(url, {
+        const response = await apiFetch(url, {
             method: method,
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
+            body: data
         });
         
         const result = await response.json();
@@ -299,6 +617,76 @@ async function submitTradeForm(formType, action = 'addAndClose') {
 // Track autocomplete setup to prevent duplicate listeners
 const autocompleteSetup = new Set();
 
+// Cache for ticker/company data to reduce API calls
+const tickerCache = new Map(); // Map<query, companies[]>
+let allTickersLoaded = false;
+
+/**
+ * Load all tickers on initial page load to populate cache
+ * Uses tickers from existing trades to build initial cache
+ */
+async function loadAllTickers() {
+    if (allTickersLoaded) return;
+    
+    try {
+        // First, try to get tickers from existing trades (faster, no API call)
+        if (trades && trades.length > 0) {
+            const tickerSet = new Set();
+            trades.forEach(trade => {
+                if (trade.ticker) {
+                    tickerSet.add(trade.ticker.toUpperCase());
+                }
+            });
+            
+            // Cache tickers from trades
+            tickerSet.forEach(ticker => {
+                if (!tickerCache.has(ticker)) {
+                    tickerCache.set(ticker, [{
+                        symbol: ticker,
+                        name: ticker // Will be updated when searched
+                    }]);
+                }
+            });
+            
+            console.log(`Cached ${tickerSet.size} tickers from existing trades`);
+        }
+        
+        // Optionally load more tickers from API (commented out to avoid large initial load)
+        // Uncomment if you want to preload all available tickers
+        /*
+        const response = await apiFetch('/api/company-search?q=', {
+            silent: true
+        });
+        const companies = await response.json();
+        
+        // Cache all tickers
+        companies.forEach(company => {
+            const symbol = company.symbol.toUpperCase();
+            if (!tickerCache.has(symbol)) {
+                tickerCache.set(symbol, [company]);
+            }
+        });
+        */
+        
+        allTickersLoaded = true;
+    } catch (error) {
+        console.error('Error loading tickers:', error);
+    }
+}
+
+/**
+ * Highlight matching substring in text
+ * @param {string} text - Text to highlight
+ * @param {string} query - Query to highlight
+ * @returns {string} - HTML with highlighted substring
+ */
+function highlightMatch(text, query) {
+    if (!query || !text) return text;
+    
+    const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    return text.replace(regex, '<mark>$1</mark>');
+}
+
 function setupAutocomplete(inputId, suggestionsId, onSelectCallback) {
     const input = document.getElementById(inputId);
     const suggestions = document.getElementById(suggestionsId);
@@ -324,25 +712,97 @@ function setupAutocomplete(inputId, suggestionsId, onSelectCallback) {
                 return;
             }
             
-            try {
-                const response = await fetch(`/api/company-search?q=${query}`);
-                const companies = await response.json();
+            // Check cache first (exact match)
+            let companies = tickerCache.get(query);
+            
+            if (!companies) {
+                // Optimized: Try to find matches from cache using efficient prefix matching
+                companies = [];
+                const queryLower = query.toLowerCase();
+                const seen = new Set();
                 
-                if (companies.length > 0) {
-                    suggestions.innerHTML = companies.map(company => 
-                        `<div class="suggestion-item" data-symbol="${company.symbol}" data-name="${company.name}">
-                            <strong>${company.symbol}</strong> - ${company.name}
-                        </div>`
-                    ).join('');
-                    suggestions.style.display = 'block';
-                } else {
-                    suggestions.style.display = 'none';
+                // Search through cached tickers - optimized algorithm with early exits
+                for (const [key, cachedCompanies] of tickerCache.entries()) {
+                    // Early exit optimization: skip if key is shorter than query and doesn't start with query
+                    if (key.length < query.length && !key.startsWith(query)) {
+                        continue;
+                    }
+                    
+                    // If query starts with key (prefix match) or key starts with query
+                    if (query.startsWith(key) || key.startsWith(query)) {
+                        // Filter companies that match the query
+                        for (const company of cachedCompanies) {
+                            if (seen.has(company.symbol)) continue;
+                            
+                            const symbol = company.symbol.toUpperCase();
+                            const name = (company.name || '').toUpperCase();
+                            
+                            // Match if symbol or name contains the query (optimized: check symbol first, then startsWith for speed)
+                            if (symbol.startsWith(query) || symbol.includes(query) || name.includes(queryLower)) {
+                                companies.push(company);
+                                seen.add(company.symbol);
+                                
+                                // Early exit if we have enough results
+                                if (companies.length >= 20) break;
+                            }
+                        }
+                        
+                        // Early exit if we have enough results
+                        if (companies.length >= 20) break;
+                    }
                 }
-            } catch (error) {
-                console.error('Error fetching suggestions:', error);
+                
+                // Limit results to top 20 for performance
+                companies = companies.slice(0, 20);
+            }
+            
+            // If no matches in cache, fetch from API
+            if (companies.length === 0) {
+                try {
+                    const response = await apiFetch(`/api/company-search?q=${query}`, {
+                        silent: true
+                    });
+                    companies = await response.json();
+                    
+                    // Cache the results
+                    tickerCache.set(query, companies);
+                    
+                    // Also cache individual tickers for faster exact lookups
+                    companies.forEach(company => {
+                        const symbol = company.symbol.toUpperCase();
+                        if (!tickerCache.has(symbol)) {
+                            tickerCache.set(symbol, [company]);
+                        }
+                    });
+                } catch (error) {
+                    console.error('Error fetching suggestions:', error);
+                    suggestions.style.display = 'none';
+                    return;
+                }
+            } else {
+                // Cache the filtered results for future queries if we found matches
+                if (!tickerCache.has(query)) {
+                    tickerCache.set(query, companies);
+                }
+            }
+            
+            if (companies.length > 0) {
+                // Highlight matching substrings
+                suggestions.innerHTML = companies.map(company => {
+                    const symbol = company.symbol.toUpperCase();
+                    const name = company.name || '';
+                    const highlightedSymbol = highlightMatch(symbol, query);
+                    const highlightedName = highlightMatch(name, query);
+                    
+                    return `<div class="suggestion-item" data-symbol="${company.symbol}" data-name="${company.name}">
+                        <strong>${highlightedSymbol}</strong> - ${highlightedName}
+                    </div>`;
+                }).join('');
+                suggestions.style.display = 'block';
+            } else {
                 suggestions.style.display = 'none';
             }
-        }, 300);
+        }, 100); // Optimized: Reduced to 100ms for faster autocomplete
     });
     
     // Handle suggestion clicks
@@ -381,11 +841,19 @@ function setupAutocomplete(inputId, suggestionsId, onSelectCallback) {
         } else if (e.key === 'Enter') {
             e.preventDefault();
             if (current) {
+                // If a suggestion is selected, use it
                 const symbol = current.dataset.symbol.toUpperCase();
                 const name = current.dataset.name;
                 input.value = symbol;
                 suggestions.style.display = 'none';
                 if (onSelectCallback) onSelectCallback(symbol, name);
+            } else {
+                // Enter-to-filter: filter by current input value even if no suggestion selected
+                const query = input.value.trim().toUpperCase();
+                if (query.length > 0) {
+                    suggestions.style.display = 'none';
+                    if (onSelectCallback) onSelectCallback(query);
+                }
             }
         } else if (e.key === 'Escape') {
             suggestions.style.display = 'none';
@@ -702,6 +1170,7 @@ async function loadTrades() {
         tradesAbortController = new AbortController();
         
         console.log('Loading trades...');
+        showLoadingSpinner('Loading trades...');
         
         // Get account filter
         const accountFilter = document.getElementById('universal-account-filter')?.value || '';
@@ -716,9 +1185,12 @@ async function loadTrades() {
         const dashboardEndDate = document.getElementById('dashboard-end-date')?.value;
         
         const params = new URLSearchParams();
-        if (accountFilter) {
+        // Only add account_id if a specific account is selected (not "All" which is empty string)
+        if (accountFilter && accountFilter !== '' && accountFilter !== 'all') {
             params.append('account_id', accountFilter);
             console.log('[DEBUG] loadTrades - adding account_id to params:', accountFilter);
+        } else {
+            console.log('[DEBUG] loadTrades - "All" accounts selected, not filtering by account');
         }
         if (tickerFilter) {
             params.append('ticker', tickerFilter);
@@ -735,15 +1207,31 @@ async function loadTrades() {
             params.append('end_date', currentFilter.endDate);
         }
         
-        const response = await fetch(`/api/trades?${params}`, {
-            signal: tradesAbortController.signal
+        const response = await apiFetch(`/api/trades?${params}`, {
+            signal: tradesAbortController.signal,
+            requestId: 'trades'
         });
-        trades = await response.json();
+        const loadedTrades = await response.json();
         
-        // Ensure trades is an array
-        if (!Array.isArray(trades)) {
-            console.error('trades is not an array:', trades);
+        // Ensure loadedTrades is an array
+        if (!Array.isArray(loadedTrades)) {
+            console.error('trades is not an array:', loadedTrades);
             trades = [];
+        } else {
+            // Preserve any new trades (temporary trades with IDs starting with 'new_')
+            // that were added but not yet saved to the database
+            const existingNewTrades = trades.filter(trade => 
+                typeof trade.id === 'string' && trade.id.startsWith('new_')
+            );
+            
+            // Combine loaded trades with new trades (avoid duplicates)
+            const loadedTradeIds = new Set(loadedTrades.map(t => t.id));
+            const uniqueNewTrades = existingNewTrades.filter(t => !loadedTradeIds.has(t.id));
+            
+            // Set trades to loaded trades plus any new trades
+            trades = [...loadedTrades, ...uniqueNewTrades];
+            
+            console.log('[DEBUG] loadTrades - Preserved', uniqueNewTrades.length, 'new trades');
         }
         
         // Cache unfiltered trades data (when no ticker filter is applied)
@@ -760,15 +1248,41 @@ async function loadTrades() {
         console.log('Trades loaded:', trades.length, 'trades');
         console.log('Sample trade:', trades[0]);
         
+        // Populate ticker cache from loaded trades
+        if (trades && trades.length > 0) {
+            const tickerMap = new Map(); // Map<ticker, company_name>
+            trades.forEach(trade => {
+                if (trade.ticker) {
+                    const ticker = trade.ticker.toUpperCase();
+                    if (!tickerMap.has(ticker)) {
+                        tickerMap.set(ticker, trade.company_name || ticker);
+                    }
+                }
+            });
+            
+            // Cache tickers from trades
+            tickerMap.forEach((companyName, ticker) => {
+                if (!tickerCache.has(ticker)) {
+                    tickerCache.set(ticker, [{
+                        symbol: ticker,
+                        name: companyName
+                    }]);
+                }
+            });
+        }
+        
         updateTradesTable();
         updateSymbolFilter();
+        hideLoadingSpinner();
     } catch (error) {
         // Ignore abort errors
         if (error.name === 'AbortError') {
             console.log('Trades request aborted');
+            hideLoadingSpinner();
             return;
         }
         console.error('Error loading trades:', error);
+        hideLoadingSpinner();
     }
 }
 
@@ -781,6 +1295,7 @@ async function loadSummary() {
         summaryAbortController = new AbortController();
         
         console.log('Loading summary...');
+        showLoadingSpinner('Loading summary...');
         const params = new URLSearchParams();
         
         // Get account filter
@@ -810,8 +1325,9 @@ async function loadSummary() {
             params.append('end_date', currentFilter.endDate);
         }
         
-        const response = await fetch(`/api/summary?${params}`, {
-            signal: summaryAbortController.signal
+        const response = await apiFetch(`/api/summary?${params}`, {
+            signal: summaryAbortController.signal,
+            requestId: 'summary'
         });
         const summary = await response.json();
         console.log('Summary loaded:', summary);
@@ -829,6 +1345,12 @@ async function loadSummary() {
         
         // Update bankroll chart
         updateBankroll();
+        
+        // Add fade-in animation to summary cards
+        const summaryCards = document.querySelectorAll('#total-trades-center, #total-net-credit, #days-remaining, #days-done');
+        if (summaryCards.length > 0) {
+            fadeInElements(summaryCards, 200); // Optimized: Reduced from 300ms to 200ms
+        }
     } catch (error) {
         // Ignore abort errors
         if (error.name === 'AbortError') {
@@ -836,6 +1358,8 @@ async function loadSummary() {
             return;
         }
         console.error('Error loading summary:', error);
+    } finally {
+        hideLoadingSpinner();
     }
 }
 
@@ -1239,7 +1763,7 @@ async function updateBankroll(statusFilter = null) {
         if (statusFilter) params.append('status_filter', statusFilter);
         
         // Calculate total deposits from accounts table
-        const response = await fetch(`/api/bankroll-summary?${params}`);
+        const response = await apiFetch(`/api/bankroll-summary?${params}`);
         const data = await response.json();
         
         const totalBankroll = data.total_bankroll || 0;
@@ -1253,36 +1777,43 @@ async function updateBankroll(statusFilter = null) {
     }
 }
 
-async function loadCostBasis(ticker = null) {
-    console.log('loadCostBasis called with ticker:', ticker);
+async function loadCostBasis(ticker = null, forceUpdate = false) {
+    console.log('loadCostBasis called with ticker:', ticker, 'forceUpdate:', forceUpdate);
     try {
         // Cancel any pending cost basis request
         if (costBasisAbortController) {
             costBasisAbortController.abort();
         }
         costBasisAbortController = new AbortController();
+        showLoadingSpinner('Loading cost basis...');
         
         // Set window.symbolFilter to match the ticker parameter so updateCostBasisTable knows a ticker is selected
-        if (ticker) {
-            window.symbolFilter = ticker;
+        // Always use uppercase for consistency
+        const tickerUpper = ticker ? ticker.toUpperCase() : null;
+        if (tickerUpper) {
+            window.symbolFilter = tickerUpper;
         } else {
             window.symbolFilter = '';
         }
         
         // Get account filter
         const accountFilter = document.getElementById('universal-account-filter')?.value || '';
-        console.log('[DEBUG] loadCostBasis - accountFilter:', accountFilter, 'ticker:', ticker);
+        console.log('[DEBUG] loadCostBasis - accountFilter:', accountFilter, 'ticker:', tickerUpper);
         
         const params = new URLSearchParams();
-        if (accountFilter) {
+        // Only add account_id if a specific account is selected (not "All" which is empty string)
+        if (accountFilter && accountFilter !== '' && accountFilter !== 'all') {
             params.append('account_id', accountFilter);
             console.log('[DEBUG] loadCostBasis - adding account_id to params:', accountFilter);
+        } else {
+            console.log('[DEBUG] loadCostBasis - "All" accounts selected, not filtering by account');
         }
-        if (ticker) params.append('ticker', ticker);
+        if (tickerUpper) params.append('ticker', tickerUpper);
         params.append('commission', commission.toString());
         
-        const response = await fetch(`/api/cost-basis?${params}`, {
-            signal: costBasisAbortController.signal
+        const response = await apiFetch(`/api/cost-basis?${params}`, {
+            signal: costBasisAbortController.signal,
+            requestId: 'cost-basis'
         });
         const data = await response.json();
         console.log('Cost basis API response:', data);
@@ -1297,27 +1828,56 @@ async function loadCostBasis(ticker = null) {
             }
         }
         
-        if (ticker) {
+        if (tickerUpper) {
             // If a specific ticker is selected, show the detailed cost basis table
             if (data.length === 0) {
-                console.log('No cost basis data found for ticker:', ticker);
-                hideCostBasisTable();
+                console.log('No cost basis data found for ticker:', tickerUpper);
+                // Show appropriate message instead of hiding completely
+                const costBasisContainer = document.getElementById('cost-basis-table-container');
+                const inlineContainer = document.getElementById('cost-basis-inline-container');
+                const accountFilter = document.getElementById('universal-account-filter')?.value || '';
+                const isAllAccounts = !accountFilter || accountFilter === '' || accountFilter === 'all';
+                const accountName = !isAllAccounts && window.accounts ? 
+                    (window.accounts.find(a => a.id.toString() === accountFilter.toString())?.account_name || 'selected account') : 
+                    'any account';
+                [costBasisContainer, inlineContainer].forEach(c => {
+                    if (c) {
+                        c.innerHTML = `
+                            <div class="text-center text-muted py-3">
+                                <i class="fas fa-info-circle me-2"></i>
+                                No cost basis data for ${tickerUpper} in ${accountName}.
+                            </div>
+                        `;
+                    }
+                });
             } else {
-                console.log('Updating cost basis table with data for ticker:', ticker);
+                console.log('Updating cost basis table with data for ticker:', tickerUpper);
                 updateCostBasisTable(data);
             }
         } else {
             // If no ticker is selected, show all available symbols
-            // Check if we already have symbols displayed from trades data
-            // If symbols are already showing, don't overwrite to avoid lag
-            const costBasisContainer = document.getElementById('cost-basis-table-container');
-            const alreadyShowingSymbols = costBasisContainer && costBasisContainer.querySelector('.symbol-card');
+            // When "All" accounts is selected, always update to show data from all accounts
+            const accountFilter = document.getElementById('universal-account-filter')?.value || '';
+            const isAllAccounts = !accountFilter || accountFilter === '' || accountFilter === 'all';
             
-            // If symbols are already displayed, skip the API update to prevent lag
-            // The immediate display from showAllSymbolsFromTrades is sufficient
-            if (alreadyShowingSymbols) {
-                console.log('Symbols already displayed, skipping API update to prevent lag');
-                return; // Don't overwrite the immediate display
+            // Only skip update if a specific account is selected and symbols are already displayed
+            // This prevents unnecessary updates when switching between specific accounts
+            // But force update if forceUpdate flag is set (e.g., when account changes)
+            if (!isAllAccounts && !forceUpdate) {
+                const costBasisContainer = document.getElementById('cost-basis-table-container');
+                const alreadyShowingSymbols = costBasisContainer && costBasisContainer.querySelector('.symbol-card');
+                
+                // If symbols are already displayed and we're not showing "All" accounts, skip update
+                if (alreadyShowingSymbols) {
+                    console.log('Symbols already displayed for specific account, skipping API update to prevent lag');
+                    return; // Don't overwrite the immediate display
+                }
+            } else {
+                if (forceUpdate) {
+                    console.log('Force update requested, updating cost basis');
+                } else {
+                    console.log('"All" accounts selected, updating cost basis to show all accounts');
+                }
             }
             
             if (data.length === 0) {
@@ -1336,9 +1896,12 @@ async function loadCostBasis(ticker = null) {
         // Ignore abort errors
         if (error.name === 'AbortError') {
             console.log('Cost basis request aborted');
+            hideLoadingSpinner();
             return;
         }
         console.error('Error loading cost basis:', error);
+    } finally {
+        hideLoadingSpinner();
     }
 }
 
@@ -1476,10 +2039,9 @@ async function updateTradeDate(tradeId, field, inputValue) {
     }
     
     try {
-        const response = await fetch(`/api/trades/${tradeId}`, {
+        const response = await apiFetch(`/api/trades/${tradeId}`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ [field]: parsedDate })
+            body: { [field]: parsedDate }
         });
         
         const result = await response.json();
@@ -1626,13 +2188,19 @@ function handleDateInputBlurForRollField(inputElement, tradeId) {
             // Update DTE cell if expiration_date or trade_date changed
             if (field === 'expiration_date') {
                 updateDTECell(tradeId, parsedDate);
-            } else if (field === 'trade_date') {
+            } else if (field === 'date_trade_open' || field === 'trade_date') {
                 // When trade_date changes, we need to recalculate DTE using the current expiration_date
                 // The trade object in memory should already be updated with the new trade_date
                 const trade = trades.find(t => t.id === tradeId);
                 if (trade && trade.expiration_date) {
                     // Use the updated trade_date from memory (which was just updated)
                     updateDTECell(tradeId, trade.expiration_date);
+                }
+                
+                // Fetch commission when trade date changes (for new trades)
+                const isNewTrade = typeof tradeId === 'string' && tradeId.startsWith('new_');
+                if (isNewTrade && window._fetchAndPopulateCommissionForTrade && window._fetchAndPopulateCommissionForTrade[tradeId]) {
+                    window._fetchAndPopulateCommissionForTrade[tradeId]();
                 }
             }
         }
@@ -1645,7 +2213,7 @@ function updateDTECell(tradeId, expirationDate) {
     if (!trade) return;
     
     // Calculate new DTE
-    const tradeDate = trade.trade_date;
+    const tradeDate = trade.date_trade_open || trade.trade_date; // Support both old and new field names
     if (tradeDate && expirationDate) {
         const newDTE = calculateDaysToExpiration(expirationDate, tradeDate);
         
@@ -1654,17 +2222,17 @@ function updateDTECell(tradeId, expirationDate) {
         trade.expiration_date = expirationDate;
         
         // The table is transposed: rows are fields, columns are trades
-        // DTE is fieldIndex 6, so we need to find row index 6 (0-based)
+        // DTE is fieldIndex 5, so we need to find row index 5 (0-based)
         // Then find the column for this trade_id
         
         const tbody = document.getElementById('trades-table');
         if (!tbody) return;
         
         const rows = tbody.querySelectorAll('tr');
-        if (rows.length <= 6) return; // DTE row doesn't exist
+        if (rows.length <= 5) return; // DTE row doesn't exist
         
-        // DTE row is at index 6 (fieldIndex 6)
-        const dteRow = rows[6];
+        // DTE row is at index 5 (fieldIndex 5)
+        const dteRow = rows[5];
         if (!dteRow) return;
         
         // Find the column index for this trade
@@ -1714,6 +2282,57 @@ function getTodayInMMDDYY() {
 // TABLE RENDERING FUNCTIONS
 // ============================================================================
 
+// Helper function to get effective expiration date for child trades
+function getEffectiveExpirationDate(trade, trades) {
+    /**
+     * Get the effective expiration date for a trade.
+     * For child trades (trades with trade_parent_id), use parent's date_trade_rolled.
+     * Otherwise, use trade's own expiration_date.
+     */
+    const tradeParentId = trade.trade_parent_id;
+    if (tradeParentId) {
+        // Find parent trade
+        const parentTrade = trades.find(t => t.id === tradeParentId);
+        if (parentTrade && parentTrade.date_trade_rolled) {
+            return parentTrade.date_trade_rolled;
+        }
+    }
+    // Use trade's own expiration_date
+    return trade.expiration_date;
+}
+
+// Helper function to calculate cumulative net credit for roll chains
+function calculateCumulativeNetCredit(trade, trades) {
+    /**
+     * Calculate cumulative net credit for a trade by summing all ancestors.
+     * For root trade: return its own net credit total.
+     * For child trade: sum of all net credit totals from root through all ancestors.
+     */
+    const tradeParentId = trade.trade_parent_id;
+    
+    // Calculate net credit total for this trade
+    const numOfContracts = trade.num_of_contracts || 1;
+    const netCreditPerShare = trade.net_credit_per_share !== null && trade.net_credit_per_share !== undefined 
+        ? trade.net_credit_per_share 
+        : ((trade.credit_debit || trade.premium || 0) - (trade.commission_per_share || 0));
+    
+    const isStockTrade = trade.trade_type === 'BTO' || trade.trade_type === 'STC';
+    const shares = isStockTrade ? (trade.num_of_shares || numOfContracts) : (numOfContracts * 100);
+    const netCreditTotal = netCreditPerShare * shares;
+    
+    // If this trade has a parent, add parent's cumulative net credit
+    if (tradeParentId) {
+        const parentTrade = trades.find(t => t.id === tradeParentId);
+        if (parentTrade) {
+            const parentCumulative = calculateCumulativeNetCredit(parentTrade, trades);
+            return parentCumulative + netCreditTotal;
+        }
+    }
+    
+    // Root trade: return its own net credit total
+    return netCreditTotal;
+}
+
 function updateTradesTable() {
     console.log('updateTradesTable called with', trades.length, 'trades');
     const tbody = document.getElementById('trades-table');
@@ -1723,20 +2342,46 @@ function updateTradesTable() {
     }
     tbody.innerHTML = '';
     
-    // Filter trades by status and symbol
+    // Filter trades by account, status, and symbol
     let filteredTrades = trades;
     
     // Filter out BTO/STC trades from the trades table
     filteredTrades = filteredTrades.filter(trade => trade.trade_type !== 'BTO' && trade.trade_type !== 'STC' && trade.trade_type !== 'ASSIGNED');
+    
+    // Apply account filter (always include new trades so they can be edited)
+    const accountFilter = document.getElementById('universal-account-filter')?.value || '';
+    const isAllAccounts = !accountFilter || accountFilter === '' || accountFilter === 'all';
+    if (!isAllAccounts && accountFilter) {
+        filteredTrades = filteredTrades.filter(trade => {
+            // Always include new trades (they may not have the correct account set yet)
+            const isNewTrade = typeof trade.id === 'string' && trade.id.startsWith('new_');
+            if (isNewTrade) {
+                return true; // Always show new trades
+            }
+            // For existing trades, filter by account
+            const tradeAccountId = trade.account_id || '';
+            return tradeAccountId.toString() === accountFilter.toString();
+        });
+    }
     
     // Apply status filter (case-insensitive)
     if (statusFilter) {
         filteredTrades = filteredTrades.filter(trade => trade.trade_status && trade.trade_status.toLowerCase() === statusFilter.toLowerCase());
     }
     
-    // Apply symbol filter
+    // Apply symbol filter (case-insensitive)
+    // Always include new trades (with IDs starting with 'new_') so they can be edited
     if (window.symbolFilter) {
-        filteredTrades = filteredTrades.filter(trade => trade.ticker === window.symbolFilter);
+        const filterUpper = window.symbolFilter.toUpperCase();
+        filteredTrades = filteredTrades.filter(trade => {
+            // Always include new trades (they may not have a ticker set yet)
+            const isNewTrade = typeof trade.id === 'string' && trade.id.startsWith('new_');
+            if (isNewTrade) {
+                return true; // Always show new trades
+            }
+            // For existing trades, filter by ticker
+            return trade.ticker && trade.ticker.toUpperCase() === filterUpper;
+        });
     }
     
     // First, identify related trades using trade_parent_id BEFORE sorting
@@ -1827,8 +2472,8 @@ function updateTradesTable() {
             // For chains, we want the first child (chronologically by trade_date)
             // Sort children by trade_date to get the next in sequence
             const sortedChildren = children.sort((a, b) => {
-                const aDate = new Date(a.trade_date || a.created_at);
-                const bDate = new Date(b.trade_date || b.created_at);
+                const aDate = new Date((a.date_trade_open || a.trade_date) || a.created_at);
+                const bDate = new Date((b.date_trade_open || b.trade_date) || b.created_at);
                 return aDate - bDate;
             });
             
@@ -1864,7 +2509,7 @@ function updateTradesTable() {
         if (chain.length > 1) {
             // Use the first trade in the chain as the key
             tradeChainMap.set(chain[0].id, chain);
-            console.log(`Built chain starting from trade ${chain[0].id} (${chain[0].ticker} ${chain[0].trade_date}):`, chain.map(t => `${t.id} (${t.trade_date})`).join(' -> '));
+            console.log(`Built chain starting from trade ${chain[0].id} (${chain[0].ticker} ${chain[0].date_trade_open || chain[0].trade_date}):`, chain.map(t => `${t.id} (${t.date_trade_open || t.trade_date})`).join(' -> '));
             // Mark all trades in the chain as processed (except the first)
             chain.slice(1).forEach(childTrade => {
                 processedChildTrades.add(childTrade.id);
@@ -1874,8 +2519,22 @@ function updateTradesTable() {
     
     // Sort trades if sort column is specified
     // For child trades (with trade_parent_id), use their parent trade's date for sorting so they stay grouped
-    if (sortColumn === 'trade_date') {
+    if (sortColumn === 'date_trade_open' || sortColumn === 'trade_date') {
         filteredTrades.sort((a, b) => {
+            // Check if trades are new (temporary trades with IDs starting with 'new_')
+            const aIsNew = typeof a.id === 'string' && a.id.startsWith('new_');
+            const bIsNew = typeof b.id === 'string' && b.id.startsWith('new_');
+            
+            // New trades should appear at the end (rightmost in transposed table) when sorting descending
+            // or at the beginning when sorting ascending
+            if (aIsNew && !bIsNew) {
+                return sortDirection === 'desc' ? 1 : -1; // New trades go to end if desc, beginning if asc
+            }
+            if (!aIsNew && bIsNew) {
+                return sortDirection === 'desc' ? -1 : 1; // Existing trades go before new if desc, after if asc
+            }
+            
+            // If both are new or both are existing, sort normally
             // If either trade is a child trade, use its parent trade's date for sorting
             const aParentId = childToParentMap.get(a.id);
             const aTradeForSort = aParentId ? filteredTrades.find(t => t.id === aParentId) : a;
@@ -1883,8 +2542,13 @@ function updateTradesTable() {
             const bTradeForSort = bParentId ? filteredTrades.find(t => t.id === bParentId) : b;
             
             // Primary sort: trade_date (when trade was executed)
-            const aTradeDate = new Date(aTradeForSort.trade_date || aTradeForSort.created_at);
-            const bTradeDate = new Date(bTradeForSort.trade_date || bTradeForSort.created_at);
+            // For new trades, use a very recent date to ensure they sort correctly
+            const aTradeDate = aIsNew 
+                ? new Date() // Use current date for new trades
+                : new Date((aTradeForSort.date_trade_open || aTradeForSort.trade_date) || aTradeForSort.created_at || new Date());
+            const bTradeDate = bIsNew 
+                ? new Date() // Use current date for new trades
+                : new Date((bTradeForSort.date_trade_open || bTradeForSort.trade_date) || bTradeForSort.created_at || new Date());
             
             // Secondary sort: ticker symbol (alphabetical)
             const aTicker = (aTradeForSort.ticker || '').toUpperCase();
@@ -1962,6 +2626,19 @@ function updateTradesTable() {
         // Default sort: newest trades on the right (reverse chronological order)
         // For child trades (with trade_parent_id), use their parent trade for sorting
         filteredTrades.sort((a, b) => {
+            // Check if trades are new (temporary trades with IDs starting with 'new_')
+            const aIsNew = typeof a.id === 'string' && a.id.startsWith('new_');
+            const bIsNew = typeof b.id === 'string' && b.id.startsWith('new_');
+            
+            // New trades should appear at the end (rightmost in transposed table)
+            if (aIsNew && !bIsNew) {
+                return 1; // New trades go to end
+            }
+            if (!aIsNew && bIsNew) {
+                return -1; // Existing trades go before new
+            }
+            
+            // If both are new or both are existing, sort normally
             // If either trade is a child trade, use its parent trade for sorting
             const aParentId = childToParentMap.get(a.id);
             const aTradeForSort = aParentId ? filteredTrades.find(t => t.id === aParentId) : a;
@@ -1969,12 +2646,13 @@ function updateTradesTable() {
             const bTradeForSort = bParentId ? filteredTrades.find(t => t.id === bParentId) : b;
             
             // Primary sort: created_at (when trade was added to system)
-            const aCreated = new Date(aTradeForSort.created_at);
-            const bCreated = new Date(bTradeForSort.created_at);
+            // For new trades, use current timestamp to ensure they sort to the end
+            const aCreated = aIsNew ? new Date() : new Date(aTradeForSort.created_at || new Date());
+            const bCreated = bIsNew ? new Date() : new Date(bTradeForSort.created_at || new Date());
             
             // Secondary sort: trade_date (when trade was executed)
-            const aTradeDate = new Date(aTradeForSort.trade_date || aTradeForSort.created_at);
-            const bTradeDate = new Date(bTradeForSort.trade_date || bTradeForSort.created_at);
+            const aTradeDate = new Date((aTradeForSort.date_trade_open || aTradeForSort.trade_date) || aCreated);
+            const bTradeDate = new Date((bTradeForSort.date_trade_open || bTradeForSort.trade_date) || bCreated);
             
             // Sort oldest first (so newest appears rightmost in transposed table)
             if (aCreated.getTime() !== bCreated.getTime()) {
@@ -2009,17 +2687,29 @@ function updateTradesTable() {
     // Related trades (via trade_parent_id) will stay grouped together regardless of sort order
     const groupedTrades = [];
     
+    // Create a set of all trade IDs that are part of any chain (not just the root)
+    const tradesInAnyChain = new Set();
+    tradeChainMap.forEach(chain => {
+        chain.forEach(trade => {
+            tradesInAnyChain.add(trade.id);
+        });
+    });
+    
     filteredTrades.forEach(trade => {
         // Skip child trades (they'll be added with their parent/chain)
         if (processedChildTrades.has(trade.id)) {
             return;
         }
         
-        // Check if this trade is part of a chain (has multiple descendants)
+        // Check if this trade is part of any chain (as root or any member)
+        // First check if it's the root of a chain
         const chain = tradeChainMap.get(trade.id);
         if (chain && chain.length > 1) {
             // Add all trades in the chain together
             groupedTrades.push({ type: 'chain', trades: chain });
+        } else if (tradesInAnyChain.has(trade.id)) {
+            // Trade is in a chain but not the root - skip it (already added with the chain)
+            return;
         } else {
             // Check if this trade has a child trade (via trade_parent_id) - single parent-child pair
             const childTrade = parentTradeMap.get(trade.id);
@@ -2043,20 +2733,24 @@ function updateTradesTable() {
         'Account', // Account row
         'Ticker', // Ticker row
         'Trade Date', // Trade Date row
-        'Price', // Moved Trade Price to fourth row and renamed
-        'Exp Date', // Moved Expiration to fifth row and renamed
-        'DTE', // Moved Days to Exp to sixth row and renamed
-        'Strike', // Moved Strike Price to seventh row and renamed
-        'Credit', // Moved Premium to eighth row and renamed
-        'Contracts', // New row - Contracts (num_of_contracts)
-        'Shares', // Moved Shares to tenth row
-        'Commission', // New row - Commission per trade
-        'Net Credit Total', // Renamed from Net Credit - Net Credit Per Share * Shares
-        'Risk Capital', // New row - Risk Capital = Strike - Net Credit Per Share
-        'Margin Capital', // New row - Margin Capital = Risk Capital * Shares
-        'RORC', // New row - RORC = Net Credit / Risk Capital
-        'ARORC', // New row - ARORC = (365 / DTE) * RORC
-        'Status',
+        'Exp Date', // Expiration Date row (moved to be right under Trade Date)
+        'DTE', // Days to Expiration row (moved to be right under Exp Date)
+        'Price', // Trade Price row (moved after DTE)
+        'Strike', // Strike Price row
+        'Credit', // Premium row
+        'Contracts', // Contracts (num_of_contracts)
+        'Shares', // Shares row
+        'Commission', // Commission per trade
+        'Risk Capital', // Risk Capital = Strike - Net Credit Per Share
+        'Margin Capital', // Margin Capital = Risk Capital * Shares
+        'Status', // Status row (moved above Closing Debit)
+        'Roll/Close Date', // Date Trade Rolled row (moved after Status)
+        'Roll/Close Debit', // Closing Debit row
+        'Total Debit', // Total Debit row
+        'Net Credit Total', // Net Credit - Net Credit Per Share * Shares (moved above RORC)
+        'RORC', // RORC = Net Credit / Risk Capital
+        'ARORC', // ARORC = (365 / DTE) * RORC
+        'Notes', // Notes row
         '' // Empty for actions row (no label)
     ];
     
@@ -2067,78 +2761,23 @@ function updateTradesTable() {
     fieldNames.forEach((fieldName, fieldIndex) => {
         const row = document.createElement('tr');
         
+        // Build first cell HTML
+        let firstCellHTML = '';
         // Special handling for Trade Date row - make it sortable
         if (fieldIndex === 3 && fieldName === 'Trade Date') {
-            const sortIcon = sortColumn === 'trade_date' 
+            const sortIcon = (sortColumn === 'date_trade_open' || sortColumn === 'trade_date') 
                 ? (sortDirection === 'asc' ? '<i class="fas fa-sort-up"></i>' : '<i class="fas fa-sort-down"></i>')
                 : '<i class="fas fa-sort text-muted"></i>';
-            row.innerHTML = `<td class="fw-bold" style="cursor: pointer;" onclick="toggleTradeDateSort()" title="Click to sort by trade date">
+            firstCellHTML = `<td class="fw-bold" style="cursor: pointer;" onclick="toggleTradeDateSort()" title="Click to sort by trade date">
                 ${fieldName} ${sortIcon}
             </td>`;
         } else {
             // Only show field name if it's not empty (skip first row label)
-            row.innerHTML = fieldName ? `<td class="fw-bold">${fieldName}</td>` : '<td></td>';
+            firstCellHTML = fieldName ? `<td class="fw-bold">${fieldName}</td>` : '<td></td>';
         }
         
-        // Apply fixed row height - 30px
-        row.style.height = '30px';
-        
-        // Apply fixed column width for first column (field names) - 105px (reduced from 150px for condensed layout)
-        const firstCell = row.querySelector('td');
-        if (firstCell) {
-            firstCell.style.width = '105px';
-            firstCell.style.minWidth = '105px';
-            firstCell.style.maxWidth = '105px';
-            firstCell.style.textAlign = 'center';
-            firstCell.style.whiteSpace = 'normal';
-            firstCell.style.wordWrap = 'break-word';
-            firstCell.style.verticalAlign = 'middle';
-            // Check if dark mode is active
-            const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
-            
-            // Use white background in light mode (original behavior), dark in dark mode
-            if (isDarkMode) {
-                firstCell.style.setProperty('background-color', 'var(--table-header-bg)', 'important');
-                firstCell.style.setProperty('background', 'var(--table-header-bg)', 'important');
-                firstCell.style.setProperty('color', 'var(--text-color)', 'important');
-                firstCell.style.setProperty('border-left', '1px solid var(--border-color)', 'important');
-                firstCell.style.setProperty('border-right', '2px solid var(--border-color)', 'important');
-                firstCell.style.setProperty('border-top', '1px solid var(--border-color)', 'important');
-                firstCell.style.setProperty('border-bottom', '1px solid var(--border-color)', 'important');
-            } else {
-                // Light mode: use white background (original behavior)
-                firstCell.style.setProperty('background-color', '#ffffff', 'important');
-                firstCell.style.setProperty('background', '#ffffff', 'important');
-                firstCell.style.setProperty('color', '#212529', 'important');
-                firstCell.style.setProperty('border-left', '1px solid #dee2e6', 'important');
-                firstCell.style.setProperty('border-right', '2px solid #dee2e6', 'important');
-                firstCell.style.setProperty('border-top', '1px solid #dee2e6', 'important');
-                firstCell.style.setProperty('border-bottom', '1px solid #dee2e6', 'important');
-            }
-            firstCell.style.setProperty('border-style', 'solid', 'important');
-            firstCell.style.setProperty('position', 'sticky', 'important');
-            firstCell.style.setProperty('left', '0', 'important');
-            firstCell.style.setProperty('z-index', '100', 'important');
-            firstCell.style.setProperty('isolation', 'isolate', 'important');
-            firstCell.style.setProperty('overflow', 'visible', 'important');
-            firstCell.classList.add('trades-first-column');
-            
-            // Create overlay element to cover scrolling columns
-            // position: sticky works as a positioned ancestor for absolute children
-            const overlay = document.createElement('div');
-            overlay.style.position = 'absolute';
-            overlay.style.top = '0';
-            overlay.style.right = '-6px';
-            overlay.style.bottom = '0';
-            overlay.style.width = '6px';
-            overlay.style.backgroundColor = '#ffffff';
-            overlay.style.zIndex = '101';
-            overlay.style.pointerEvents = 'none';
-            firstCell.appendChild(overlay);
-        }
-        
-        // Build cell HTML using array for better performance
-        const cellHTMLs = [];
+        // Build cell HTML using array for better performance - include first cell
+        const cellHTMLs = [firstCellHTML];
         
         // Add spacer column after the first column (field names) - make it sticky
         cellHTMLs.push(`<td class="sticky-spacer-column" style="width: 14px; min-width: 14px; max-width: 14px; padding: 0; background-color: #f5f7fa; border-left: 2px solid #dee2e6 !important; border-right: none !important; border-top: none !important; border-bottom: none !important; position: sticky; left: 105px; z-index: 9;"></td>`);
@@ -2159,16 +2798,16 @@ function updateTradesTable() {
                 tradesToRender = group.trades;
                 // Sort by trade_date within the chain
                 tradesToRender.sort((a, b) => {
-                    const aDate = new Date(a.trade_date || a.created_at);
-                    const bDate = new Date(b.trade_date || b.created_at);
+                    const aDate = new Date((a.date_trade_open || a.trade_date) || a.created_at);
+                    const bDate = new Date((b.date_trade_open || b.trade_date) || b.created_at);
                     return aDate - bDate; // Oldest first
                 });
             } else if (group.type === 'group') {
                 tradesToRender = [group.original, group.roll];
                 // Sort by trade_date within the group
                 tradesToRender.sort((a, b) => {
-                    const aDate = new Date(a.trade_date || a.created_at);
-                    const bDate = new Date(b.trade_date || b.created_at);
+                    const aDate = new Date((a.date_trade_open || a.trade_date) || a.created_at);
+                    const bDate = new Date((b.date_trade_open || b.trade_date) || b.created_at);
                     return aDate - bDate;
                 });
             } else {
@@ -2184,17 +2823,26 @@ function updateTradesTable() {
             const tradeType = trade.trade_type || 'ROCT PUT';
             const status = trade.trade_status || 'open';
             let bgColor = '';
+            let textColor = '';
+            
+            // Check if dark mode is active
+            const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
             
             if (status === 'roll') {
                 bgColor = 'background-color: #FFF2CC;';
+                if (isDarkMode) textColor = 'color: #212529;'; // Dark text for light yellow background
             } else if (status === 'expired' && tradeType.toLowerCase().includes('put')) {
                 bgColor = 'background-color: #C6E0B4;';
+                if (isDarkMode) textColor = 'color: #212529;'; // Dark text for light green background
             } else if (status === 'assigned' && tradeType.toLowerCase().includes('put')) {
                 bgColor = 'background-color: #A9D08F;';
+                if (isDarkMode) textColor = 'color: #212529;'; // Dark text for green background
             } else if (status === 'assigned' && tradeType.toLowerCase().includes('call')) {
                 bgColor = 'background-color: #9BC2E6;';
+                if (isDarkMode) textColor = 'color: #212529;'; // Dark text for light blue background
             } else if (status === 'expired' && tradeType.toLowerCase().includes('call')) {
                 bgColor = 'background-color: #DEEAF7;';
+                if (isDarkMode) textColor = 'color: #212529;'; // Dark text for light blue background
             }
             
             let cellContent = '';
@@ -2205,14 +2853,65 @@ function updateTradesTable() {
             const premium = trade.credit_debit || trade.premium;
             // Use net_credit_per_share from database if available, otherwise calculate
             const netCreditPerShare = trade.net_credit_per_share !== null && trade.net_credit_per_share !== undefined ? trade.net_credit_per_share : (premium - tradeCommission);
-            const netCreditTotal = netCreditPerShare * (trade.num_of_contracts * 100); // Net Credit Total = Net Credit Per Share * Shares
+            
+            // Calculate shares
+            const isStockTrade = trade.trade_type === 'BTO' || trade.trade_type === 'STC';
+            const shares = isStockTrade ? (trade.num_of_shares || trade.num_of_contracts) : (trade.num_of_contracts * 100);
+            
+            // Use cumulative net credit total from backend if available, otherwise calculate it
+            let cumulativeNetCreditTotal = trade.cumulative_net_credit_total;
+            if (cumulativeNetCreditTotal === null || cumulativeNetCreditTotal === undefined) {
+                cumulativeNetCreditTotal = calculateCumulativeNetCredit(trade, trades);
+            }
+            
+            // Net Credit Total should display cumulative for roll trades
+            const netCreditTotal = cumulativeNetCreditTotal;
+            
             // Use risk_capital_per_share from database if available, otherwise calculate
             const riskCapital = trade.risk_capital_per_share !== null && trade.risk_capital_per_share !== undefined ? trade.risk_capital_per_share : (trade.strike_price - netCreditPerShare); // Risk Capital = Strike - Net Credit Per Share
             // Use margin_capital from database if available, otherwise calculate
-            const marginCapital = trade.margin_capital !== null && trade.margin_capital !== undefined ? trade.margin_capital : (riskCapital * (trade.num_of_contracts * 100));
-            const rorc = riskCapital !== 0 ? (netCreditPerShare / riskCapital) * 100 : 0; // RORC = Net Credit Per Share / Risk Capital
-            // Calculate ARORC as percentage (already in percentage format, round to 1 decimal)
-            const arorc = trade.days_to_expiration > 0 ? parseFloat(((365 / trade.days_to_expiration) * rorc).toFixed(1)) : 0;
+            const marginCapital = trade.margin_capital !== null && trade.margin_capital !== undefined ? trade.margin_capital : (riskCapital * shares);
+            
+            // Calculate cumulative net credit per share for RORC calculation (for roll trades)
+            const cumulativeNetCreditPerShare = shares > 0 ? (cumulativeNetCreditTotal / shares) : netCreditPerShare;
+            
+            // RORC = Cumulative Net Credit Per Share / Risk Capital * 100 (for roll trades, use cumulative)
+            const rorc = riskCapital !== 0 ? (cumulativeNetCreditPerShare / riskCapital) * 100 : 0;
+            
+            // Calculate effective expiration date for ARORC calculation (use parent's date_trade_rolled for child trades)
+            const effectiveExpDate = getEffectiveExpirationDate(trade, trades);
+            const tradeDateForDTE = trade.date_trade_open || trade.trade_date;
+            // Always calculate DTE using effective expiration date, don't rely on database value
+            let effectiveDTE = 0;
+            if (effectiveExpDate && tradeDateForDTE) {
+                effectiveDTE = calculateDaysToExpiration(effectiveExpDate, tradeDateForDTE);
+            }
+            // If calculation failed, fallback to database value only if it's > 0
+            if (effectiveDTE === 0 && trade.days_to_expiration > 0) {
+                effectiveDTE = trade.days_to_expiration;
+            }
+            
+            // Calculate ARORC
+            // For ROCT PUT and RULE ONE PUT trades, use: (365 / DTE) * (net_credit_per_share / (risk_capital_per_share * margin_percent))
+            // For other trades, use: (365 / DTE) * RORC
+            let arorc = 0;
+            const isROCTPut = tradeType.includes('ROCT PUT') || tradeType.includes('RULE ONE PUT') || 
+                             (tradeType.includes('PUT') && (tradeType.includes('ROCT') || tradeType.includes('RULE ONE')));
+            
+            if (effectiveDTE > 0) {
+                if (isROCTPut) {
+                    // Use cumulative net credit per share for roll trades
+                    const marginPercent = trade.margin_percent !== null && trade.margin_percent !== undefined ? trade.margin_percent : 100.0;
+                    const denominator = riskCapital * (marginPercent / 100.0);
+                    if (denominator > 0) {
+                        const arorcDecimal = (365.0 / effectiveDTE) * (cumulativeNetCreditPerShare / denominator);
+                        arorc = parseFloat((arorcDecimal * 100.0).toFixed(1));
+                    }
+                } else {
+                    // For other trades, use: (365 / DTE) * RORC
+                    arorc = parseFloat(((365 / effectiveDTE) * rorc).toFixed(1));
+                }
+            }
             
             // Calculate today's date once for all cases
             const todayDate = new Date();
@@ -2255,7 +2954,9 @@ function updateTradesTable() {
                     // Check if dark mode is active - use CSS variable that changes with theme
                     const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
                     const tickerLinkColor = isDarkMode ? 'var(--primary-color-alt)' : '#000000';
-                    cellContent = `<div style="text-align: center; white-space: normal; word-wrap: break-word; vertical-align: top;"><strong>${isExpired ? '<i class="fas fa-exclamation-triangle text-danger me-1" title="Expired"></i>' : ''}<span class="clickable-symbol" onclick="filterBySymbol('${trade.ticker}')" style="cursor: pointer; color: ${tickerLinkColor}; text-decoration: underline;">${displayType}</span></strong></div>`;
+                    // Escape ticker for use in onclick handler
+                    const escapedTickerForClick = String(trade.ticker || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                    cellContent = `<div style="text-align: center; white-space: normal; word-wrap: break-word; vertical-align: top;"><strong>${isExpired ? '<i class="fas fa-exclamation-triangle text-danger me-1" title="Expired"></i>' : ''}<span class="clickable-symbol" data-symbol="${escapedTickerForClick}" style="cursor: pointer; color: ${tickerLinkColor}; text-decoration: underline;">${displayType}</span></strong></div>`;
                     break;
                 case 1: // Account - Editable dropdown
                     const accountName = trade.account_name || 'Unknown';
@@ -2277,7 +2978,7 @@ function updateTradesTable() {
                                 data-field="account_id"
                                 data-field-row="1"
                                 onchange="autoSaveTradeField(${trade.id}, 'account_id', this.value)"
-                                style="width: 100px; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
+                                style="width: 100px; font-size: 0.6125rem; padding-left: 1.5rem; padding-right: 1.5rem; padding-top: 0.1rem; padding-bottom: 0.1rem; text-align: center;">
                             ${accountOptions}
                         </select>
                     `;
@@ -2310,12 +3011,13 @@ function updateTradesTable() {
                     // Make editable with auto-save using DD-MMM-YY format like quick add modal
                     // For new trades, trade_date is already in YYYY-MM-DD format, so formatDate will convert it
                     let tradeDateValue;
-                    if (trade.trade_date) {
+                    const tradeDateField = trade.date_trade_open || trade.trade_date; // Support both old and new field names
+                    if (tradeDateField) {
                         // Check if it's already in DD-MMM-YY format (8 chars) or YYYY-MM-DD format (10 chars)
-                        if (trade.trade_date.length === 10 && trade.trade_date.includes('-')) {
-                            tradeDateValue = formatDate(trade.trade_date);
+                        if (tradeDateField.length === 10 && tradeDateField.includes('-')) {
+                            tradeDateValue = formatDate(tradeDateField);
                         } else {
-                            tradeDateValue = trade.trade_date;
+                            tradeDateValue = tradeDateField;
                         }
                     } else {
                         tradeDateValue = getTodayInDDMMMYY();
@@ -2328,7 +3030,7 @@ function updateTradesTable() {
                                data-display-format="DD-MMM-YY"
                                data-edit-format="MM/DD/YY"
                                data-trade-id="${trade.id}" 
-                               data-field="trade_date" 
+                               data-field="date_trade_open" 
                                data-field-row="3"
                                tabindex="0"
                                onfocus="handleDateInputFocus(this)" 
@@ -2337,31 +3039,7 @@ function updateTradesTable() {
                                style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem; text-overflow: clip !important; overflow: visible !important; white-space: normal !important;">
                     `;
                     break;
-                case 4: // Price - Editable for all trades
-                    // Make editable with auto-save for all trades
-                    // For new trades, leave empty instead of defaulting to 0
-                    const isNewTradePrice = typeof trade.id === 'string' && trade.id.startsWith('new_');
-                    const priceValue = isNewTradePrice ? '' : (trade.current_price || trade.price ? parseFloat(trade.current_price || trade.price).toFixed(2) : '');
-                    cellContent = `
-                        <div style="position: relative; display: flex; align-items: center; justify-content: center;">
-                            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); font-size: 0.6125rem;">$</span>
-                            <input type="number" 
-                                   class="form-control form-control-sm text-center" 
-                                   value="${priceValue}" 
-                                   step="0.01"
-                                   min="0"
-                                   data-trade-id="${trade.id}" 
-                                   data-field="current_price" 
-                                   data-field-row="4"
-                                   tabindex="0"
-                                   onfocus="this.select()"
-                                   onkeydown="return handleTabNavigation(event, ${tradeIdForHandler}, 4)"
-                                   oninput="limitToTwoDecimals(this); autoSaveTradeField(${tradeIdForHandler}, 'current_price', this.value)"
-                                   style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
-                        </div>
-                    `;
-                    break;
-                case 5: // Exp Date - Editable for all trades
+                case 4: // Exp Date - Editable for all trades (moved to be right under Trade Date)
                     // Make editable with auto-save using DD-MMM-YY format like quick add modal
                     // For new trades, expiration_date is already in YYYY-MM-DD format, so formatDate will convert it
                     let expDateValue;
@@ -2384,16 +3062,51 @@ function updateTradesTable() {
                                data-edit-format="MM/DD/YY"
                                data-trade-id="${trade.id}" 
                                data-field="expiration_date" 
-                               data-field-row="5"
+                               data-field-row="4"
                                tabindex="0"
                                onfocus="handleDateInputFocus(this)" 
-                               onkeydown="return handleTabNavigation(event, ${tradeIdForHandler}, 5)"
+                               onkeydown="return handleTabNavigation(event, ${tradeIdForHandler}, 4)"
                                onblur="handleDateInputBlurForRollField(this, ${tradeIdForHandler})"
                                style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem; text-overflow: clip !important; overflow: visible !important; white-space: normal !important;">
                     `;
                     break;
-                case 6: // DTE (was Days to Exp) - Read-only (calculated)
-                    cellContent = `<span class="text-center">${trade.days_to_expiration || calculateDaysToExpiration(trade.expiration_date, trade.trade_date)}</span>`;
+                case 5: // DTE - Read-only (calculated) (moved to be right under Exp Date)
+                    // Always calculate DTE using effective expiration date (parent's date_trade_rolled for child trades)
+                    const tradeDateForDTE = trade.date_trade_open || trade.trade_date; // Support both old and new field names
+                    const effectiveExpDate = getEffectiveExpirationDate(trade, trades);
+                    const expDateForDTE = effectiveExpDate || trade.expiration_date;
+                    // Always calculate DTE, don't rely on database value (which might be 0 for child trades)
+                    let calculatedDTE = 0;
+                    if (expDateForDTE && tradeDateForDTE) {
+                        calculatedDTE = calculateDaysToExpiration(expDateForDTE, tradeDateForDTE);
+                    }
+                    // Use calculated value if available, otherwise fallback to database value
+                    const displayDTE = calculatedDTE > 0 ? calculatedDTE : (trade.days_to_expiration || 0);
+                    cellContent = `<span class="text-center" data-field="dte" data-trade-id="${trade.id}">${displayDTE}</span>`;
+                    break;
+                case 6: // Price - Editable for all trades (moved after DTE)
+                    // Make editable with auto-save for all trades
+                    // For new trades, leave empty instead of defaulting to 0
+                    const isNewTradePrice = typeof trade.id === 'string' && trade.id.startsWith('new_');
+                    const priceValue = isNewTradePrice ? '' : (trade.current_price || trade.price ? parseFloat(trade.current_price || trade.price).toFixed(2) : '');
+                    cellContent = `
+                        <div style="position: relative; display: flex; align-items: center; justify-content: center;">
+                            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); font-size: 0.6125rem;">$</span>
+                            <input type="number" 
+                                   class="form-control form-control-sm text-center" 
+                                   value="${priceValue}" 
+                                   step="0.01"
+                                   min="0"
+                                   data-trade-id="${trade.id}" 
+                                   data-field="current_price" 
+                                   data-field-row="6"
+                                   tabindex="0"
+                                   onfocus="this.select()"
+                                   onkeydown="return handleTabNavigation(event, ${tradeIdForHandler}, 6)"
+                                   oninput="limitToTwoDecimals(this); autoSaveTradeField(${tradeIdForHandler}, 'current_price', this.value)"
+                                   style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
+                        </div>
+                    `;
                     break;
                 case 7: // Strike - Editable for all trades
                     // Make editable with auto-save for all trades
@@ -2460,36 +3173,23 @@ function updateTradesTable() {
                                style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
                     `;
                     break;
-                case 10: // Shares - Read-only (calculated from num_of_contracts)
-                    cellContent = `<span class="text-center">${trade.num_of_contracts * 100}</span>`;
+                case 10: // Shares - Read-only (use stored num_of_shares or calculate from num_of_contracts)
+                    const shares = trade.num_of_shares !== null && trade.num_of_shares !== undefined 
+                        ? trade.num_of_shares 
+                        : ((trade.num_of_contracts || 0) * 100);
+                    cellContent = `<span class="text-center" data-field="shares" data-trade-id="${trade.id}">${shares}</span>`;
                     break;
                 case 11: // Commission - Use commission_per_share from database (account-specific and trade-date-specific)
                     const tradeCommission = trade.commission_per_share !== null && trade.commission_per_share !== undefined ? trade.commission_per_share : 0.0;
                     cellContent = `<span class="text-center">$${tradeCommission.toLocaleString('en-US', {minimumFractionDigits: 5, maximumFractionDigits: 5})}</span>`;
                     break;
-                case 12: // Net Credit Total = Net Credit Per Share * Shares
-                    cellContent = `<strong class="text-center">$${netCreditTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong>`;
+                case 12: // Risk Capital = Strike - Net Credit Per Share
+                    cellContent = `<span class="text-center" data-field="risk_capital" data-trade-id="${trade.id}">$${riskCapital.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>`;
                     break;
-                case 13: // Risk Capital = Strike - Net Credit Per Share
-                    cellContent = `<span class="text-center">$${riskCapital.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>`;
+                case 13: // Margin Capital = Risk Capital * Shares
+                    cellContent = `<span class="text-center" data-field="margin_capital" data-trade-id="${trade.id}">$${marginCapital.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>`;
                     break;
-                case 14: // Margin Capital = Risk Capital * Shares
-                    cellContent = `<span class="text-center">$${marginCapital.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>`;
-                    break;
-                case 15: // RORC = Net Credit Per Share / Risk Capital
-                    cellContent = `<span class="text-center">${rorc.toFixed(2)}%</span>`;
-                    break;
-                case 16: // ARORC - Use database value if available, otherwise calculate
-                    // Database stores ARORC as percentage (20.4 = 20.4%), display directly
-                    const dbARORC = trade.ARORC !== null && trade.ARORC !== undefined ? trade.ARORC : arorc;
-                    if (dbARORC !== null && dbARORC !== undefined && !isNaN(dbARORC)) {
-                        // ARORC is stored as percentage (e.g., 20.4 for 20.4%), display directly
-                        cellContent = `<span class="text-center">${parseFloat(dbARORC).toFixed(1)}%</span>`;
-                    } else {
-                        cellContent = `<span class="text-center">-</span>`;
-                    }
-                    break;
-                case 17: // Status - Editable dropdown (case-insensitive)
+                case 14: // Status - Editable dropdown (case-insensitive)
                     const tradeStatusLower = trade.trade_status ? trade.trade_status.toLowerCase() : 'open';
                     cellContent = `
                         <select class="form-select form-select-sm status-select" data-trade-id="${trade.id}" onchange="updateTradeStatus(${trade.id}, this.value)" style="font-size: 0.6125rem; padding: 0.1rem 0.25rem; width: 100%; height: auto; line-height: 1.1; text-align: center; text-align-last: center;">
@@ -2501,7 +3201,114 @@ function updateTradesTable() {
                         </select>
                     `;
                     break;
-                case 18: // Actions - Delete only
+                case 15: // Roll Date - Editable for trades with status 'roll' or 'closed' (same format as Exp Date)
+                    let rollDateValue = '';
+                    if (trade.date_trade_rolled) {
+                        if (trade.date_trade_rolled.length === 10 && trade.date_trade_rolled.includes('-')) {
+                            rollDateValue = formatDate(trade.date_trade_rolled);
+                        } else {
+                            rollDateValue = trade.date_trade_rolled;
+                        }
+                    }
+                    const isRollOrClosedForRollDate = (trade.trade_status && (trade.trade_status.toLowerCase() === 'roll' || trade.trade_status.toLowerCase() === 'closed'));
+                    // When disabled, match background color and remove border
+                    // If bgColor is set (status-specific color), use it; otherwise use CSS variable to match table background
+                    let rollDateBgColor = '';
+                    if (!isRollOrClosedForRollDate) {
+                        if (bgColor) {
+                            // Extract the color value from bgColor (e.g., "background-color: #FFF2CC;" -> "#FFF2CC")
+                            const colorMatch = bgColor.match(/background-color:\s*([^;]+)/);
+                            if (colorMatch) {
+                                rollDateBgColor = `background-color: ${colorMatch[1]};`;
+                            }
+                        } else {
+                            // Use CSS variable to match table background (works in both light and dark mode)
+                            rollDateBgColor = 'background-color: var(--table-bg);';
+                        }
+                    }
+                    const rollDateDisabledStyle = isRollOrClosedForRollDate ? '' : `${rollDateBgColor} border: none; box-shadow: none;`;
+                    cellContent = `
+                        <input type="text" 
+                               class="form-control form-control-sm text-center no-ellipsis" 
+                               value="${rollDateValue}" 
+                               data-display-format="DD-MMM-YY"
+                               data-edit-format="MM/DD/YY"
+                               data-trade-id="${trade.id}" 
+                               data-field="date_trade_rolled" 
+                               data-field-row="15"
+                               ${isRollOrClosedForRollDate ? '' : 'disabled'}
+                               tabindex="0"
+                               onfocus="handleDateInputFocus(this)" 
+                               onkeydown="return handleTabNavigation(event, ${tradeIdForHandler}, 15)"
+                               onblur="handleDateInputBlurForRollField(this, ${tradeIdForHandler})"
+                               style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem; text-overflow: clip !important; overflow: visible !important; white-space: normal !important; ${rollDateDisabledStyle}">
+                    `;
+                    break;
+                case 16: // Closing Debit - Format based on status: read-only like Total Debit if not roll/closed, editable like Credit/Strike if roll/closed
+                    const isRollOrClosed = (trade.trade_status && (trade.trade_status.toLowerCase() === 'roll' || trade.trade_status.toLowerCase() === 'closed'));
+                    const closingDebitValue = trade.closing_debit !== null && trade.closing_debit !== undefined ? parseFloat(trade.closing_debit) : 0.0;
+                    if (isRollOrClosed) {
+                        // Editable format like Credit/Strike (with $ prefix)
+                        cellContent = `
+                            <div style="position: relative; display: flex; align-items: center; justify-content: center;">
+                                <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); font-size: 0.6125rem;">$</span>
+                                <input type="number" 
+                                       class="form-control form-control-sm text-center" 
+                                       value="${closingDebitValue.toFixed(2)}" 
+                                       step="0.01"
+                                       min="0"
+                                       data-trade-id="${trade.id}" 
+                                       data-field="closing_debit" 
+                                       data-field-row="16"
+                                       tabindex="0"
+                                       onfocus="this.select()"
+                                       onkeydown="return handleTabNavigation(event, ${tradeIdForHandler}, 16)"
+                                       oninput="limitToTwoDecimals(this); autoSaveTradeField(${tradeIdForHandler}, 'closing_debit', this.value)"
+                                       style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
+                            </div>
+                        `;
+                    } else {
+                        // Read-only format like Total Debit (default to $0.00)
+                        cellContent = `<span class="text-center" data-field="closing_debit" data-trade-id="${trade.id}">$${closingDebitValue.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>`;
+                    }
+                    break;
+                case 17: // Total Debit - Calculated/display field (closing_debit * num_of_shares)
+                    const totalDebit = (trade.total_debit !== null && trade.total_debit !== undefined) ? parseFloat(trade.total_debit) : 0.0;
+                    cellContent = `<span class="text-center" data-field="total_debit" data-trade-id="${trade.id}">$${totalDebit.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>`;
+                    break;
+                case 18: // Net Credit Total = Net Credit Per Share * Shares (moved above RORC)
+                    cellContent = `<strong class="text-center" data-field="net_credit_total" data-trade-id="${trade.id}">$${netCreditTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong>`;
+                    break;
+                case 19: // RORC = Net Credit Per Share / Risk Capital
+                    cellContent = `<span class="text-center" data-field="rorc" data-trade-id="${trade.id}">${rorc.toFixed(2)}%</span>`;
+                    break;
+                case 20: // ARORC - Use calculated value (which uses cumulative net credit for roll trades), fallback to database value
+                    // For roll trades, always use calculated value (cumulative net credit)
+                    // For non-roll trades, prefer calculated value but fallback to database value
+                    const displayARORC = (arorc !== null && arorc !== undefined && !isNaN(arorc) && arorc !== 0) 
+                        ? arorc 
+                        : (trade.ARORC !== null && trade.ARORC !== undefined ? trade.ARORC : null);
+                    if (displayARORC !== null && displayARORC !== undefined && !isNaN(displayARORC)) {
+                        // ARORC is stored/calculated as percentage (e.g., 20.4 for 20.4%), display directly
+                        cellContent = `<span class="text-center" data-field="arorc" data-trade-id="${trade.id}">${parseFloat(displayARORC).toFixed(1)}%</span>`;
+                    } else {
+                        cellContent = `<span class="text-center" data-field="arorc" data-trade-id="${trade.id}">-</span>`;
+                    }
+                    break;
+                case 21: // Notes - Editable textarea field
+                    const notesValue = trade.notes || '';
+                    cellContent = `
+                        <textarea 
+                            class="form-control form-control-sm" 
+                            data-trade-id="${trade.id}" 
+                            data-field="notes" 
+                            data-field-row="21"
+                            rows="2"
+                            onblur="autoSaveTradeField(${tradeIdForHandler}, 'notes', this.value)"
+                            style="width: 100%; font-size: 0.6125rem; padding: 0.1rem 0.25rem; resize: vertical; min-height: 40px;">${notesValue}</textarea>
+                    `;
+                    break;
+                case 22: // Actions - Delete only
                     // Quote the trade ID to handle temporary IDs like "new_1234567890"
                     const tradeIdStr = typeof trade.id === 'string' && trade.id.startsWith('new_') 
                         ? `'${trade.id}'` 
@@ -2522,50 +3329,169 @@ function updateTradesTable() {
             
             // Apply fixed column width to data cells - 112px (reduced from 160px for condensed layout) with visibility control
             const visibilityStyle = isVisible ? '' : 'display: none;';
-            // Top align for Symbol/Type column (fieldIndex 0), middle align for dates (1, 3), center for status (16)
+            // Top align for Symbol/Type column (fieldIndex 0), middle align for dates (1, 3), center for status (14)
             let verticalAlign = '';
             let textAlign = '';
             if (fieldIndex === 0) {
                 verticalAlign = 'vertical-align: top;';
             } else if (fieldIndex === 1 || fieldIndex === 3) {
                 verticalAlign = 'vertical-align: middle;';
-            } else if (fieldIndex === 17) {
+            } else if (fieldIndex === 14) {
                 // Status column - center align
                 textAlign = 'text-align: center;';
                 verticalAlign = 'vertical-align: middle;';
             }
             
+            // Add visual demarcation after Margin Capital (fieldIndex 13)
+            // Add horizontal border-top to the row starting from Status (fieldIndex 14)
+            // Border thickness matches spacing between trade columns (10px)
+            // Use CSS variable for theme compatibility (dark/light mode)
+            if (fieldIndex === 14 && isFirstTradeInGroup) { // Status row (first row after Margin Capital)
+                row.style.borderTop = '10px solid var(--border-color, #dee2e6)';
+            }
+            
             // Add left border to first trade in each group to visually separate groups
             const leftBorderStyle = isFirstTradeInGroup && groupIndex > 0 ? 'border-left: 2px solid #dee2e6 !important;' : '';
             
-            cellHTMLs.push(`<td style="${bgColor}; width: 112px; min-width: 112px; max-width: 112px; ${visibilityStyle} ${verticalAlign} ${textAlign} ${leftBorderStyle}">${cellContent}</td>`);
+            // Combine all styles including text color for dark mode
+            const cellStyle = `${bgColor} ${textColor} width: 112px; min-width: 112px; max-width: 112px; ${visibilityStyle} ${verticalAlign} ${textAlign} ${leftBorderStyle}`;
+            
+            cellHTMLs.push(`<td style="${cellStyle}">${cellContent}</td>`);
             
             isFirstTradeInGroup = false;
             });
         });
         
-        // Set all cells at once for better performance
-        row.innerHTML += cellHTMLs.join('');
+        // Build complete row HTML and set once for better performance
+        row.innerHTML = cellHTMLs.join('');
+        
+        // Apply fixed row height - 30px
+        row.style.height = '30px';
+        
+        // Apply fixed column width for first column (field names) - 105px (reduced from 150px for condensed layout)
+        const firstCell = row.querySelector('td');
+        if (firstCell) {
+            firstCell.style.width = '105px';
+            firstCell.style.minWidth = '105px';
+            firstCell.style.maxWidth = '105px';
+            firstCell.style.textAlign = 'center';
+            firstCell.style.whiteSpace = 'normal';
+            firstCell.style.wordWrap = 'break-word';
+            firstCell.style.verticalAlign = 'middle';
+            // Check if dark mode is active
+            const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
+            
+            // Use white background in light mode (original behavior), dark in dark mode
+            if (isDarkMode) {
+                firstCell.style.setProperty('background-color', 'var(--table-header-bg)', 'important');
+                firstCell.style.setProperty('background', 'var(--table-header-bg)', 'important');
+                firstCell.style.setProperty('color', 'var(--text-color)', 'important');
+                firstCell.style.setProperty('border-left', '1px solid var(--border-color)', 'important');
+                firstCell.style.setProperty('border-right', '2px solid var(--border-color)', 'important');
+                firstCell.style.setProperty('border-top', '1px solid var(--border-color)', 'important');
+                firstCell.style.setProperty('border-bottom', '1px solid var(--border-color)', 'important');
+            } else {
+                // Light mode: use white background (original behavior)
+                firstCell.style.setProperty('background-color', '#ffffff', 'important');
+                firstCell.style.setProperty('background', '#ffffff', 'important');
+                firstCell.style.setProperty('color', '#212529', 'important');
+                firstCell.style.setProperty('border-left', '1px solid #dee2e6', 'important');
+                firstCell.style.setProperty('border-right', '2px solid #dee2e6', 'important');
+                firstCell.style.setProperty('border-top', '1px solid #dee2e6', 'important');
+                firstCell.style.setProperty('border-bottom', '1px solid #dee2e6', 'important');
+            }
+            firstCell.style.setProperty('border-style', 'solid', 'important');
+            firstCell.style.setProperty('position', 'sticky', 'important');
+            firstCell.style.setProperty('left', '0', 'important');
+            firstCell.style.setProperty('z-index', '100', 'important');
+            firstCell.style.setProperty('isolation', 'isolate', 'important');
+            firstCell.style.setProperty('overflow', 'visible', 'important');
+            firstCell.classList.add('trades-first-column');
+            
+            // Create overlay element to cover scrolling columns
+            // position: sticky works as a positioned ancestor for absolute children
+            const overlay = document.createElement('div');
+            overlay.style.position = 'absolute';
+            overlay.style.top = '0';
+            overlay.style.right = '-6px';
+            overlay.style.bottom = '0';
+            overlay.style.width = '6px';
+            // Use CSS variable for background color to match table background
+            overlay.style.backgroundColor = 'var(--table-bg)';
+            overlay.style.zIndex = '101';
+            overlay.style.pointerEvents = 'none';
+            firstCell.appendChild(overlay);
+        }
+        
         fragment.appendChild(row);
     });
     
-    // Append all rows at once for better performance
-    tbody.appendChild(fragment);
+    // Use requestAnimationFrame to batch DOM updates and reduce reflows
+    requestAnimationFrame(() => {
+        // Append all rows at once for better performance
+        tbody.appendChild(fragment);
+        
+        console.log('Trades table update completed. Rows:', tbody.children.length);
+        
+        // Set table width based on total columns (fixed width)
+        setTableWidth();
+        
+        // Add fade-in animation to the table (optimized: reduced duration)
+        fadeIn(tbody, 200); // Reduced from 300ms to 200ms for faster feel
+    });
+}
+
+// Update first column styles in trades table when theme changes
+function updateTradesTableFirstColumnStyles() {
+    const tbody = document.getElementById('trades-table');
+    if (!tbody) return;
     
-    console.log('Trades table update completed. Rows:', tbody.children.length);
+    const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
+    const rows = tbody.querySelectorAll('tr');
     
-    // Set table width based on total columns (fixed width)
-    setTableWidth();
+    rows.forEach(row => {
+        const firstCell = row.querySelector('td:first-child');
+        if (firstCell && firstCell.classList.contains('trades-first-column')) {
+            if (isDarkMode) {
+                firstCell.style.setProperty('background-color', 'var(--table-header-bg)', 'important');
+                firstCell.style.setProperty('background', 'var(--table-header-bg)', 'important');
+                firstCell.style.setProperty('color', 'var(--text-color)', 'important');
+                firstCell.style.setProperty('border-left', '2px solid var(--border-color)', 'important');
+                firstCell.style.setProperty('border-right', '2px solid var(--border-color)', 'important');
+                firstCell.style.setProperty('border-top', '2px solid var(--border-color)', 'important');
+                firstCell.style.setProperty('border-bottom', '1px solid var(--border-color)', 'important');
+            } else {
+                firstCell.style.setProperty('background-color', '#ffffff', 'important');
+                firstCell.style.setProperty('background', '#ffffff', 'important');
+                firstCell.style.setProperty('color', '#212529', 'important');
+                firstCell.style.setProperty('border-left', '2px solid #dee2e6', 'important');
+                firstCell.style.setProperty('border-right', '2px solid #dee2e6', 'important');
+                firstCell.style.setProperty('border-top', '2px solid #dee2e6', 'important');
+                firstCell.style.setProperty('border-bottom', '1px solid #dee2e6', 'important');
+            }
+            
+            // Update the overlay element background color (if it exists)
+            // The overlay is a direct child div with absolute positioning
+            const overlay = Array.from(firstCell.children).find(child => 
+                child.tagName === 'DIV' && 
+                (child.style.position === 'absolute' || window.getComputedStyle(child).position === 'absolute')
+            );
+            if (overlay) {
+                // Use CSS variable to match table background
+                overlay.style.backgroundColor = 'var(--table-bg)';
+            }
+        }
+    });
 }
 
 function toggleTradeDateSort() {
     // Toggle sort direction
-    if (sortColumn === 'trade_date') {
+    if (sortColumn === 'date_trade_open' || sortColumn === 'trade_date') {
         // If already sorting by trade_date, toggle direction
         sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
     } else {
         // If not sorting by trade_date, set to trade_date with default desc
-        sortColumn = 'trade_date';
+        sortColumn = 'date_trade_open';
         sortDirection = 'desc';
     }
     
@@ -2579,12 +3505,12 @@ function toggleTradeDateSort() {
 
 function toggleCostBasisDateSort() {
     // Toggle sort direction (linked to trades table sort)
-    if (sortColumn === 'trade_date') {
-        // If already sorting by trade_date, toggle direction
+    if (sortColumn === 'date_trade_open' || sortColumn === 'trade_date') {
+        // If already sorting by date_trade_open, toggle direction
         sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
     } else {
-        // If not sorting by trade_date, set to trade_date with default desc
-        sortColumn = 'trade_date';
+        // If not sorting by date_trade_open, set to date_trade_open with default desc
+        sortColumn = 'date_trade_open';
         sortDirection = 'desc';
     }
     
@@ -2619,27 +3545,48 @@ function setTableWidth() {
 }
 
 function updateCostBasisTable(costBasisData) {
+    console.log('[updateCostBasisTable] Called with data:', costBasisData);
     const container = document.getElementById('cost-basis-table-container');
     const inlineContainer = document.getElementById('cost-basis-inline-container');
     
     const targetContainers = [container, inlineContainer].filter(c => c !== null);
+    console.log('[updateCostBasisTable] Target containers found:', targetContainers.length);
     
     if (!costBasisData || costBasisData.length === 0) {
-        targetContainers.forEach(c => {
-            c.innerHTML = `
-                <div class="text-center text-muted">
-                    <i class="fas fa-info-circle me-2"></i>
-                    No cost basis data available for the selected stock symbol.
-                </div>
-            `;
-        });
+        console.log('[updateCostBasisTable] No data');
+        // If a ticker filter is active, hide the table completely (no ticker cards)
+        // Otherwise, show empty message
+        if (isTickerSelected) {
+            console.log('[updateCostBasisTable] Ticker filter active with no results, hiding table');
+            targetContainers.forEach(c => {
+                c.innerHTML = ''; // Hide completely - no ticker cards
+            });
+        } else {
+            console.log('[updateCostBasisTable] No ticker filter, showing empty message');
+            targetContainers.forEach(c => {
+                c.innerHTML = `
+                    <div class="text-center text-muted">
+                        <i class="fas fa-info-circle me-2"></i>
+                        No cost basis data available.
+                    </div>
+                `;
+            });
+        }
         return;
     }
     
-    let html = '';
+    // Use array for better performance than string concatenation
+    const htmlParts = [];
     
     // Check if a ticker is selected by checking window.symbolFilter
     const isTickerSelected = window.symbolFilter && window.symbolFilter.trim() !== '';
+    
+    // Debug: Log all accounts in the data
+    console.log('[updateCostBasisTable] Total entries:', costBasisData.length);
+    if (isTickerSelected) {
+        const accountIds = costBasisData.map(d => ({ account_id: d.account_id, account_name: d.account_name, ticker: d.ticker }));
+        console.log('[updateCostBasisTable] Accounts in data:', accountIds);
+    }
     
     // Sort cost basis data based on whether ticker is selected
     const sortedCostBasisData = [...costBasisData].sort((a, b) => {
@@ -2656,8 +3603,11 @@ function updateCostBasisTable(costBasisData) {
             const tickerB = (b.ticker || '').toUpperCase();
             return tickerA.localeCompare(tickerB);
         } else {
-            // When ticker is selected, keep original order (already sorted by backend with Rule One first)
-            return 0;
+            // When ticker is selected, sort by account_id to ensure consistent order
+            // Rule One (9) first, then others
+            if (a.account_id === 9 && b.account_id !== 9) return -1;
+            if (a.account_id !== 9 && b.account_id === 9) return 1;
+            return (a.account_id || 0) - (b.account_id || 0);
         }
     });
     
@@ -2665,19 +3615,74 @@ function updateCostBasisTable(costBasisData) {
     const tickerTextColor = 'var(--ticker-card-color)';
     
     for (const tickerData of sortedCostBasisData) {
-        const { ticker, company_name, account_id, account_name, total_shares, total_cost_basis, total_cost_basis_per_share, trades } = tickerData;
+        let { ticker, company_name, account_id, account_name, total_shares, total_cost_basis, total_cost_basis_per_share, trades } = tickerData;
+        console.log('[updateCostBasisTable] Processing ticker:', ticker, 'trades:', trades?.length || 0);
+        
+        // If company_name is missing or equals ticker, fetch it on demand (async, non-blocking)
+        if ((!company_name || company_name === ticker) && ticker) {
+            // Fetch company name asynchronously and update the display when it arrives
+            getCompanyName(ticker).then(fetchedName => {
+                if (fetchedName && fetchedName !== ticker) {
+                    // Update the company name in the displayed card
+                    const container = document.getElementById('cost-basis-table-container') || 
+                                      document.getElementById('cost-basis-inline-container');
+                    if (container) {
+                        // Find the header card that contains this ticker
+                        const headerCards = container.querySelectorAll('h6.mb-0.text-center');
+                        for (const headerCard of headerCards) {
+                            const text = headerCard.textContent.trim();
+                            // Check if this card is for the current ticker (starts with ticker)
+                            if (text.startsWith(ticker + ' ') || text.startsWith(ticker + ' (')) {
+                                const accountDisplay = account_name ? ` (${account_name})` : '';
+                                headerCard.textContent = `${ticker} - ${fetchedName}${accountDisplay}`;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }).catch(err => {
+                // Silently fail - just use ticker without company name
+                console.log('[updateCostBasisTable] Could not fetch company name for', ticker, err);
+            });
+        }
+        
         const accountDisplay = account_name ? ` (${account_name})` : '';
+        const tradesCount = (trades && Array.isArray(trades) && trades.length) ? trades.length : 0;
+        const tradesCountStr = String(tradesCount || 0);
+        // Escape ticker for use in HTML data attribute
+        const tickerStr = String(ticker || '');
+        let escapedTicker = tickerStr.replace(/&/g, '&amp;');
+        escapedTicker = escapedTicker.replace(/'/g, '&#39;');
+        escapedTicker = escapedTicker.replace(/"/g, '&quot;');
+        
+        // Pre-compute formatted values to avoid nested template string parsing issues
+        const currencyOptions = {minimumFractionDigits: 2, maximumFractionDigits: 2};
+        const formatCurrency = (value) => {
+            const absValue = Math.abs(value);
+            const formatted = absValue.toLocaleString('en-US', currencyOptions);
+            return value < 0 ? '(' + '$' + formatted + ')' : '$' + formatted;
+        };
+        const formatNumber = (value) => {
+            const formatted = Math.abs(value).toLocaleString();
+            return value < 0 ? '(' + formatted + ')' : formatted;
+        };
+        const formattedTotalCostBasis = formatCurrency(total_cost_basis);
+        const formattedCostBasisPerShare = formatCurrency(total_cost_basis_per_share);
+        const formattedTotalShares = formatNumber(total_shares);
+        const costBasisColorStyle = total_cost_basis < 0 ? 'color: var(--danger-color);' : '';
+        const costBasisPerShareColorStyle = total_cost_basis_per_share < 0 ? 'color: var(--danger-color);' : '';
+        const totalSharesColorStyle = total_shares < 0 ? 'color: var(--danger-color);' : '';
         
         if (!isTickerSelected) {
             // Original layout when no ticker is selected
-            html += `
+            htmlParts.push(`
             <div class="mb-4">
                 <!-- Ticker and Summary Cards in one row when no ticker selected -->
                 <div class="row mb-2 g-2 align-items-center">
-                    <div style="flex: 0 0 42px !important; width: 42px !important; min-width: 42px !important; max-width: 42px !important;">
-                        <div class="card cost-basis-ticker-card" style="cursor: pointer; width: 42px !important; height: 42px !important; min-width: 42px !important; max-width: 42px !important; overflow: hidden !important; box-sizing: border-box !important; background-color: var(--card-bg); border-color: var(--border-color);" onclick="setUniversalTickerFilter('${ticker}')" title="Click to filter trades and cost basis by ${ticker}" onmouseover="this.style.backgroundColor='var(--light-color-alt)'" onmouseout="this.style.backgroundColor='var(--card-bg)'">
-                            <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box; padding: 0.2rem !important;">
-                                <h6 class="mb-0 cost-basis-ticker-text" style="font-size: 0.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; padding: 0; width: 100%; display: block; color: ${tickerTextColor};">
+                    <div style="flex: 0 0 50px !important; width: 50px !important; min-width: 50px !important; max-width: 50px !important;">
+                        <div class="card cost-basis-ticker-card" style="cursor: pointer; width: 50px !important; height: 32px !important; min-width: 50px !important; max-width: 50px !important; overflow: hidden !important; box-sizing: border-box !important; background-color: var(--card-bg); border: 1px solid var(--border-color) !important; outline: 1px solid var(--border-color) !important; outline-offset: -1px !important;" data-ticker="${escapedTicker}" data-action="filter-ticker" title="Click to filter trades and cost basis">
+                            <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box; padding: 0.05rem !important;">
+                                <h6 class="mb-0 cost-basis-ticker-text" style="font-size: 0.6125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; padding: 0; width: 100%; display: block; color: ${tickerTextColor};">
                                     ${ticker}
                                 </h6>
                             </div>
@@ -2686,48 +3691,48 @@ function updateCostBasisTable(costBasisData) {
                     <div style="flex: 0 0 42px !important; width: 42px !important; min-width: 42px !important; max-width: 42px !important;">
                         <div class="card" style="width: 42px !important; height: 42px !important; min-width: 42px !important; max-width: 42px !important; box-sizing: border-box !important; background-color: var(--card-bg); border-color: var(--border-color);">
                             <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box; padding: 0.2rem !important;">
-                                <h6 class="card-title mb-0" style="font-size: 0.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); line-height: 1.0;">Total Shares</h6>
-                                <p class="card-text mb-0" style="font-size: 0.6rem; color: var(--text-color); line-height: 1.1; ${total_shares < 0 ? 'color: var(--danger-color);' : ''}">${total_shares < 0 ? `(${Math.abs(total_shares).toLocaleString()})` : total_shares.toLocaleString()}</p>
+                                <h6 class="card-title mb-0" style="font-size: 0.6125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); line-height: 1.0;">Total Shares</h6>
+                                <p class="card-text mb-0" style="font-size: 0.6125rem; color: var(--text-color); line-height: 1.1; ${totalSharesColorStyle}">${formattedTotalShares}</p>
                             </div>
                         </div>
                     </div>
                     <div style="flex: 0 0 42px !important; width: 42px !important; min-width: 42px !important; max-width: 42px !important;">
                         <div class="card" style="width: 42px !important; height: 42px !important; min-width: 42px !important; max-width: 42px !important; box-sizing: border-box !important; background-color: var(--card-bg); border-color: var(--border-color);">
                             <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box; padding: 0.2rem !important;">
-                                <h6 class="card-title mb-0" style="font-size: 0.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); line-height: 1.0;">Total Cost Basis</h6>
-                                <p class="card-text mb-0" style="font-size: 0.6rem; color: var(--text-color); line-height: 1.1; ${total_cost_basis < 0 ? 'color: var(--danger-color);' : ''}">${total_cost_basis < 0 ? `($${Math.abs(total_cost_basis).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
+                                <h6 class="card-title mb-0" style="font-size: 0.6125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); line-height: 1.0;">Total Cost Basis</h6>
+                                <p class="card-text mb-0" style="font-size: 0.6125rem; color: var(--text-color); line-height: 1.1; ${costBasisColorStyle}">${formattedTotalCostBasis}</p>
                             </div>
                         </div>
                     </div>
                     <div style="flex: 0 0 42px !important; width: 42px !important; min-width: 42px !important; max-width: 42px !important;">
                         <div class="card" style="width: 42px !important; height: 42px !important; min-width: 42px !important; max-width: 42px !important; box-sizing: border-box !important; background-color: var(--card-bg); border-color: var(--border-color);">
                             <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box; padding: 0.2rem !important;">
-                                <h6 class="card-title mb-0" style="font-size: 0.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); line-height: 1.0;">Cost Basis/Share</h6>
-                                <p class="card-text mb-0" style="font-size: 0.6rem; color: var(--text-color); line-height: 1.1; ${total_cost_basis_per_share < 0 ? 'color: var(--danger-color);' : ''}">${total_cost_basis_per_share < 0 ? `($${Math.abs(total_cost_basis_per_share).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis_per_share.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
+                                <h6 class="card-title mb-0" style="font-size: 0.6125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); line-height: 1.0;">Cost Basis/Share</h6>
+                                <p class="card-text mb-0" style="font-size: 0.6125rem; color: var(--text-color); line-height: 1.1; ${costBasisPerShareColorStyle}">${formattedCostBasisPerShare}</p>
                             </div>
                         </div>
                     </div>
                     <div style="flex: 0 0 42px !important; width: 42px !important; min-width: 42px !important; max-width: 42px !important;">
                         <div class="card" style="width: 42px !important; height: 42px !important; min-width: 42px !important; max-width: 42px !important; box-sizing: border-box !important; background-color: var(--card-bg); border-color: var(--border-color);">
                             <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; overflow: hidden; box-sizing: border-box; padding: 0.2rem !important;">
-                                <h6 class="card-title mb-0" style="font-size: 0.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); line-height: 1.0;">Total Trades</h6>
-                                <p class="card-text mb-0" style="font-size: 0.6rem; color: var(--text-color); line-height: 1.1;">${trades.length}</p>
+                                <h6 class="card-title mb-0" style="font-size: 0.6125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); line-height: 1.0;">Total Trades</h6>
+                                <p class="card-text mb-0" style="font-size: 0.6125rem; color: var(--text-color); line-height: 1.1;">${tradesCountStr}</p>
                             </div>
                         </div>
                     </div>
                 </div>
-            `;
+            `);
         } else {
             // When ticker is selected, show header card and summary cards for each account
-            html += `
+            htmlParts.push(`
             <div class="mb-4">
                 <!-- First row: Ticker and Company Name card when ticker is selected -->
                 <div class="row mb-2 g-2 align-items-center">
                     <div class="col-12">
                         <div class="card" style="height: 42px; background-color: var(--card-bg); border-color: var(--border-color);">
                             <div class="card-body d-flex align-items-center justify-content-center" style="padding: 0.2rem !important;">
-                                <h6 class="mb-0 text-center" style="font-size: 0.4rem; font-weight: 600; color: var(--text-color);">
-                                    ${ticker} - ${company_name || ticker}${accountDisplay}
+                                <h6 class="mb-0 text-center" style="font-size: 0.875rem; font-weight: 600; color: var(--text-color);">
+                                    ${ticker}${company_name && company_name !== ticker ? ' - ' + company_name : ''}${accountDisplay}
                                 </h6>
                             </div>
                         </div>
@@ -2738,34 +3743,34 @@ function updateCostBasisTable(costBasisData) {
                     <div class="col-md-4 col-sm-4 col-12">
                         <div class="card" style="height: 42px; background-color: var(--card-bg); border-color: var(--border-color);">
                             <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; padding: 0.2rem !important;">
-                                <h6 class="card-title mb-0" style="font-size: 0.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); line-height: 1.0;">Total Shares</h6>
-                                <p class="card-text mb-0" style="font-size: 0.6rem; color: var(--text-color); line-height: 1.1; ${total_shares < 0 ? 'color: var(--danger-color);' : ''}">${total_shares < 0 ? `(${Math.abs(total_shares).toLocaleString()})` : total_shares.toLocaleString()}</p>
+                                <h6 class="card-title mb-0" style="font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); line-height: 1.0;">Total Shares</h6>
+                                <p class="card-text mb-0" style="font-size: 0.875rem; color: var(--text-color); line-height: 1.1; ${totalSharesColorStyle}">${formattedTotalShares}</p>
                             </div>
                         </div>
                     </div>
                     <div class="col-md-4 col-sm-4 col-12">
                         <div class="card" style="height: 42px; background-color: var(--card-bg); border-color: var(--border-color);">
                             <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; padding: 0.2rem !important;">
-                                <h6 class="card-title mb-0" style="font-size: 0.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); line-height: 1.0;">Total Cost Basis</h6>
-                                <p class="card-text mb-0" style="font-size: 0.6rem; color: var(--text-color); line-height: 1.1; ${total_cost_basis < 0 ? 'color: var(--danger-color);' : ''}">${total_cost_basis < 0 ? `($${Math.abs(total_cost_basis).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
+                                <h6 class="card-title mb-0" style="font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); line-height: 1.0;">Total Cost Basis</h6>
+                                <p class="card-text mb-0" style="font-size: 0.875rem; color: var(--text-color); line-height: 1.1; ${costBasisColorStyle}">${formattedTotalCostBasis}</p>
                             </div>
                         </div>
                     </div>
                     <div class="col-md-4 col-sm-4 col-12">
                         <div class="card" style="height: 42px; background-color: var(--card-bg); border-color: var(--border-color);">
                             <div class="card-body text-center d-flex flex-column justify-content-center" style="height: 100%; padding: 0.2rem !important;">
-                                <h6 class="card-title mb-0" style="font-size: 0.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); line-height: 1.0;">Cost Basis/Share</h6>
-                                <p class="card-text mb-0" style="font-size: 0.6rem; color: var(--text-color); line-height: 1.1; ${total_cost_basis_per_share < 0 ? 'color: var(--danger-color);' : ''}">${total_cost_basis_per_share < 0 ? `($${Math.abs(total_cost_basis_per_share).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})})` : `$${total_cost_basis_per_share.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`}</p>
+                                <h6 class="card-title mb-0" style="font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); line-height: 1.0;">Cost Basis/Share</h6>
+                                <p class="card-text mb-0" style="font-size: 0.875rem; color: var(--text-color); line-height: 1.1; ${costBasisPerShareColorStyle}">${formattedCostBasisPerShare}</p>
                             </div>
                         </div>
                     </div>
                 </div>
-            `;
+            `);
         }
         
         // Render transactions table for each ticker data entry (each account separately)
-        const tableTrades = trades;
-        html += `
+        const tableTrades = trades || [];
+        htmlParts.push(`
                 
                 <!-- Transactions Table -->
                 <div class="table-responsive">
@@ -2774,7 +3779,7 @@ function updateCostBasisTable(costBasisData) {
                             <tr>
                                 <th class="text-center align-middle" style="width: 8%; cursor: pointer;" onclick="toggleCostBasisDateSort()" title="Click to sort by trade date">
                                     Trade Date
-                                    ${sortColumn === 'trade_date' ? (sortDirection === 'asc' ? ' <i class="fas fa-sort-up"></i>' : ' <i class="fas fa-sort-down"></i>') : ' <i class="fas fa-sort" style="opacity: 0.3;"></i>'}
+                                    ${(sortColumn === 'date_trade_open' || sortColumn === 'trade_date') ? (sortDirection === 'asc' ? ' <i class="fas fa-sort-up"></i>' : ' <i class="fas fa-sort-down"></i>') : ' <i class="fas fa-sort" style="opacity: 0.3;"></i>'}
                                 </th>
                                 <th class="text-start align-middle" style="width: 25%;">Trade Description</th>
                                 <th class="text-end align-middle">Shares</th>
@@ -2785,16 +3790,16 @@ function updateCostBasisTable(costBasisData) {
                             </tr>
                         </thead>
                         <tbody>
-            `;
+            `);
             
             // Sort trades by transaction_date based on sortColumn and sortDirection from trades table
             // By default, link to the same sort as trades table
-            const sortedTableTrades = [...tableTrades].sort((a, b) => {
-                const aDate = new Date(a.transaction_date || a.trade_date || '');
-                const bDate = new Date(b.transaction_date || b.trade_date || '');
+            const sortedTableTrades = Array.isArray(tableTrades) ? [...tableTrades].sort((a, b) => {
+                const aDate = new Date(a.transaction_date || a.date_trade_open || a.trade_date || '');
+                const bDate = new Date(b.transaction_date || b.date_trade_open || b.trade_date || '');
                 
                 // Use the same sort state as trades table
-                if (sortColumn === 'trade_date') {
+                if (sortColumn === 'date_trade_open' || sortColumn === 'trade_date') {
                     if (sortDirection === 'asc') {
                         return aDate - bDate;
                     } else {
@@ -2804,10 +3809,13 @@ function updateCostBasisTable(costBasisData) {
                     // Default: sort by transaction_date ascending (oldest first) for running totals
                     return aDate - bDate;
                 }
-            });
+            }) : [];
             
             // Add each trade as a row
-            sortedTableTrades.forEach(trade => {
+            if (sortedTableTrades.length === 0) {
+                htmlParts.push('<tr><td colspan="7" class="text-center text-muted">No trades found</td></tr>');
+            } else {
+                sortedTableTrades.forEach(trade => {
                 // Format numbers with parentheses for negative values
                 const formatNumber = (value, isCurrency = false) => {
                     if (value === null || value === undefined) return '';
@@ -2846,24 +3854,33 @@ function updateCostBasisTable(costBasisData) {
                 const tradeType = trade.trade_type || trade.trade_description || 'ROCT PUT';
                 const status = trade.trade_status || 'open';
                 let bgColor = '';
+                let textColor = '';
+                
+                // Check if dark mode is active
+                const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
                 
                 if (status === 'roll') {
                     bgColor = 'background-color: #FFF2CC;';
+                    if (isDarkMode) textColor = 'color: #212529;'; // Dark text for light yellow background
                 } else if (status === 'expired' && tradeType.toLowerCase().includes('put')) {
                     bgColor = 'background-color: #C6E0B4;';
+                    if (isDarkMode) textColor = 'color: #212529;'; // Dark text for light green background
                 } else if (status === 'assigned' && tradeType.toLowerCase().includes('put')) {
                     bgColor = 'background-color: #A9D08F;';
+                    if (isDarkMode) textColor = 'color: #212529;'; // Dark text for green background
                 } else if (status === 'assigned' && tradeType.toLowerCase().includes('call')) {
                     bgColor = 'background-color: #9BC2E6;';
+                    if (isDarkMode) textColor = 'color: #212529;'; // Dark text for light blue background
                 } else if (status === 'expired' && tradeType.toLowerCase().includes('call')) {
                     bgColor = 'background-color: #DEEAF7;';
+                    if (isDarkMode) textColor = 'color: #212529;'; // Dark text for light blue background
                 }
                 
-                const rowStyle = bgColor ? `style="${bgColor}"` : '';
+                const rowStyle = bgColor || textColor ? `style="${bgColor} ${textColor}"` : '';
                 
-                html += `
+                htmlParts.push(`
                     <tr ${rowStyle}>
-                        <td class="text-center align-middle" style="white-space: nowrap; padding: 0.35rem 0.525rem;">${formatDate(trade.trade_date)}</td>
+                        <td class="text-center align-middle" style="white-space: nowrap; padding: 0.35rem 0.525rem;">${formatDate(trade.transaction_date || trade.date_trade_open || trade.trade_date)}</td>
                         <td class="text-start align-middle" style="width: 25%; word-wrap: break-word; overflow-wrap: break-word; padding: 0.35rem 0.525rem;">${trade.trade_description || ''}</td>
                         <td class="text-end align-middle ${sharesClass}" style="${isSharesZero ? 'color: transparent;' : ''}">${formatShares(trade.shares || 0)}</td>
                         <td class="text-end align-middle ${costClass}" style="${isCostZero ? 'color: transparent;' : ''}">${formatNumber(trade.cost_per_share || 0)}</td>
@@ -2871,20 +3888,69 @@ function updateCostBasisTable(costBasisData) {
                         <td class="text-end align-middle ${runningBasisClass}">${formatNumber(trade.running_basis)}</td>
                         <td class="text-end align-middle ${runningBasisPerShareClass}">${formatNumber(trade.running_basis_per_share)}</td>
                     </tr>
-                `;
-            });
+                `);
+                });
+            }
         
-        html += `
+        htmlParts.push(`
                         </tbody>
                     </table>
                 </div>
             </div>
-        `;
+        `);
     }
     
-    // Set HTML for both containers
-    targetContainers.forEach(c => {
-        c.innerHTML = html;
+    // Join all HTML parts at once for better performance
+    const html = htmlParts.join('');
+    
+    // Set HTML for both containers - use requestAnimationFrame for smoother rendering
+    console.log('[updateCostBasisTable] Setting HTML, length:', html.length);
+    
+    // Use requestAnimationFrame to ensure DOM updates happen in a single batch
+    requestAnimationFrame(() => {
+        targetContainers.forEach(c => {
+            // Batch DOM operations: set HTML in one operation (clears and sets)
+            // Use DocumentFragment for better performance when possible, but for large HTML strings, innerHTML is faster
+            c.innerHTML = html;
+            console.log('[updateCostBasisTable] HTML set for container:', c.id);
+            
+            // Add event delegation for ticker filter clicks and hover effects
+            c.addEventListener('click', (e) => {
+                const card = e.target.closest('[data-action="filter-ticker"]');
+                if (card) {
+                    const ticker = card.getAttribute('data-ticker');
+                    if (ticker) {
+                        setUniversalTickerFilter(ticker);
+                    }
+                }
+            });
+            
+            // Add hover effects for ticker cards
+            c.addEventListener('mouseover', (e) => {
+                const card = e.target.closest('[data-action="filter-ticker"]');
+                if (card) {
+                    card.style.backgroundColor = 'var(--light-color-alt)';
+                }
+            });
+            
+            c.addEventListener('mouseout', (e) => {
+                const card = e.target.closest('[data-action="filter-ticker"]');
+                if (card) {
+                    card.style.backgroundColor = 'var(--card-bg)';
+                }
+            });
+            
+            // Add fade-in animation to cards after a brief delay to ensure DOM is ready
+            requestAnimationFrame(() => {
+                const cards = c.querySelectorAll('.card');
+                if (cards.length > 0) {
+                    fadeInElements(cards, 200); // Optimized: Reduced from 300ms to 200ms
+                } else {
+                    // If no cards, fade in the container itself
+                    fadeIn(c, 200); // Optimized: Reduced from 300ms to 200ms
+                }
+            });
+        });
     });
     
     // Set dynamic height to show exactly 10 rows after table is rendered
@@ -2958,6 +4024,38 @@ function setCostBasisTableHeight() {
 // ============================================================================
 // SYMBOL FILTERING FUNCTIONS
 // ============================================================================
+
+// Event delegation handler for clickable-symbol elements
+function handleSymbolClick(e) {
+    const symbolElement = e.target.closest('.clickable-symbol');
+    if (symbolElement) {
+        const symbol = symbolElement.getAttribute('data-symbol');
+        if (symbol) {
+            filterBySymbol(symbol);
+            return;
+        }
+    }
+    
+    // Handle cost basis symbol selection
+    const costBasisSymbol = e.target.closest('[data-action="select-cost-basis-symbol"]');
+    if (costBasisSymbol) {
+        const symbol = costBasisSymbol.getAttribute('data-symbol');
+        if (symbol) {
+            selectCostBasisSymbol(symbol);
+            return;
+        }
+    }
+    
+    // Handle top symbol links
+    const topSymbolLink = e.target.closest('.top-symbol-link');
+    if (topSymbolLink) {
+        const symbol = topSymbolLink.getAttribute('data-symbol');
+        if (symbol) {
+            filterByTopSymbol(symbol);
+            return;
+        }
+    }
+}
 
 function filterBySymbol(symbol) {
     // Use the universal ticker filter instead of the old separate filters
@@ -3115,23 +4213,69 @@ function showAllSymbols(data = null) {
     // Check if dark mode is active - use CSS variable that changes with theme
     const tickerTextColor = 'var(--ticker-card-color)';
     
-    let symbolsHtml = '<div class="row">';
+    // Calculate width for 4-character ticker (condensed layout)
+    // Using 50px to accommodate padding and ensure 4 characters fit comfortably
+    const cardWidth = '50px';
+    const cardHeight = '32px';
+    
+    // Use flexbox with wrap for responsive layout
+    let symbolsHtml = `<div style="display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: flex-start;">`;
     allTickers.forEach(ticker => {
+        // Escape ticker for use in data attribute
+        const tickerStr = String(ticker || '');
+        const escapedTickerForSymbol = tickerStr.replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
         symbolsHtml += `
-            <div class="col-auto mb-2">
-                <div class="card symbol-card" onclick="selectCostBasisSymbol('${ticker}')" style="cursor: pointer; min-width: fit-content;">
-                    <div class="card-body text-center d-flex align-items-center justify-content-center" style="padding: 0.35rem !important;">
-                        <h6 class="card-title mb-0" style="font-size: 0.56rem; white-space: nowrap; margin: 0; color: ${tickerTextColor};">${ticker}</h6>
-                    </div>
+            <div class="card symbol-card" data-symbol="${escapedTickerForSymbol}" data-action="select-cost-basis-symbol" 
+                 style="cursor: pointer; 
+                        width: ${cardWidth} !important; 
+                        min-width: ${cardWidth} !important; 
+                        max-width: ${cardWidth} !important;
+                        height: ${cardHeight} !important;
+                        min-height: ${cardHeight} !important;
+                        box-sizing: border-box !important;
+                        background-color: var(--card-bg); 
+                        border: 1px solid var(--border-color) !important;
+                        outline: 1px solid var(--border-color) !important;
+                        outline-offset: -1px !important;"
+                 title="Click to filter trades and cost basis by ${ticker}">
+                <div class="card-body text-center d-flex align-items-center justify-content-center" 
+                     style="padding: 0.05rem !important; height: 100%; box-sizing: border-box;">
+                    <h6 class="card-title mb-0" style="font-size: 0.6125rem; white-space: nowrap; margin: 0; color: ${tickerTextColor}; overflow: hidden; text-overflow: ellipsis;">${ticker}</h6>
                 </div>
             </div>
         `;
     });
     symbolsHtml += '</div>';
     
-    // Set HTML for both containers
+    // Set HTML for both containers and add event delegation
     targetContainers.forEach(c => {
         c.innerHTML = symbolsHtml;
+        
+        // Add event delegation for symbol card clicks and hover effects
+        c.addEventListener('click', (e) => {
+            const symbolCard = e.target.closest('[data-action="select-cost-basis-symbol"]');
+            if (symbolCard) {
+                const symbol = symbolCard.getAttribute('data-symbol');
+                if (symbol) {
+                    selectCostBasisSymbol(symbol);
+                }
+            }
+        });
+        
+        // Add hover effects for symbol cards
+        c.addEventListener('mouseover', (e) => {
+            const card = e.target.closest('[data-action="select-cost-basis-symbol"]');
+            if (card) {
+                card.style.backgroundColor = 'var(--light-color-alt)';
+            }
+        });
+        
+        c.addEventListener('mouseout', (e) => {
+            const card = e.target.closest('[data-action="select-cost-basis-symbol"]');
+            if (card) {
+                card.style.backgroundColor = 'var(--card-bg)';
+            }
+        });
     });
 }
 
@@ -3155,7 +4299,7 @@ function hideCostBasisTable() {
 async function editTrade(tradeId) {
     try {
         // Fetch the trade data
-        const response = await fetch(`/api/trades/${tradeId}`);
+        const response = await apiFetch(`/api/trades/${tradeId}`);
         const trade = await response.json();
         
         if (!trade) {
@@ -3219,7 +4363,9 @@ async function deleteTrade(tradeId) {
     
     // For saved trades, call the backend API
     try {
-        const response = await fetch(`/api/trades/${tradeId}`, { method: 'DELETE' });
+        const response = await apiFetch(`/api/trades/${tradeId}`, { 
+            method: 'DELETE' 
+        });
         const result = await response.json();
         
         if (result.success) {
@@ -3239,15 +4385,42 @@ async function deleteTrade(tradeId) {
 
 async function updateTradeStatus(tradeId, newStatus) {
     try {
-        const response = await fetch(`/api/trades/${tradeId}/status`, {
+        const response = await apiFetch(`/api/trades/${tradeId}/status`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: newStatus })
+            body: { status: newStatus }
         });
         
         const result = await response.json();
         
         if (result.success) {
+            // Update the trade object in memory
+            const trade = trades.find(t => t.id === tradeId);
+            if (trade) {
+                trade.trade_status = newStatus;
+            }
+            
+            // Update roll date and closing debit fields immediately based on new status
+            // (The backend already sets closing_debit to 0.00 when status is not roll/closed)
+            const tbody = document.getElementById('trades-table');
+            if (tbody) {
+                const rows = tbody.querySelectorAll('tr');
+                const isRollOrClosed = newStatus.toLowerCase() === 'roll' || newStatus.toLowerCase() === 'closed';
+                
+                rows.forEach(row => {
+                    // Find roll date input (fieldIndex 15)
+                    const rollDateInput = row.querySelector(`input[data-field="date_trade_rolled"][data-trade-id="${tradeId}"]`);
+                    if (rollDateInput) {
+                        rollDateInput.disabled = !isRollOrClosed;
+                    }
+                    
+                    // Find closing debit field (fieldIndex 16) - may be input or span
+                    const closingDebitInput = row.querySelector(`input[data-field="closing_debit"][data-trade-id="${tradeId}"]`);
+                    if (closingDebitInput) {
+                        closingDebitInput.disabled = !isRollOrClosed;
+                    }
+                });
+            }
+            
             // If a new trade was created (roll status), handle it specially
             if (result.new_trade_id) {
                 // Reload trades to get the new trade
@@ -3291,9 +4464,15 @@ function limitToTwoDecimals(input) {
             // Format to 2 decimal places
             const formatted = parseFloat(value).toFixed(2);
             input.value = formatted;
-            // Restore cursor position (adjust if needed)
-            const newCursorPos = Math.min(cursorPos - 1, formatted.length);
-            input.setSelectionRange(newCursorPos, newCursorPos);
+            // Restore cursor position (adjust if needed) - only for text inputs
+            if (input.type === 'text') {
+                const newCursorPos = Math.min(cursorPos - 1, formatted.length);
+                try {
+                    input.setSelectionRange(newCursorPos, newCursorPos);
+                } catch (e) {
+                    // Ignore errors for number inputs
+                }
+            }
         }
     }
 }
@@ -3369,23 +4548,73 @@ function autoSaveTradeField(tradeId, field, value) {
         // For new trades, just update the trade object in memory
         const trade = trades.find(t => t.id === tradeId);
         if (trade) {
+            // Track if we need to recalculate DTE
+            let needsDTERecalc = false;
+            let needsTableRefresh = false;
+            
             // Update the field in memory
             if (field === 'ticker') {
                 trade.ticker = value.toUpperCase();
-            } else if (field === 'trade_date') {
-                trade.trade_date = value;
+            } else if (field === 'date_trade_open' || field === 'trade_date') {
+                trade.date_trade_open = value;
+                // Keep trade_date for backward compatibility during transition
+                if (trade.trade_date !== undefined) {
+                    trade.trade_date = value;
+                }
+                needsDTERecalc = true;
+                needsTableRefresh = true;
             } else if (field === 'expiration_date') {
                 trade.expiration_date = value;
+                needsDTERecalc = true;
+                needsTableRefresh = true;
             } else if (field === 'current_price') {
                 trade.current_price = parseFloat(value) || 0;
             } else if (field === 'strike_price') {
                 trade.strike_price = parseFloat(value) || 0;
+                needsTableRefresh = true; // Affects risk capital, margin capital, RORC, ARORC
             } else if (field === 'credit_debit') {
                 trade.credit_debit = parseFloat(value) || 0;
+                needsTableRefresh = true; // Affects net credit, risk capital, margin capital, RORC, ARORC
             } else if (field === 'num_of_contracts') {
                 trade.num_of_contracts = parseInt(value) || 1;
+                // Update num_of_shares for options trades
+                const tradeType = trade.trade_type || '';
+                const baseTradeType = tradeType.includes(' ') ? tradeType.split(' ', 1)[1] : tradeType;
+                if (baseTradeType !== 'BTO' && baseTradeType !== 'STC') {
+                    trade.num_of_shares = trade.num_of_contracts * 100;
+                }
+                needsTableRefresh = true; // Affects net credit total, margin capital, shares
             } else if (field === 'account_id') {
                 trade.account_id = parseInt(value) || 9;
+            } else if (field === 'closing_debit') {
+                trade.closing_debit = parseFloat(value) || 0;
+                // Calculate total_debit = closing_debit * num_of_shares
+                const numOfShares = trade.num_of_shares || (trade.num_of_contracts * 100);
+                trade.total_debit = trade.closing_debit * numOfShares;
+                needsTableRefresh = true; // Affects total_debit display
+            } else if (field === 'date_trade_rolled') {
+                trade.date_trade_rolled = value;
+                needsTableRefresh = true; // May affect child trade calculations
+            } else if (field === 'notes') {
+                trade.notes = value;
+            }
+            
+            // Recalculate DTE if needed
+            if (needsDTERecalc && trade.expiration_date && trade.date_trade_open) {
+                trade.days_to_expiration = calculateDaysToExpiration(trade.expiration_date, trade.date_trade_open);
+            }
+            
+            // Refresh table to update calculated fields (net credit total, margin capital, ARORC)
+            if (needsTableRefresh) {
+                // Use setTimeout to debounce rapid field updates
+                const refreshKey = `refresh_${tradeId}`;
+                if (autoSaveTimeouts[refreshKey]) {
+                    clearTimeout(autoSaveTimeouts[refreshKey]);
+                }
+                autoSaveTimeouts[refreshKey] = setTimeout(() => {
+                    updateTradesTable();
+                    delete autoSaveTimeouts[refreshKey];
+                }, 300);
             }
             
             // If ticker changed, just update in memory
@@ -3412,10 +4641,9 @@ function autoSaveTradeField(tradeId, field, value) {
 
 async function updateTradeField(tradeId, field, value, reloadTable = true) {
     try {
-        const response = await fetch(`/api/trades/${tradeId}/field`, {
+        const response = await apiFetch(`/api/trades/${tradeId}/field`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ field: field, value: value })
+            body: { field: field, value: value }
         });
         
         const result = await response.json();
@@ -3436,14 +4664,19 @@ async function updateTradeField(tradeId, field, value, reloadTable = true) {
                     if (field === 'expiration_date') {
                         trades[tradeIndex].expiration_date = value;
                         // Recalculate DTE
-                        if (trades[tradeIndex].trade_date) {
-                            const newDTE = calculateDaysToExpiration(value, trades[tradeIndex].trade_date);
+                        const tradeDateForDTE = trades[tradeIndex].date_trade_open || trades[tradeIndex].trade_date;
+                        if (tradeDateForDTE) {
+                            const newDTE = calculateDaysToExpiration(value, tradeDateForDTE);
                             trades[tradeIndex].days_to_expiration = newDTE;
                             // Update DTE cell in the table
                             updateDTECell(tradeId, value);
                         }
-                    } else if (field === 'trade_date') {
-                        trades[tradeIndex].trade_date = value;
+                    } else if (field === 'date_trade_open' || field === 'trade_date') {
+                        trades[tradeIndex].date_trade_open = value;
+                        // Keep trade_date for backward compatibility during transition
+                        if (trades[tradeIndex].trade_date !== undefined) {
+                            trades[tradeIndex].trade_date = value;
+                        }
                         // Recalculate DTE
                         if (trades[tradeIndex].expiration_date) {
                             const newDTE = calculateDaysToExpiration(trades[tradeIndex].expiration_date, value);
@@ -3451,6 +4684,9 @@ async function updateTradeField(tradeId, field, value, reloadTable = true) {
                             // Update DTE cell in the table
                             updateDTECell(tradeId, trades[tradeIndex].expiration_date);
                         }
+                        // Trade date affects ARORC (since ARORC = (365 / DTE) * RORC)
+                        // Update ARORC cell after DTE is recalculated
+                        updateTradeCell(tradeId, field, value, trades[tradeIndex]);
                     } else if (field === 'ticker') {
                         trades[tradeIndex].ticker = value.toUpperCase();
                         // Ticker change requires full reload to update symbol/type display
@@ -3461,15 +4697,42 @@ async function updateTradeField(tradeId, field, value, reloadTable = true) {
                         return; // Exit early since we're reloading
                     } else if (field === 'strike_price') {
                         trades[tradeIndex].strike_price = parseFloat(value) || 0;
+                        // Strike price affects risk capital, margin capital, RORC, ARORC
+                        // These will be updated in updateTradeCell
                     } else if (field === 'credit_debit') {
                         trades[tradeIndex].credit_debit = parseFloat(value) || 0;
+                        // Credit/debit affects net credit, risk capital, margin capital, RORC, ARORC
+                        // These will be updated in updateTradeCell
                     } else if (field === 'current_price') {
                         trades[tradeIndex].current_price = parseFloat(value) || 0;
                     } else if (field === 'num_of_contracts') {
                         trades[tradeIndex].num_of_contracts = parseInt(value) || 1;
+                        // Contracts change affects shares, net credit total, and margin capital
+                        // These will be updated in updateTradeCell
+                    } else if (field === 'date_trade_rolled') {
+                        trades[tradeIndex].date_trade_rolled = value;
+                        // When parent's date_trade_rolled changes, recalculate all child trades' DTE and ARORC
+                        const childTrades = trades.filter(t => t.trade_parent_id === tradeId);
+                        childTrades.forEach(childTrade => {
+                            // Recalculate DTE for child trade using parent's date_trade_rolled
+                            const childTradeDate = childTrade.date_trade_open || childTrade.trade_date;
+                            if (childTradeDate && value) {
+                                const newDTE = calculateDaysToExpiration(value, childTradeDate);
+                                childTrade.days_to_expiration = newDTE;
+                                // Update DTE cell
+                                const dteCell = document.querySelector(`[data-field="dte"][data-trade-id="${childTrade.id}"]`);
+                                if (dteCell) {
+                                    dteCell.textContent = newDTE.toString();
+                                }
+                                // Recalculate ARORC for child trade
+                                updateTradeCell(childTrade.id, 'date_trade_rolled', value, childTrade);
+                            }
+                        });
                     }
                     // Update the table cell without full reload
-                    updateTradeCell(tradeId, field, value);
+                    // This will also update dependent calculated fields (shares, net credit total, margin capital, RORC, ARORC)
+                    // Pass the updated trade object to ensure calculations use latest values
+                    updateTradeCell(tradeId, field, value, trades[tradeIndex]);
                     
                     // Always reload cost_basis to reflect backend updates to cash_flows and cost_basis
                     // Use await to ensure it completes before continuing
@@ -3487,7 +4750,7 @@ async function updateTradeField(tradeId, field, value, reloadTable = true) {
 }
 
 // Update a single cell in the table without full reload
-function updateTradeCell(tradeId, field, value) {
+function updateTradeCell(tradeId, field, value, updatedTrade = null) {
     // Find all cells with this trade ID and field
     const cells = document.querySelectorAll(`[data-trade-id="${tradeId}"][data-field="${field}"]`);
     cells.forEach(cell => {
@@ -3506,7 +4769,7 @@ function updateTradeCell(tradeId, field, value) {
             if (trade) {
                 updateDTECell(tradeId, value);
             }
-        } else if (field === 'trade_date') {
+        } else if (field === 'date_trade_open' || field === 'trade_date') {
             // Update date input (can be date or text type)
             if (cell.tagName === 'INPUT') {
                 if (cell.type === 'date') {
@@ -3520,7 +4783,7 @@ function updateTradeCell(tradeId, field, value) {
             // The trade object should already be updated with the new trade_date
             const trade = trades.find(t => t.id === tradeId);
             if (trade && trade.expiration_date) {
-                // Use the updated trade_date from memory (which was just updated)
+                // Use the updated date_trade_open from memory (which was just updated)
                 updateDTECell(tradeId, trade.expiration_date);
             }
         } else if (field === 'ticker') {
@@ -3533,11 +4796,13 @@ function updateTradeCell(tradeId, field, value) {
             if (cell.tagName === 'INPUT' && cell.type === 'number') {
                 cell.value = parseFloat(value).toFixed(2);
             }
+            // Strike price affects risk capital, margin capital, RORC, ARORC
         } else if (field === 'credit_debit') {
             // Update credit input
             if (cell.tagName === 'INPUT' && cell.type === 'number') {
                 cell.value = parseFloat(value).toFixed(2);
             }
+            // Credit/debit affects net credit, risk capital, margin capital, RORC, ARORC
         } else if (field === 'current_price') {
             // Update current price input
             if (cell.tagName === 'INPUT' && cell.type === 'number') {
@@ -3551,16 +4816,271 @@ function updateTradeCell(tradeId, field, value) {
         }
     });
     
-    // Update calculated fields (shares, DTE, etc.) in the same row
-    const trade = trades.find(t => t.id === tradeId);
-    if (trade) {
-        // Update shares cell (calculated from contracts)
-        const row = cells[0]?.closest('tr');
-        if (row) {
-            const sharesCell = row.querySelector('[data-field="shares"]') || 
-                             Array.from(row.cells).find(cell => cell.textContent.includes((trade.num_of_contracts * 100).toString()));
-            if (sharesCell && field === 'num_of_contracts') {
-                sharesCell.textContent = (trade.num_of_contracts * 100).toString();
+    // Update calculated fields when contracts, strike_price, credit_debit, expiration_date, or closing_debit change
+    // Use updatedTrade if provided (from updateTradeField), otherwise find from trades array
+    const trade = updatedTrade || trades.find(t => t.id === tradeId);
+    
+    // Check if this field affects calculated values
+    const affectsCalculations = field === 'num_of_contracts' || field === 'strike_price' || 
+                                 field === 'credit_debit' || field === 'expiration_date' || 
+                                 field === 'date_trade_open' || field === 'trade_date' ||
+                                 field === 'closing_debit';
+    
+    // Handle closing_debit update separately
+    if (trade && field === 'closing_debit') {
+        const closingDebit = parseFloat(value) || 0;
+        const numOfShares = trade.num_of_shares || (trade.num_of_contracts * 100);
+        const totalDebit = closingDebit * numOfShares;
+        
+        // Update total_debit cell
+        const tbody = document.getElementById('trades-table');
+        if (tbody) {
+            const tradeIdStr = String(tradeId);
+            const totalDebitCell = tbody.querySelector(`[data-field="total_debit"][data-trade-id="${tradeIdStr}"]`);
+            if (totalDebitCell) {
+                totalDebitCell.textContent = '$' + totalDebit.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            }
+        }
+    }
+    
+    if (trade && affectsCalculations) {
+        // Use the updated value from the parameter, not the trade object (which might not be updated yet)
+        let updatedContracts = trade.num_of_contracts || 1;
+        let updatedStrike = trade.strike_price || 0;
+        let updatedCredit = trade.credit_debit || trade.premium || 0;
+        
+        if (field === 'num_of_contracts') {
+            updatedContracts = parseInt(value) || 1;
+            // Update num_of_shares for options trades
+            const tradeType = trade.trade_type || '';
+            const baseTradeType = tradeType.includes(' ') ? tradeType.split(' ', 1)[1] : tradeType;
+            if (baseTradeType !== 'BTO' && baseTradeType !== 'STC') {
+                trade.num_of_shares = updatedContracts * 100;
+            }
+        } else if (field === 'strike_price') {
+            updatedStrike = parseFloat(value) || 0;
+        } else if (field === 'credit_debit') {
+            updatedCredit = parseFloat(value) || 0;
+        }
+        
+        // Recalculate all dependent fields using the same formulas as updateTradesTable
+        const tradeCommission = trade.commission_per_share !== null && trade.commission_per_share !== undefined ? trade.commission_per_share : 0.0;
+        const premium = updatedCredit;
+        
+        // Always recalculate net_credit_per_share when credit_debit changes, otherwise use database value
+        let netCreditPerShare;
+        if (field === 'credit_debit') {
+            netCreditPerShare = premium - tradeCommission;
+        } else {
+            // Use database value if available, otherwise calculate
+            netCreditPerShare = trade.net_credit_per_share !== null && trade.net_credit_per_share !== undefined 
+                ? trade.net_credit_per_share 
+                : (premium - tradeCommission);
+        }
+        
+        // Use stored num_of_shares if available, otherwise calculate
+        const shares = trade.num_of_shares !== null && trade.num_of_shares !== undefined 
+            ? trade.num_of_shares 
+            : (updatedContracts * 100);
+        
+        // Calculate cumulative net credit total for roll trades
+        // First, update the trade object with the new values for accurate calculation
+        const tempTrade = {...trade};
+        if (field === 'num_of_contracts') {
+            tempTrade.num_of_contracts = updatedContracts;
+        } else if (field === 'strike_price') {
+            tempTrade.strike_price = updatedStrike;
+        } else if (field === 'credit_debit') {
+            tempTrade.credit_debit = updatedCredit;
+            tempTrade.net_credit_per_share = netCreditPerShare;
+        }
+        const cumulativeNetCreditTotal = calculateCumulativeNetCredit(tempTrade, trades);
+        const netCreditTotal = cumulativeNetCreditTotal;
+        
+        // Always recalculate risk_capital when strike_price or credit_debit changes
+        // Risk Capital = Strike Price - Net Credit Per Share
+        let riskCapital;
+        if (field === 'strike_price' || field === 'credit_debit') {
+            riskCapital = updatedStrike - netCreditPerShare;
+        } else {
+            // Use database value if available, otherwise calculate
+            riskCapital = trade.risk_capital_per_share !== null && trade.risk_capital_per_share !== undefined 
+                ? trade.risk_capital_per_share 
+                : (updatedStrike - netCreditPerShare);
+        }
+        
+        // Always recalculate margin_capital when contracts, strike_price, or credit_debit changes
+        // Margin Capital = Risk Capital * Shares
+        const marginCapital = riskCapital * shares;
+        
+        // Calculate cumulative net credit per share for RORC calculation (for roll trades)
+        const cumulativeNetCreditPerShare = shares > 0 ? (cumulativeNetCreditTotal / shares) : netCreditPerShare;
+        
+        // Calculate RORC: (Cumulative Net Credit Per Share / Risk Capital) * 100
+        // RORC is a percentage (use cumulative for roll trades)
+        let rorc = 0;
+        if (field === 'expiration_date' || field === 'date_trade_open' || field === 'trade_date' || 
+            field === 'strike_price' || field === 'credit_debit' || field === 'num_of_contracts') {
+            rorc = riskCapital !== 0 && riskCapital > 0 ? (cumulativeNetCreditPerShare / riskCapital) * 100 : 0;
+        } else {
+            // For other changes, we can use existing RORC from trade or calculate it
+            rorc = riskCapital !== 0 && riskCapital > 0 ? (cumulativeNetCreditPerShare / riskCapital) * 100 : 0;
+        }
+        
+        // Always recalculate DTE using effective expiration date (parent's date_trade_rolled for child trades)
+        const tradeDateForDTE = (field === 'date_trade_open' || field === 'trade_date') 
+            ? value 
+            : (trade.date_trade_open || trade.trade_date);
+        // For child trades, use effective expiration date (parent's date_trade_rolled)
+        const effectiveExpDate = getEffectiveExpirationDate(trade, trades);
+        const expDateForDTE = effectiveExpDate || ((field === 'expiration_date') 
+            ? value 
+            : trade.expiration_date);
+        let updatedDTE = 0;
+        if (tradeDateForDTE && expDateForDTE) {
+            updatedDTE = calculateDaysToExpiration(expDateForDTE, tradeDateForDTE);
+        }
+        
+        // Calculate ARORC
+        // For ROCT PUT and RULE ONE PUT trades, use: (365 / DTE) * (net_credit_per_share / (risk_capital_per_share * margin_percent))
+        // For other trades, use: (365 / DTE) * RORC
+        let arorc = 0;
+        const tradeType = trade.trade_type || '';
+        const isROCTPut = tradeType.includes('ROCT PUT') || tradeType.includes('RULE ONE PUT') || 
+                         (tradeType.includes('PUT') && (tradeType.includes('ROCT') || tradeType.includes('RULE ONE')));
+        
+        if (updatedDTE > 0) {
+            if (isROCTPut) {
+                // Use cumulative net credit per share for roll trades
+                const marginPercent = trade.margin_percent !== null && trade.margin_percent !== undefined ? trade.margin_percent : 100.0;
+                const denominator = riskCapital * (marginPercent / 100.0);
+                if (denominator > 0) {
+                    const arorcDecimal = (365.0 / updatedDTE) * (cumulativeNetCreditPerShare / denominator);
+                    arorc = parseFloat((arorcDecimal * 100.0).toFixed(1));
+                }
+            } else {
+                // For other trades, use: (365 / DTE) * RORC
+                arorc = parseFloat(((365 / updatedDTE) * rorc).toFixed(1));
+            }
+        }
+        
+        // Find cells by data attributes (more reliable than row/column indices)
+        const tbody = document.getElementById('trades-table');
+        if (!tbody) {
+            console.warn('[updateTradeCell] tbody not found');
+            return;
+        }
+        
+        // Convert tradeId to string for consistent matching
+        const tradeIdStr = String(tradeId);
+        
+        // Helper function to find cell by data attributes
+        const findCell = (fieldName) => {
+            // Try exact match first
+            let cell = tbody.querySelector(`[data-field="${fieldName}"][data-trade-id="${tradeIdStr}"]`);
+            if (!cell) {
+                // Try finding by tradeId only and checking parent/child
+                const allCells = tbody.querySelectorAll(`[data-trade-id="${tradeIdStr}"]`);
+                for (let c of allCells) {
+                    if (c.getAttribute('data-field') === fieldName || 
+                        c.querySelector(`[data-field="${fieldName}"]`)) {
+                        cell = c.getAttribute('data-field') === fieldName ? c : c.querySelector(`[data-field="${fieldName}"]`);
+                        break;
+                    }
+                }
+            }
+            return cell;
+        };
+        
+        // Update shares cell (only when contracts change)
+        if (field === 'num_of_contracts') {
+            const sharesCell = findCell('shares');
+            if (sharesCell) {
+                sharesCell.textContent = shares.toString();
+            } else {
+                console.warn(`[updateTradeCell] Could not find shares cell for trade ${tradeIdStr}`);
+            }
+        }
+        
+        // Update net credit total cell (only when contracts, strike_price, or credit_debit change)
+        if (field === 'num_of_contracts' || field === 'strike_price' || field === 'credit_debit') {
+            const netCreditTotalCell = findCell('net_credit_total');
+            if (netCreditTotalCell) {
+                // Handle both direct text content and nested strong tags
+                if (netCreditTotalCell.tagName === 'STRONG') {
+                    netCreditTotalCell.textContent = '$' + netCreditTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                } else {
+                    const strongTag = netCreditTotalCell.querySelector('strong');
+                    if (strongTag) {
+                        strongTag.textContent = '$' + netCreditTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                    } else {
+                        netCreditTotalCell.textContent = '$' + netCreditTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                    }
+                }
+            } else {
+                console.warn(`[updateTradeCell] Could not find net credit total cell for trade ${tradeIdStr}`);
+            }
+        }
+        
+        // Update risk capital cell (only when strike_price or credit_debit change)
+        if (field === 'strike_price' || field === 'credit_debit') {
+            const riskCapitalCell = findCell('risk_capital');
+            if (riskCapitalCell) {
+                riskCapitalCell.textContent = '$' + riskCapital.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            } else {
+                console.warn(`[updateTradeCell] Could not find risk capital cell for trade ${tradeIdStr}`);
+            }
+        }
+        
+        // Update margin capital cell (only when contracts, strike_price, or credit_debit change)
+        if (field === 'num_of_contracts' || field === 'strike_price' || field === 'credit_debit') {
+            const marginCapitalCell = findCell('margin_capital');
+            if (marginCapitalCell) {
+                marginCapitalCell.textContent = '$' + marginCapital.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            } else {
+                console.warn(`[updateTradeCell] Could not find margin capital cell for trade ${tradeIdStr}`);
+            }
+        }
+        
+        // Update DTE cell when expiration_date or date_trade_open changes
+        if (field === 'expiration_date' || field === 'date_trade_open' || field === 'trade_date') {
+            const dteCell = findCell('dte');
+            if (dteCell) {
+                dteCell.textContent = updatedDTE.toString();
+            } else {
+                console.warn(`[updateTradeCell] Could not find DTE cell for trade ${tradeIdStr}`);
+            }
+        }
+        
+        // Update RORC cell (only when strike_price or credit_debit change, or when expiration_date changes and we need to recalculate ARORC)
+        if (field === 'strike_price' || field === 'credit_debit' || field === 'expiration_date' || field === 'date_trade_open' || field === 'trade_date') {
+            const rorcCell = findCell('rorc');
+            if (rorcCell) {
+                rorcCell.textContent = rorc.toFixed(2) + '%';
+            } else {
+                console.warn(`[updateTradeCell] Could not find RORC cell for trade ${tradeIdStr}`);
+            }
+        }
+        
+        // Update ARORC cell - always update when expiration_date, date_trade_open, strike_price, or credit_debit change
+        if (field === 'expiration_date' || field === 'date_trade_open' || field === 'trade_date' || 
+            field === 'strike_price' || field === 'credit_debit' || field === 'num_of_contracts') {
+            const arorcCell = findCell('arorc');
+            if (arorcCell) {
+                // When fields change, always use the recalculated value
+                if (arorc !== null && arorc !== undefined && !isNaN(arorc) && arorc !== 0) {
+                    arorcCell.textContent = arorc.toFixed(1) + '%';
+                } else {
+                    // Fallback to database value if calculation is invalid
+                    const dbARORC = trade.ARORC !== null && trade.ARORC !== undefined ? trade.ARORC : null;
+                    if (dbARORC !== null && dbARORC !== undefined && !isNaN(dbARORC)) {
+                        arorcCell.textContent = parseFloat(dbARORC).toFixed(1) + '%';
+                    } else {
+                        arorcCell.textContent = '-';
+                    }
+                }
+            } else {
+                console.warn(`[updateTradeCell] Could not find ARORC cell for trade ${tradeIdStr}`);
             }
         }
     }
@@ -3784,105 +5304,36 @@ function setupDashboardToggle() {
 // Toggle Trades Column (horizontally collapsible)
 function toggleTrades() {
     const tradesColumn = document.getElementById('trades-column');
-    const costBasisColumn = document.getElementById('cost-basis-column');
     const toggleIcon = document.getElementById('trades-toggle-icon');
-    const collapsedCardToggle = document.getElementById('trades-collapsed-card-toggle');
-    const collapsedCardIcon = document.getElementById('trades-collapsed-card-icon');
+    const floatingExpand = document.getElementById('trades-floating-expand');
     
     if (!tradesColumn) return;
     
-    // Check if cost basis is currently collapsed
-    const costBasisIsCollapsed = costBasisColumn && !costBasisColumn.classList.contains('show');
-    
     // Toggle collapse/show classes - CSS handles the flex adjustments
     if (tradesColumn.classList.contains('show')) {
-        // Collapsing - store position BEFORE any DOM changes
-        const tradesCard = document.getElementById('trades');
-        const container = document.querySelector('.trades-cost-container');
-        if (tradesCard && container) {
-            const tradesHeader = tradesCard.querySelector('.card-header');
-            if (tradesHeader) {
-                // Get positions relative to viewport BEFORE collapsing
-                const headerRect = tradesHeader.getBoundingClientRect();
-                const containerRect = container.getBoundingClientRect();
-                
-                // Calculate position relative to container (not viewport)
-                // Align with top of header instead of middle
-                const headerTop = headerRect.top;
-                const containerTop = containerRect.top;
-                const offsetFromContainer = headerTop - containerTop;
-                
-            }
-        }
-        
-        // Now hide the trades table
+        // Collapsing - hide the trades table
         tradesColumn.classList.remove('show');
         tradesColumn.classList.add('collapse');
-        // When collapsed, arrow points right (to expand/show)
-        if (toggleIcon) {
-            toggleIcon.classList.remove('fa-chevron-left');
-            toggleIcon.classList.add('fa-chevron-right');
-        }
-        if (collapsedCardIcon) {
-            collapsedCardIcon.classList.remove('fa-chevron-left');
-            collapsedCardIcon.classList.add('fa-chevron-right');
-        }
-        
-        // If cost basis is also collapsed, automatically expand it to 100%
-        if (costBasisIsCollapsed && costBasisColumn) {
-            costBasisColumn.classList.remove('collapse');
-            costBasisColumn.classList.add('show');
-            // Update cost basis toggle icon
-            const costBasisToggleIcon = document.getElementById('cost-basis-toggle-icon');
-            if (costBasisToggleIcon) {
-                costBasisToggleIcon.classList.remove('fa-chevron-left');
-                costBasisToggleIcon.classList.add('fa-chevron-right');
-            }
-            // Update cost basis collapsed card icon
-            const costBasisCollapsedCardIcon = document.getElementById('cost-basis-collapsed-card-icon');
-            if (costBasisCollapsedCardIcon) {
-                costBasisCollapsedCardIcon.classList.remove('fa-chevron-left');
-                costBasisCollapsedCardIcon.classList.add('fa-chevron-right');
-            }
-        }
     } else {
         // Expanding - show the trades table
         tradesColumn.classList.remove('collapse');
         tradesColumn.classList.add('show');
-        // When expanded, arrow points left (to collapse/hide)
+        // When expanded, arrow in header points left (to collapse/hide)
         if (toggleIcon) {
             toggleIcon.classList.remove('fa-chevron-right');
             toggleIcon.classList.add('fa-chevron-left');
         }
-        if (collapsedCardIcon) {
-            collapsedCardIcon.classList.remove('fa-chevron-right');
-            collapsedCardIcon.classList.add('fa-chevron-left');
-        }
-        
-        // If cost basis is collapsed, automatically expand it to 60/40 split
-        if (costBasisIsCollapsed && costBasisColumn) {
-            costBasisColumn.classList.remove('collapse');
-            costBasisColumn.classList.add('show');
-            // Update cost basis toggle icon
-            const costBasisToggleIcon = document.getElementById('cost-basis-toggle-icon');
-            if (costBasisToggleIcon) {
-                costBasisToggleIcon.classList.remove('fa-chevron-left');
-                costBasisToggleIcon.classList.add('fa-chevron-right');
-            }
-            // Update cost basis collapsed card icon
-            const costBasisCollapsedCardIcon = document.getElementById('cost-basis-collapsed-card-icon');
-            if (costBasisCollapsedCardIcon) {
-                costBasisCollapsedCardIcon.classList.remove('fa-chevron-left');
-                costBasisCollapsedCardIcon.classList.add('fa-chevron-right');
-            }
-            // Update column widths first to ensure layout is correct
-            updateColumnWidths();
-        }
     }
     
-    // Update column widths and collapsed card visibility
+    // Update column widths first, then update floating arrow positions after layout settles
     updateColumnWidths();
-    updateCollapsedCardVisibility();
+    // Use double requestAnimationFrame to ensure layout has fully settled before positioning arrows
+    // This ensures the cost basis card has fully expanded to its new width before we calculate arrow position
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            updateFloatingArrows();
+        });
+    });
 }
 
 
@@ -3895,22 +5346,16 @@ function updateColumnWidths() {
     const tradesIsVisible = tradesColumn.classList.contains('show');
     const costBasisIsVisible = costBasisColumn.classList.contains('show');
     
-    // Reset widths and flex
-    tradesColumn.style.width = '';
-    tradesColumn.style.flex = '';
-    tradesColumn.style.minWidth = '';
-    costBasisColumn.style.width = '';
-    costBasisColumn.style.flex = '';
-    costBasisColumn.style.minWidth = '';
-    
     if (tradesIsVisible && costBasisIsVisible) {
         // Both expanded: trades 60%, cost basis 40%
         tradesColumn.style.width = '60%';
         tradesColumn.style.flex = '0 0 60%';
-        tradesColumn.style.minWidth = '0';
+        tradesColumn.style.minWidth = '';
+        tradesColumn.style.maxWidth = '';
         costBasisColumn.style.width = '40%';
         costBasisColumn.style.flex = '0 0 40%';
-        costBasisColumn.style.minWidth = '0';
+        costBasisColumn.style.minWidth = '';
+        costBasisColumn.style.maxWidth = '';
     } else if (tradesIsVisible && !costBasisIsVisible) {
         // Only trades visible: trades full width
         tradesColumn.style.width = '100%';
@@ -3928,30 +5373,129 @@ function updateColumnWidths() {
         costBasisColumn.style.flex = '1 1 100%';
         costBasisColumn.style.minWidth = '0';
     } else {
-        // Both collapsed (shouldn't happen, but handle it)
+        // Both collapsed
         tradesColumn.style.width = '0';
         tradesColumn.style.flex = '0 0 0';
+        tradesColumn.style.minWidth = '0';
         costBasisColumn.style.width = '0';
         costBasisColumn.style.flex = '0 0 0';
+        costBasisColumn.style.minWidth = '0';
     }
 }
 
-function updateCollapsedCardVisibility() {
+function updateFloatingArrows() {
     const tradesColumn = document.getElementById('trades-column');
     const costBasisColumn = document.getElementById('cost-basis-column');
-    const collapsedCard = document.getElementById('collapsed-sections-card');
+    const tradesFloatingExpand = document.getElementById('trades-floating-expand');
+    const costBasisFloatingExpand = document.getElementById('cost-basis-floating-expand');
+    const container = document.querySelector('.trades-cost-container');
     
-    if (!tradesColumn || !costBasisColumn || !collapsedCard) return;
+    if (!tradesColumn || !costBasisColumn || !container) return;
     
     const tradesIsVisible = tradesColumn.classList.contains('show');
     const costBasisIsVisible = costBasisColumn.classList.contains('show');
     
-    // Show collapsed card only when both sections are collapsed
-    if (!tradesIsVisible && !costBasisIsVisible) {
-        collapsedCard.style.display = 'block';
-    } else {
-        collapsedCard.style.display = 'none';
-    }
+    // Position floating arrows based on which sections are visible
+    // Arrows are positioned relative to the trades-cost-container, vertically centered on headers
+    // Use requestAnimationFrame to ensure DOM is ready before calculating positions
+    requestAnimationFrame(() => {
+        const containerRect = container.getBoundingClientRect();
+        
+        if (!tradesIsVisible && costBasisIsVisible) {
+            // Trades collapsed, cost basis visible - show arrow on left edge of cost basis
+            if (tradesFloatingExpand) {
+                const costBasisCard = costBasisColumn.querySelector('.card');
+                if (costBasisCard) {
+                    const cardHeader = costBasisCard.querySelector('.card-header');
+                    if (cardHeader) {
+                        // Force a reflow to ensure layout is settled before getting bounding rects
+                        void costBasisCard.offsetHeight;
+                        const headerRect = cardHeader.getBoundingClientRect();
+                        const cardRect = costBasisCard.getBoundingClientRect();
+                        // Calculate vertical center of header
+                        const headerTop = headerRect.top;
+                        const headerHeight = headerRect.height;
+                        const headerCenter = headerTop + (headerHeight / 2);
+                        const containerTop = containerRect.top;
+                        // Position arrow vertically centered on header (arrow is 50px tall, so center - 25px)
+                        const arrowTop = headerCenter - containerTop - 25;
+                        // Position on left edge of cost basis card
+                        tradesFloatingExpand.style.display = 'block';
+                        tradesFloatingExpand.style.left = `${cardRect.left - containerRect.left - 25}px`; // Half outside
+                        tradesFloatingExpand.style.top = `${arrowTop}px`; // Vertically centered on header
+                    }
+                }
+            }
+            // Hide cost basis arrow
+            if (costBasisFloatingExpand) {
+                costBasisFloatingExpand.style.display = 'none';
+            }
+        } else if (!costBasisIsVisible && tradesIsVisible) {
+            // Cost basis collapsed, trades visible - show arrow on right edge of trades
+            // When cost basis is collapsed, trades expands to 100% of container width
+            // Use container width directly to avoid transition timing issues
+            if (costBasisFloatingExpand) {
+                const tradesCard = tradesColumn.querySelector('.card');
+                if (tradesCard) {
+                    const cardHeader = tradesCard.querySelector('.card-header');
+                    if (cardHeader) {
+                        // Force a reflow to ensure layout is settled before getting bounding rects
+                        void tradesCard.offsetHeight;
+                        void container.offsetHeight;
+                        const headerRect = cardHeader.getBoundingClientRect();
+                        // Calculate vertical center of header (same calculation as trades)
+                        const headerTop = headerRect.top;
+                        const headerHeight = headerRect.height;
+                        const headerCenter = headerTop + (headerHeight / 2);
+                        const containerTop = containerRect.top;
+                        // Position arrow vertically centered on header (arrow is 50px tall, so center - 25px)
+                        const arrowTop = headerCenter - containerTop - 25;
+                        // Position on right edge of container (trades is 100% width when cost basis is collapsed)
+                        // Use container's right edge instead of card's right edge to avoid transition timing issues
+                        const containerRight = containerRect.right;
+                        costBasisFloatingExpand.style.display = 'block';
+                        costBasisFloatingExpand.style.left = `${containerRight - containerRect.left - 25}px`; // Half outside
+                        costBasisFloatingExpand.style.top = `${arrowTop}px`; // Vertically centered on header
+                    }
+                }
+            }
+            // Hide trades arrow
+            if (tradesFloatingExpand) {
+                tradesFloatingExpand.style.display = 'none';
+            }
+        } else if (!tradesIsVisible && !costBasisIsVisible) {
+            // Both collapsed - show both arrows on the sides
+            // For trades arrow, position on left side of container
+            if (tradesFloatingExpand) {
+                // Use a default position when both are collapsed (center vertically in container)
+                const containerHeight = containerRect.height;
+                const containerTop = containerRect.top;
+                const defaultTop = (containerHeight / 2) - 25; // Center minus half arrow height
+                tradesFloatingExpand.style.display = 'block';
+                tradesFloatingExpand.style.left = '-25px'; // Half outside on left
+                tradesFloatingExpand.style.top = `${defaultTop}px`;
+            }
+            // For cost basis arrow, position on right side of container
+            if (costBasisFloatingExpand) {
+                // Use a default position when both are collapsed (center vertically in container)
+                const containerHeight = containerRect.height;
+                const containerTop = containerRect.top;
+                const defaultTop = (containerHeight / 2) - 25; // Center minus half arrow height
+                const containerWidth = containerRect.width;
+                costBasisFloatingExpand.style.display = 'block';
+                costBasisFloatingExpand.style.left = `${containerWidth - 25}px`; // Half outside on right
+                costBasisFloatingExpand.style.top = `${defaultTop}px`;
+            }
+        } else {
+            // Both visible - hide both arrows
+            if (tradesFloatingExpand) {
+                tradesFloatingExpand.style.display = 'none';
+            }
+            if (costBasisFloatingExpand) {
+                costBasisFloatingExpand.style.display = 'none';
+            }
+        }
+    });
 }
 
 function setupCostBasisToggle() {
@@ -3992,16 +5536,20 @@ function setupDashboardDatePickers() {
     endDateInput.value = '';
     
     // Add event listeners
-    startDateInput.addEventListener('change', function() {
-        console.log('Dashboard start date changed to:', this.value);
+    // Debounced update functions (500ms delay for date changes)
+    const debouncedUpdateDashboard = debounce(() => {
         updateDashboardData();
         updateChart();
+    }, 500);
+    
+    startDateInput.addEventListener('change', function() {
+        console.log('Dashboard start date changed to:', this.value);
+        debouncedUpdateDashboard();
     });
     
     endDateInput.addEventListener('change', function() {
         console.log('Dashboard end date changed to:', this.value);
-        updateDashboardData();
-        updateChart();
+        debouncedUpdateDashboard();
     });
     
     console.log('Dashboard date pickers setup complete - defaulting to all time data');
@@ -4133,7 +5681,7 @@ function setupCostBasisSymbolFilter() {
 
 async function loadAccounts() {
     try {
-        const response = await fetch('/api/accounts');
+        const response = await apiFetch('/api/accounts');
         const accounts = await response.json();
         
         // Find the default account
@@ -4226,7 +5774,7 @@ function toggleAccountsSettings() {
 
 async function loadAccountsTable() {
     try {
-        const response = await fetch('/api/accounts');
+        const response = await apiFetch('/api/accounts');
         const accounts = await response.json();
         
         const tbody = document.getElementById('accounts-table-body');
@@ -4344,7 +5892,7 @@ function cancelAccountForm() {
 
 async function setDefaultAccount(accountId, isDefault) {
     try {
-        const response = await fetch(`/api/accounts/${accountId}/set-default`, {
+        const response = await apiFetch(`/api/accounts/${accountId}/set-default`, {
             method: 'PUT'
         });
         
@@ -4380,7 +5928,7 @@ async function deleteAccount(id, name) {
     }
     
     try {
-        const response = await fetch(`/api/accounts/${id}`, {
+        const response = await apiFetch(`/api/accounts/${id}`, {
             method: 'DELETE'
         });
         
@@ -4406,6 +5954,12 @@ async function deleteAccount(id, name) {
 
 // Setup account form submission and input formatting
 document.addEventListener('DOMContentLoaded', function() {
+    // Load all tickers into cache on page load (non-blocking)
+    loadAllTickers();
+    
+    // Add event delegation for clickable-symbol elements
+    document.addEventListener('click', handleSymbolClick);
+    
     // Setup input formatting for starting balance field
     const balanceInput = document.getElementById('account-starting-balance-input');
     if (balanceInput) {
@@ -4472,16 +6026,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 const url = id ? `/api/accounts/${id}` : '/api/accounts';
                 const method = id ? 'PUT' : 'POST';
                 
-                const response = await fetch(url, {
+                const response = await apiFetch(url, {
                     method: method,
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
+                    body: {
                         account_name: accountName,
                         account_type: accountType,
                         starting_balance: startingBalance
-                    })
+                    }
                 });
                 
                 const result = await response.json();
@@ -4517,8 +6068,8 @@ function setupThemeToggle() {
     const themeIcon = document.getElementById('theme-icon');
     const html = document.documentElement;
     
-    // Get saved theme preference or default to light
-    const savedTheme = localStorage.getItem('theme') || 'light';
+    // Get saved theme preference or default to dark
+    const savedTheme = localStorage.getItem('theme') || 'dark';
     
     // Apply saved theme on page load
     if (savedTheme === 'dark') {
@@ -4568,6 +6119,9 @@ function setupThemeToggle() {
                 loadCostBasis();
             }
             
+            // Update first column cells in trades table to reflect theme change
+            updateTradesTableFirstColumnStyles();
+            
             // CSS variables handle transitions automatically - no JavaScript needed
         });
     }
@@ -4579,30 +6133,123 @@ function setupUniversalControls() {
     const universalClearButton = document.getElementById('clear-universal-ticker');
     
     if (universalTickerInput && universalClearButton) {
+        // Debounced data loading function (optimized for faster updates)
+        const debouncedLoadTickerData = debounce((symbol) => {
+            // Reload data with the ticker filter - skip loadSummary() for filtering operations
+            // loadSummary() is expensive and not needed when just filtering by ticker
+            // Run loads in parallel to reduce delay
+            Promise.all([
+                loadTrades(),
+                loadCostBasis(symbol || null) // Always call loadCostBasis - it handles both ticker and null cases
+            ]).catch(error => {
+                console.error('Error loading data after selecting ticker:', error);
+            });
+        }, 100); // Optimized: Reduced to 100ms for faster data loading
+        
         setupAutocomplete('universal-ticker-filter', 'universal-ticker-suggestions', (symbol) => {
-            window.symbolFilter = symbol;
+            // Ensure symbol is uppercase
+            const symbolUpper = symbol ? symbol.toUpperCase() : '';
+            window.symbolFilter = symbolUpper;
+            // Update input value to match (in case autocomplete was used)
+            if (universalTickerInput && symbolUpper) {
+                universalTickerInput.value = symbolUpper;
+            }
             // Show/hide clear button based on whether symbol is selected
-            if (symbol) {
+            if (symbolUpper) {
                 universalClearButton.style.display = 'inline-block';
             } else {
                 universalClearButton.style.display = 'none';
             }
-            // Reload all data with the ticker filter to ensure everything is in sync
-            // This ensures the dashboard, trades table, and cost basis table all update
-            // based on both the selected account and ticker filter
-            // Run all loads in parallel to reduce delay
+            // Trigger data reload immediately when autocomplete selection is made (no debounce)
+            // This provides instant feedback when user selects from dropdown
+            // Skip loadSummary() for filtering operations - it's expensive and not needed
             Promise.all([
                 loadTrades(),
-                loadSummary(),
-                loadCostBasis(symbol || null) // Always call loadCostBasis - it handles both ticker and null cases
+                loadCostBasis(symbolUpper || null)
             ]).catch(error => {
                 console.error('Error loading data after selecting ticker:', error);
             });
         });
         
-        // Show/hide clear button - use once to prevent duplicates
+        // Show/hide clear button and sync window.symbolFilter with input value
+        // Use debounce to avoid too many API calls while typing, but trigger data reload
+        const debouncedInputHandler = debounce(function(value) {
+            // Get the current input value if value parameter is not provided
+            const inputValue = value !== undefined ? value : (universalTickerInput ? universalTickerInput.value.trim() : '');
+            const tickerValue = inputValue.toUpperCase();
+            if (tickerValue) {
+                // Trigger full data reload when user stops typing (after debounce)
+                // This ensures cost basis table also updates
+                console.log('[DEBUG] debouncedInputHandler - triggering data reload for:', tickerValue);
+                debouncedLoadTickerData(tickerValue);
+            } else {
+                // If value is empty, clear the filter
+                window.symbolFilter = '';
+                updateTradesTable();
+                loadCostBasis(null);
+            }
+        }, 100); // Optimized: Reduced to 100ms for faster updates after clearing
+        
         const inputHandler = function() {
-            universalClearButton.style.display = this.value.trim() ? 'inline-block' : 'none';
+            let value = this.value.trim();
+            // Convert to uppercase as user types for consistency
+            if (value) {
+                value = value.toUpperCase();
+                // Update input value to uppercase (only if it changed to avoid cursor jumping)
+                if (this.value !== value) {
+                    const cursorPos = this.selectionStart;
+                    this.value = value;
+                    // Restore cursor position
+                    this.setSelectionRange(cursorPos, cursorPos);
+                }
+            }
+            universalClearButton.style.display = value ? 'inline-block' : 'none';
+            // Sync window.symbolFilter immediately for instant feedback (uppercase for consistency)
+            window.symbolFilter = value || '';
+            // Update trades table immediately
+            if (trades && trades.length > 0) {
+                updateTradesTable();
+            }
+            // Update cost basis table immediately (similar to trades table)
+            if (value) {
+                // Filter cached cost basis data immediately for instant feedback
+                if (cachedCostBasis && cachedCostBasis.length > 0) {
+                    const matchingTickerGroups = cachedCostBasis.filter(group => 
+                        group.ticker && group.ticker.toUpperCase() === value.toUpperCase()
+                    );
+                    if (matchingTickerGroups.length > 0) {
+                        updateCostBasisTable(matchingTickerGroups);
+                    } else {
+                        // No matching results, hide the table (no ticker cards)
+                        const costBasisContainer = document.getElementById('cost-basis-table-container');
+                        const inlineContainer = document.getElementById('cost-basis-inline-container');
+                        [costBasisContainer, inlineContainer].forEach(c => {
+                            if (c) c.innerHTML = '';
+                        });
+                    }
+                } else {
+                    // Show loading state if no cached data
+                    const costBasisContainer = document.getElementById('cost-basis-table-container');
+                    if (costBasisContainer) {
+                        costBasisContainer.innerHTML = `
+                            <div class="text-center text-muted py-3">
+                                <i class="fas fa-spinner fa-spin me-2"></i>
+                                Loading cost basis for ${value}...
+                            </div>
+                        `;
+                    }
+                }
+            } else {
+                // If value is empty, show all symbols from cached data
+                if (cachedCostBasis && cachedCostBasis.length > 0) {
+                    showAllSymbols(cachedCostBasis);
+                } else if (trades && trades.length > 0) {
+                    showAllSymbolsFromTrades();
+                }
+            }
+            // Trigger debounced handler for data reload (including cost basis)
+            // Pass the value directly to avoid issues with 'this' context
+            debouncedInputHandler(value);
         };
         universalTickerInput.removeEventListener('input', inputHandler);
         universalTickerInput.addEventListener('input', inputHandler);
@@ -4618,17 +6265,301 @@ function setupUniversalControls() {
     // Setup universal date filters
     setupUniversalDateFilters();
     
-    // Setup universal account filter
+    // Setup universal account filter with debounce
     const universalAccountFilter = document.getElementById('universal-account-filter');
     if (universalAccountFilter) {
-        universalAccountFilter.addEventListener('change', function() {
+        // Immediate UI update (no debounce)
+        const handleAccountChangeImmediate = function() {
+            // Update any new trades (trades with IDs starting with 'new_') to use the selected account
+            const accountValue = this.value || '';
+            const isAllAccounts = !accountValue || accountValue === '' || accountValue === 'all';
+            const selectedAccountId = accountValue ? parseInt(accountValue) : null;
+            
+            // Immediately filter trades table from cached data for instant feedback
+            if (cachedTrades && cachedTrades.length > 0) {
+                try {
+                    // Clone cached trades to avoid mutating the cache
+                    const filteredTrades = structuredClone ? structuredClone(cachedTrades) : JSON.parse(JSON.stringify(cachedTrades));
+                    
+                    // Filter by account if a specific account is selected
+                    let accountFilteredTrades = filteredTrades;
+                    if (!isAllAccounts && selectedAccountId) {
+                        accountFilteredTrades = filteredTrades.filter(trade => {
+                            const tradeAccountId = trade.account_id || '';
+                            return tradeAccountId.toString() === accountValue.toString();
+                        });
+                    }
+                    
+                    // Apply ticker filter if present
+                    // Always include new trades (with IDs starting with 'new_') so they can be edited
+                    if (window.symbolFilter) {
+                        const filterUpper = window.symbolFilter.toUpperCase();
+                        accountFilteredTrades = accountFilteredTrades.filter(trade => {
+                            // Always include new trades (they may not have a ticker set yet)
+                            const isNewTrade = typeof trade.id === 'string' && trade.id.startsWith('new_');
+                            if (isNewTrade) {
+                                return true; // Always show new trades
+                            }
+                            // For existing trades, filter by ticker
+                            return trade.ticker && trade.ticker.toUpperCase() === filterUpper;
+                        });
+                    }
+                    
+                    // Preserve any new trades that might not be in cachedTrades
+                    const newTrades = trades.filter(trade => 
+                        typeof trade.id === 'string' && trade.id.startsWith('new_')
+                    );
+                    
+                    // Combine filtered trades with new trades (avoid duplicates)
+                    const newTradeIds = new Set(newTrades.map(t => t.id));
+                    const filteredWithoutNew = accountFilteredTrades.filter(t => 
+                        !(typeof t.id === 'string' && t.id.startsWith('new_'))
+                    );
+                    const combinedTrades = [...filteredWithoutNew, ...newTrades];
+                    
+            // Update trades and table immediately using requestAnimationFrame for better performance
+            trades = combinedTrades;
+            requestAnimationFrame(() => {
+                updateTradesTable();
+            });
+                    
+                    // Also immediately filter cost basis table from cached data for instant feedback
+                    const currentTicker = window.symbolFilter || null;
+                    if (currentTicker && cachedCostBasis && cachedCostBasis.length > 0) {
+                        // If ticker is filtered, filter cached data by both ticker and account
+                        const matchingTickerGroups = cachedCostBasis.filter(group => {
+                            const tickerMatch = group.ticker && group.ticker.toUpperCase() === currentTicker.toUpperCase();
+                            if (!tickerMatch) return false;
+                            
+                            if (isAllAccounts) return true;
+                            
+                            // Check if any trade in this group matches the account
+                            return group.trades && group.trades.some(trade => {
+                                const tradeAccountId = trade.account_id || '';
+                                return tradeAccountId.toString() === accountValue.toString();
+                            });
+                        });
+                        
+                        if (matchingTickerGroups.length > 0) {
+                            updateCostBasisTable(matchingTickerGroups);
+                        } else {
+                            // No data found for this ticker+account combination - show message
+                            const costBasisContainer = document.getElementById('cost-basis-table-container');
+                            const inlineContainer = document.getElementById('cost-basis-inline-container');
+                            const accountName = window.accounts && selectedAccountId ? 
+                                (window.accounts.find(a => a.id === selectedAccountId)?.account_name || 'selected account') : 
+                                'selected account';
+                            [costBasisContainer, inlineContainer].forEach(c => {
+                                if (c) {
+                                    c.innerHTML = `
+                                        <div class="text-center text-muted py-3">
+                                            <i class="fas fa-info-circle me-2"></i>
+                                            No cost basis data for ${currentTicker} in ${accountName}.
+                                        </div>
+                                    `;
+                                }
+                            });
+                        }
+                    } else if (!currentTicker && cachedCostBasis && cachedCostBasis.length > 0) {
+                        // If no ticker filter, filter cached data by account for immediate display
+                        const filteredData = isAllAccounts 
+                            ? cachedCostBasis 
+                            : cachedCostBasis.filter(group => {
+                                // Check if any trade in this group matches the account
+                                return group.trades && group.trades.some(trade => {
+                                    const tradeAccountId = trade.account_id || '';
+                                    return tradeAccountId.toString() === accountValue.toString();
+                                });
+                            });
+                        
+                        if (filteredData.length > 0) {
+                            showAllSymbols(filteredData);
+                        } else {
+                            // Show loading state
+                            const costBasisContainer = document.getElementById('cost-basis-table-container');
+                            const inlineContainer = document.getElementById('cost-basis-inline-container');
+                            [costBasisContainer, inlineContainer].forEach(c => {
+                                if (c) {
+                                    c.innerHTML = `
+                                        <div class="text-center text-muted py-3">
+                                            <i class="fas fa-spinner fa-spin me-2"></i>
+                                            Loading cost basis...
+                                        </div>
+                                    `;
+                                }
+                            });
+                        }
+                    }
+                } catch (e) {
+                    console.error('Error filtering trades from cache:', e);
+                    // Fallback: just update new trades
+                    if (trades && trades.length > 0) {
+                        const accounts = window.accounts || [];
+                        const selectedAccount = selectedAccountId ? accounts.find(a => a.id === selectedAccountId) : null;
+                        if (selectedAccount) {
+                            trades.forEach(trade => {
+                                if (typeof trade.id === 'string' && trade.id.startsWith('new_')) {
+                                    trade.account_id = selectedAccountId;
+                                    trade.account_name = selectedAccount.account_name;
+                                    
+                                    // Update the account dropdown in the table if it exists
+                                    const tbody = document.getElementById('trades-table');
+                                    if (tbody) {
+                                        const tradeColumnIndex = findColumnIndexForTrade(trade.id);
+                                        if (tradeColumnIndex !== -1) {
+                                            const accountRow = tbody.children[1];
+                                            if (accountRow && accountRow.children[tradeColumnIndex]) {
+                                                const accountCell = accountRow.children[tradeColumnIndex];
+                                                const accountSelect = accountCell.querySelector('select[data-trade-id="' + trade.id + '"]');
+                                                if (accountSelect) {
+                                                    accountSelect.value = selectedAccountId;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Fetch commission for the new account
+                                    if (window._fetchAndPopulateCommissionForTrade && window._fetchAndPopulateCommissionForTrade[trade.id]) {
+                                        window._fetchAndPopulateCommissionForTrade[trade.id]();
+                                    }
+                                }
+                            });
+                            requestAnimationFrame(() => {
+                                updateTradesTable();
+                            });
+                        }
+                    }
+                }
+            } else if (trades && trades.length > 0 && selectedAccountId) {
+                // Fallback: update new trades if no cache
+                const accounts = window.accounts || [];
+                const selectedAccount = accounts.find(a => a.id === selectedAccountId);
+                if (selectedAccount) {
+                    trades.forEach(trade => {
+                        if (typeof trade.id === 'string' && trade.id.startsWith('new_')) {
+                            trade.account_id = selectedAccountId;
+                            trade.account_name = selectedAccount.account_name;
+                            
+                            // Update the account dropdown in the table if it exists
+                            const tbody = document.getElementById('trades-table');
+                            if (tbody) {
+                                const tradeColumnIndex = findColumnIndexForTrade(trade.id);
+                                if (tradeColumnIndex !== -1) {
+                                    const accountRow = tbody.children[1];
+                                    if (accountRow && accountRow.children[tradeColumnIndex]) {
+                                        const accountCell = accountRow.children[tradeColumnIndex];
+                                        const accountSelect = accountCell.querySelector('select[data-trade-id="' + trade.id + '"]');
+                                        if (accountSelect) {
+                                            accountSelect.value = selectedAccountId;
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Fetch commission for the new account
+                            if (window._fetchAndPopulateCommissionForTrade && window._fetchAndPopulateCommissionForTrade[trade.id]) {
+                                window._fetchAndPopulateCommissionForTrade[trade.id]();
+                            }
+                        }
+                    });
+                    updateTradesTable();
+                }
+            }
+        };
+        
+        // Debounced API calls (optimized for faster updates)
+        const handleAccountChangeDebounced = debounce(function() {
             // Reload all data when account filter changes
-            loadTrades();
-            loadSummary();
-            // Pass current ticker filter to loadCostBasis if it exists
+            // Check if "All" accounts is selected (empty string or 'all')
+            const accountValue = this.value || '';
+            const isAllAccounts = !accountValue || accountValue === '' || accountValue === 'all';
+            console.log('[DEBUG] Account filter changed - value:', accountValue, 'isAllAccounts:', isAllAccounts);
+            
+            // Get current ticker filter
             const currentTicker = window.symbolFilter || null;
-            loadCostBasis(currentTicker);
-            loadTopSymbols();
+            
+            // If no ticker filter, immediately filter cost basis from cached data for instant feedback
+            if (!currentTicker && cachedCostBasis && cachedCostBasis.length > 0) {
+                // Filter cached data by account for immediate display
+                const accountFilter = accountValue || '';
+                const filteredData = isAllAccounts 
+                    ? cachedCostBasis 
+                    : cachedCostBasis.filter(group => {
+                        // Check if any trade in this group matches the account
+                        return group.trades && group.trades.some(trade => {
+                            const tradeAccountId = trade.account_id || '';
+                            return tradeAccountId.toString() === accountFilter.toString();
+                        });
+                    });
+                
+                if (filteredData.length > 0) {
+                    showAllSymbols(filteredData);
+                } else {
+                    // Show loading state
+                    const costBasisContainer = document.getElementById('cost-basis-table-container');
+                    if (costBasisContainer) {
+                        costBasisContainer.innerHTML = `
+                            <div class="text-center text-muted py-3">
+                                <i class="fas fa-spinner fa-spin me-2"></i>
+                                Loading cost basis...
+                            </div>
+                        `;
+                    }
+                }
+            } else if (currentTicker && cachedCostBasis && cachedCostBasis.length > 0) {
+                // If ticker is filtered, filter cached data by both ticker and account
+                const accountFilter = accountValue || '';
+                const matchingTickerGroups = cachedCostBasis.filter(group => {
+                    const tickerMatch = group.ticker && group.ticker.toUpperCase() === currentTicker.toUpperCase();
+                    if (!tickerMatch) return false;
+                    
+                    if (isAllAccounts) return true;
+                    
+                    // Check if any trade in this group matches the account
+                    return group.trades && group.trades.some(trade => {
+                        const tradeAccountId = trade.account_id || '';
+                        return tradeAccountId.toString() === accountFilter.toString();
+                    });
+                });
+                
+                if (matchingTickerGroups.length > 0) {
+                    updateCostBasisTable(matchingTickerGroups);
+                } else {
+                    // No data found for this ticker+account combination - show message
+                    const costBasisContainer = document.getElementById('cost-basis-table-container');
+                    const inlineContainer = document.getElementById('cost-basis-inline-container');
+                    const accountName = !isAllAccounts && window.accounts ? 
+                        (window.accounts.find(a => a.id.toString() === accountFilter.toString())?.account_name || 'selected account') : 
+                        'any account';
+                    [costBasisContainer, inlineContainer].forEach(c => {
+                        if (c) {
+                            c.innerHTML = `
+                                <div class="text-center text-muted py-3">
+                                    <i class="fas fa-info-circle me-2"></i>
+                                    No cost basis data for ${currentTicker} in ${accountName}.
+                                </div>
+                            `;
+                        }
+                    });
+                }
+            }
+            
+            // Always reload data to ensure "All" accounts shows all data
+            // Force update cost basis to bypass optimization when account changes
+            // Skip loadSummary() and loadTopSymbols() for account filtering - they're expensive and not needed
+            Promise.all([
+                loadTrades(),
+                loadCostBasis(currentTicker, true) // Force update when account changes
+            ]).catch(error => {
+                console.error('Error loading data after account change:', error);
+            });
+        }, 100); // Optimized: Reduced to 100ms for faster account filter updates
+        
+        universalAccountFilter.addEventListener('change', function() {
+            const accountValue = this.value || '';
+            handleAccountChangeImmediate.call(this);
+            // Call debounced handler with proper context
+            handleAccountChangeDebounced.call(this);
         });
     }
     
@@ -4920,11 +6851,9 @@ function setUniversalTickerFilter(ticker) {
             costBasisContainer.innerHTML = loadingHtml;
         }
         
-        // Defer trades table update to avoid blocking UI
-        // Use requestAnimationFrame to batch DOM updates
+        // Immediate feedback: filter existing trades table instantly using requestAnimationFrame
+        // This provides instant visual feedback while API calls happen in background
         requestAnimationFrame(() => {
-            // Immediate feedback: filter existing trades table instantly
-            // This provides instant visual feedback while API calls happen in background
             if (trades && trades.length > 0) {
                 // Filter trades array in memory for immediate display
                 const filteredTrades = trades.filter(trade => 
@@ -4942,13 +6871,40 @@ function setUniversalTickerFilter(ticker) {
             }
         });
         
-        // Reload all data with the ticker filter to ensure everything is in sync
-        // This ensures the dashboard, trades table, and cost basis table all update
-        // based on both the selected account and ticker filter
-        // Run all loads in parallel to reduce delay
+        // Also immediately filter cost basis table if we have cached data
+        // Show cached data immediately for better responsiveness, even if "All" accounts is selected
+        // The API call will update it with fresh data shortly
+        if (cachedCostBasis && cachedCostBasis.length > 0) {
+            // Find all matching ticker groups (could be multiple if "All" accounts was cached)
+            const matchingTickerGroups = cachedCostBasis.filter(group => 
+                group.ticker && group.ticker.toUpperCase() === ticker.toUpperCase()
+            );
+            if (matchingTickerGroups.length > 0) {
+                // updateCostBasisTable expects grouped structure: [{ticker, company_name, trades: [...]}, ...]
+                // Show cached data immediately for instant feedback
+                updateCostBasisTable(matchingTickerGroups);
+            } else {
+                // No matching results in cache, hide the table (no ticker cards)
+                const costBasisContainer = document.getElementById('cost-basis-table-container');
+                const inlineContainer = document.getElementById('cost-basis-inline-container');
+                [costBasisContainer, inlineContainer].forEach(c => {
+                    if (c) c.innerHTML = '';
+                });
+            }
+        } else {
+            // No cached data, hide the table (no ticker cards)
+            const costBasisContainer = document.getElementById('cost-basis-table-container');
+            const inlineContainer = document.getElementById('cost-basis-inline-container');
+            [costBasisContainer, inlineContainer].forEach(c => {
+                if (c) c.innerHTML = '';
+            });
+        }
+        
+        // Load data immediately when ticker is clicked (no debounce for better responsiveness)
+        // Reload data with the ticker filter in parallel (without blocking UI)
+        // Skip loadSummary() as it's not needed for ticker filtering and adds unnecessary delay
         Promise.all([
             loadTrades(),
-            loadSummary(),
             loadCostBasis(ticker)
         ]).catch(error => {
             console.error('Error loading data after setting ticker filter:', error);
@@ -5022,58 +6978,86 @@ function clearUniversalTickerFilter() {
     const universalClearButton = document.getElementById('clear-universal-ticker');
     
     if (universalTickerInput) {
+        // Immediate UI update - no delays
         universalTickerInput.value = '';
         if (universalClearButton) {
             universalClearButton.style.display = 'none';
         }
         window.symbolFilter = '';
         
-        // Immediate restore: restore cached data if available for instant display
-        // Use requestAnimationFrame to batch DOM updates and avoid blocking
-        requestAnimationFrame(() => {
-            // Use structuredClone for better performance, fallback to JSON for compatibility
+        // Update table immediately with current data (filter is now empty, so shows all)
+        // This provides instant visual feedback
+        updateTradesTable();
+        
+        // Restore cached data and update tables asynchronously to avoid blocking UI
+        // Use setTimeout(0) to defer heavy operations until after UI update
+        setTimeout(() => {
+            // Get current account filter
+            const accountFilter = document.getElementById('universal-account-filter')?.value || '';
+            const isAllAccounts = !accountFilter || accountFilter === '' || accountFilter === 'all';
+            
+            // Restore cached trades if available, applying account filter if needed
             if (cachedTrades) {
                 try {
-                    trades = structuredClone ? structuredClone(cachedTrades) : JSON.parse(JSON.stringify(cachedTrades));
+                    let restoredTrades = structuredClone ? structuredClone(cachedTrades) : JSON.parse(JSON.stringify(cachedTrades));
+                    
+                    // Apply account filter if a specific account is selected
+                    if (!isAllAccounts && accountFilter) {
+                        restoredTrades = restoredTrades.filter(trade => {
+                            const tradeAccountId = trade.account_id || '';
+                            return tradeAccountId.toString() === accountFilter.toString();
+                        });
+                    }
+                    
+                    // Preserve any new trades that might not be in cachedTrades
+                    const newTrades = trades.filter(trade => 
+                        typeof trade.id === 'string' && trade.id.startsWith('new_')
+                    );
+                    
+                    // Combine restored trades with new trades (avoid duplicates)
+                    const newTradeIds = new Set(newTrades.map(t => t.id));
+                    const restoredWithoutNew = restoredTrades.filter(t => 
+                        !(typeof t.id === 'string' && t.id.startsWith('new_'))
+                    );
+                    trades = [...restoredWithoutNew, ...newTrades];
                 } catch (e) {
-                    trades = JSON.parse(JSON.stringify(cachedTrades)); // Fallback
+                    // Fallback: just restore from cache without filtering
+                    trades = JSON.parse(JSON.stringify(cachedTrades));
                 }
-                updateTradesTable(); // Update immediately with cached data
-            } else {
-                // Fallback: use existing trades array (filtered)
                 updateTradesTable();
             }
             
-            // Restore cached cost basis if available
+            // Restore cached cost basis if available, applying account filter if needed
             if (cachedCostBasis && cachedCostBasis.length > 0) {
-                showAllSymbols(cachedCostBasis); // Restore immediately with cached data
+                if (isAllAccounts) {
+                    showAllSymbols(cachedCostBasis);
+                } else {
+                    // Filter cost basis by account
+                    const filteredCostBasis = cachedCostBasis.filter(group => {
+                        return group.trades && group.trades.some(trade => {
+                            const tradeAccountId = trade.account_id || '';
+                            return tradeAccountId.toString() === accountFilter.toString();
+                        });
+                    });
+                    if (filteredCostBasis.length > 0) {
+                        showAllSymbols(filteredCostBasis);
+                    } else {
+                        showAllSymbolsFromTrades();
+                    }
+                }
             } else {
-                // Fallback: show symbols from trades data
                 showAllSymbolsFromTrades();
             }
-        });
+        }, 0);
         
         // Then reload all data in background to ensure everything is in sync
-        // Run all loads in parallel to reduce delay
-        // Use requestAnimationFrame to defer API calls until after immediate UI update
-        requestAnimationFrame(() => {
-            Promise.all([
-                loadTrades(),
-                loadSummary()
-            ]).catch(error => {
-                console.error('Error loading data after clearing ticker filter:', error);
-            });
-            
-            // Refresh cost basis in background after a longer delay
-            // This allows the immediate cached display to stay visible and prevents flicker
-            setTimeout(() => {
-                // Only refresh if user hasn't selected a new ticker
-                if (!window.symbolFilter || window.symbolFilter.trim() === '') {
-                    loadCostBasis(null).catch(error => {
-                        console.error('Error loading cost basis after clearing ticker filter:', error);
-                    });
-                }
-            }, 1000); // Longer delay to allow immediate display to stay visible longer
+        // Run all loads in parallel to reduce delay - no debounce for clearing
+        // Skip loadSummary() for clearing filter - it's expensive and not needed
+        Promise.all([
+            loadTrades(),
+            loadCostBasis(null) // Load immediately, no delay
+        ]).catch(error => {
+            console.error('Error loading data after clearing ticker filter:', error);
         });
     }
 }
@@ -5088,15 +7072,18 @@ function setupUniversalDateFilters() {
     startDateInput.value = '';
     endDateInput.value = '';
     
+    // Debounced update function (500ms delay for date changes)
+    const debouncedUpdateDashboard = debounce(updateDashboardData, 500);
+    
     // Update both dashboard and trades filters when changed
     startDateInput.addEventListener('change', function() {
         document.getElementById('dashboard-start-date').value = this.value;
-        updateDashboardData();
+        debouncedUpdateDashboard();
     });
     
     endDateInput.addEventListener('change', function() {
         document.getElementById('dashboard-end-date').value = this.value;
-        updateDashboardData();
+        debouncedUpdateDashboard();
     });
 }
 
@@ -5171,192 +7158,46 @@ function clearUniversalDateFilters() {
 
 // Toggle Cost Basis Column
 function toggleCostBasis() {
-    const tradesColumn = document.getElementById('trades-column');
     const costBasisColumn = document.getElementById('cost-basis-column');
     const toggleIcon = document.getElementById('cost-basis-toggle-icon');
-    const collapsedCardToggle = document.getElementById('cost-basis-collapsed-card-toggle');
-    const collapsedCardIcon = document.getElementById('cost-basis-collapsed-card-icon');
+    const floatingExpand = document.getElementById('cost-basis-floating-expand');
     
     if (!costBasisColumn) return;
     
-    // Check if trades is currently collapsed
-    const tradesIsCollapsed = tradesColumn && !tradesColumn.classList.contains('show');
-    
     // Toggle collapse/show classes - CSS handles the flex adjustments
+    // Same logic as toggleTrades() for consistency
     if (costBasisColumn.classList.contains('show')) {
-        // If trades is collapsed, expand it first
-        if (tradesIsCollapsed && tradesColumn) {
-            tradesColumn.classList.remove('collapse');
-            tradesColumn.classList.add('show');
-            // Update trades toggle icon
-            const tradesToggleIcon = document.getElementById('trades-toggle-icon');
-            if (tradesToggleIcon) {
-                tradesToggleIcon.classList.remove('fa-chevron-right');
-                tradesToggleIcon.classList.add('fa-chevron-left');
-            }
-            // Update trades collapsed card icon
-            const tradesCollapsedCardIcon = document.getElementById('trades-collapsed-card-icon');
-            if (tradesCollapsedCardIcon) {
-                tradesCollapsedCardIcon.classList.remove('fa-chevron-right');
-                tradesCollapsedCardIcon.classList.add('fa-chevron-left');
-            }
-            // Hide trades floating toggle since it's now expanded
-            
-            // Update column widths to make trades full width (60/40 split since cost basis is still expanded)
-            updateColumnWidths();
-            
-            // Wait for trades to expand and layout to update, then collapse cost basis
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    requestAnimationFrame(() => {
-                        // Now hide the cost basis table
-                        costBasisColumn.classList.remove('show');
-                        costBasisColumn.classList.add('collapse');
-                        // When collapsed, arrow points left (to expand/show)
-                        if (toggleIcon) {
-                            toggleIcon.classList.remove('fa-chevron-right');
-                            toggleIcon.classList.add('fa-chevron-left');
-                        }
-                        // Update column widths after collapsing cost basis (trades becomes full width)
-                        updateColumnWidths();
-                        if (collapsedCardIcon) {
-                            collapsedCardIcon.classList.remove('fa-chevron-right');
-                            collapsedCardIcon.classList.add('fa-chevron-left');
-                        }
-                        // Update collapsed card visibility
-                        updateCollapsedCardVisibility();
-                    });
-                });
-            });
-        } else {
-            // Trades is already expanded - now hide the cost basis table
-            costBasisColumn.classList.remove('show');
-            costBasisColumn.classList.add('collapse');
-            // When collapsed, arrow points left (to expand/show)
-            if (toggleIcon) {
-                toggleIcon.classList.remove('fa-chevron-right');
-                toggleIcon.classList.add('fa-chevron-left');
-            }
-            // Update column widths after collapsing cost basis (trades becomes full width)
-            updateColumnWidths();
-            if (collapsedCardIcon) {
-                collapsedCardIcon.classList.remove('fa-chevron-right');
-                collapsedCardIcon.classList.add('fa-chevron-left');
-            }
-        }
+        // Collapsing - hide the cost basis table
+        costBasisColumn.classList.remove('show');
+        costBasisColumn.classList.add('collapse');
+        // When collapsed, icon state doesn't matter (column is hidden)
     } else {
         // Expanding - show the cost basis table
-        // If trades is collapsed, expand it first to 60/40 split
-        if (tradesIsCollapsed && tradesColumn) {
-            tradesColumn.classList.remove('collapse');
-            tradesColumn.classList.add('show');
-            // Update trades toggle icon
-            const tradesToggleIcon = document.getElementById('trades-toggle-icon');
-            if (tradesToggleIcon) {
-                tradesToggleIcon.classList.remove('fa-chevron-right');
-                tradesToggleIcon.classList.add('fa-chevron-left');
-            }
-            // Update trades collapsed card icon
-            const tradesCollapsedCardIcon = document.getElementById('trades-collapsed-card-icon');
-            if (tradesCollapsedCardIcon) {
-                tradesCollapsedCardIcon.classList.remove('fa-chevron-right');
-                tradesCollapsedCardIcon.classList.add('fa-chevron-left');
-            }
-            // Update column widths to make trades 60% and cost basis 40%
-            updateColumnWidths();
-            // Wait for trades to expand and layout to update, then expand cost basis
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    requestAnimationFrame(() => {
-                        // Now expand the cost basis table
-                        costBasisColumn.classList.remove('collapse');
-                        costBasisColumn.classList.add('show');
-                        // When expanded, arrow points right (to collapse/hide)
-                        if (toggleIcon) {
-                            toggleIcon.classList.remove('fa-chevron-left');
-                            toggleIcon.classList.add('fa-chevron-right');
-                        }
-                        if (collapsedCardIcon) {
-                            collapsedCardIcon.classList.remove('fa-chevron-left');
-                            collapsedCardIcon.classList.add('fa-chevron-right');
-                        }
-                        // Update column widths after expanding cost basis
-                        updateColumnWidths();
-                        // Wait for layout to update completely, then recalculate position
-                        requestAnimationFrame(() => {
-                            requestAnimationFrame(() => {
-                                requestAnimationFrame(() => {
-                                    requestAnimationFrame(() => {
-                                        // Recalculate position after both expand and layout is fully settled
-                                        const tradesCard = document.getElementById('trades');
-                                        const container = document.querySelector('.trades-cost-container');
-                                        if (tradesCard && container) {
-                                            const tradesHeader = tradesCard.querySelector('.card-header');
-                                            if (tradesHeader) {
-                                                // Get positions relative to viewport AFTER both expand and layout is settled
-                                                const headerRect = tradesHeader.getBoundingClientRect();
-                                                const containerRect = container.getBoundingClientRect();
-                                                
-                                                // Calculate position relative to container (not viewport)
-                                                // Align with top of header instead of middle
-                                                const headerTop = headerRect.top;
-                                                const containerTop = containerRect.top;
-                                                const offsetFromContainer = headerTop - containerTop;
-                                                
-                                                // Store the offset for future use
-                                            }
-                                        }
-                                    });
-                                });
-                            });
-                        });
-                    });
-                });
-            });
-        } else {
-            // Trades is already expanded - just expand cost basis
-            costBasisColumn.classList.remove('collapse');
-            costBasisColumn.classList.add('show');
-            // When expanded, arrow points right (to collapse/hide)
-            if (toggleIcon) {
-                toggleIcon.classList.remove('fa-chevron-left');
-                toggleIcon.classList.add('fa-chevron-right');
-            }
-            if (collapsedCardIcon) {
-                collapsedCardIcon.classList.remove('fa-chevron-left');
-                collapsedCardIcon.classList.add('fa-chevron-right');
-            }
-            // Update column widths after expanding cost basis
-            updateColumnWidths();
+        costBasisColumn.classList.remove('collapse');
+        costBasisColumn.classList.add('show');
+        // When expanded, arrow in header points right (to collapse/hide) - same as trades but opposite direction
+        if (toggleIcon) {
+            toggleIcon.classList.remove('fa-chevron-left');
+            toggleIcon.classList.add('fa-chevron-right');
         }
     }
     
-    // Update collapsed card visibility
-    // Note: updateColumnWidths() is called inside the collapse/expand logic above
-    // to ensure positions are calculated after layout changes
-    updateCollapsedCardVisibility();
+    // Update column widths first, then update floating arrow positions after layout settles
+    updateColumnWidths();
+    // Wait for CSS transition to complete (300ms) plus a small buffer before positioning arrows
+    // This ensures the trades card has fully expanded to 100% width before we calculate arrow position
+    setTimeout(() => {
+        updateFloatingArrows();
+    }, 350); // 300ms transition + 50ms buffer
 }
 
 
-// Update position on scroll with throttling to prevent lag
-// Since toggles use position: absolute relative to container, they scroll with the page
+// Update floating arrow positions on scroll
 let scrollTimeout;
 window.addEventListener('scroll', function() {
     clearTimeout(scrollTimeout);
     scrollTimeout = setTimeout(function() {
-        const costBasisFloatingToggle = document.getElementById('cost-basis-floating-toggle');
-        const costBasisColumn = document.getElementById('cost-basis-column');
-        // Only update if cost basis is collapsed and toggle is visible
-        if (costBasisFloatingToggle && costBasisFloatingToggle.style.display !== 'none' && 
-            costBasisColumn && !costBasisColumn.classList.contains('show')) {
-            // Cost basis is collapsed - just use stored position, don't recalculate
-            if (storedCostBasisHeaderPosition !== null) {
-                costBasisFloatingToggle.style.top = `${storedCostBasisHeaderPosition}px`;
-                costBasisFloatingToggle.style.transform = 'translateY(0)';
-                costBasisFloatingToggle.style.right = '0px';
-            }
-        }
-        // Floating toggle removed - no longer needed
+        updateFloatingArrows();
     }, 16); // Throttle to ~60fps (16ms)
 }, { passive: true });
 
@@ -5365,44 +7206,12 @@ let resizeTimeout;
 window.addEventListener('resize', function() {
     clearTimeout(resizeTimeout);
     resizeTimeout = setTimeout(function() {
-        const costBasisFloatingToggle = document.getElementById('cost-basis-floating-toggle');
-        const costBasisColumn = document.getElementById('cost-basis-column');
-        // Only update if cost basis is collapsed and toggle is visible
-        if (costBasisFloatingToggle && costBasisFloatingToggle.style.display !== 'none' && 
-            costBasisColumn && !costBasisColumn.classList.contains('show')) {
-            // Cost basis is collapsed - recalculate position on resize (layout might have changed)
-            // But use stored position as fallback
-            const tradesCard = document.getElementById('trades');
-            const container = document.querySelector('.trades-cost-container');
-            if (tradesCard && container) {
-                const tradesHeader = tradesCard.querySelector('.card-header');
-                if (tradesHeader) {
-                    const headerRect = tradesHeader.getBoundingClientRect();
-                    const containerRect = container.getBoundingClientRect();
-                    const headerTop = headerRect.top;
-                    const containerTop = containerRect.top;
-                    const offsetFromContainer = headerTop - containerTop;
-                    storedCostBasisHeaderPosition = offsetFromContainer;
-                    costBasisFloatingToggle.style.top = `${offsetFromContainer}px`;
-                    costBasisFloatingToggle.style.transform = 'translateY(0)';
-                    costBasisFloatingToggle.style.right = '0px';
-                } else if (storedCostBasisHeaderPosition !== null) {
-                    // Fallback to stored position if header not found
-                    costBasisFloatingToggle.style.top = `${storedCostBasisHeaderPosition}px`;
-                    costBasisFloatingToggle.style.transform = 'translateY(0)';
-                    costBasisFloatingToggle.style.right = '0px';
-                }
-            }
-        }
-        const tradesFloatingToggle = document.getElementById('trades-floating-toggle');
-        const tradesColumn = document.getElementById('trades-column');
-        // Floating toggle removed - no longer needed
         // Recalculate cost basis table height on window resize
         setCostBasisTableHeight();
         // Update column widths on resize
         updateColumnWidths();
-        // Update collapsed card visibility
-        updateCollapsedCardVisibility();
+        // Update floating arrow positions (same as trades)
+        updateFloatingArrows();
     }, 150); // Throttle to 150ms
 });
 
@@ -5413,29 +7222,16 @@ window.addEventListener('resize', function() {
 document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM loaded, initializing app...');
     
-    // Initialize cost basis toggle state
-    const costBasisColumn = document.getElementById('cost-basis-column');
-    const costBasisCollapsedCardIcon = document.getElementById('cost-basis-collapsed-card-icon');
+    // Initialize floating arrows
+    updateFloatingArrows();
     
-    if (costBasisColumn) {
-        // If cost basis is collapsed (hidden), update collapsed card icon
-        if (!costBasisColumn.classList.contains('show')) {
-            if (costBasisCollapsedCardIcon) {
-                costBasisCollapsedCardIcon.classList.remove('fa-chevron-right');
-                costBasisCollapsedCardIcon.classList.add('fa-chevron-left');
-            }
-        } else {
-            // If cost basis is visible, update collapsed card icon
-            if (costBasisCollapsedCardIcon) {
-                costBasisCollapsedCardIcon.classList.remove('fa-chevron-left');
-                costBasisCollapsedCardIcon.classList.add('fa-chevron-right');
-            }
-        }
-    }
+    // Set up event listeners first (before any data loading)
+    setupThemeToggle();  // Setup dark mode toggle - must be called early
     
-    // Update column widths based on visibility
-    updateColumnWidths();
-    updateCollapsedCardVisibility();
+    // Update column widths based on visibility (after DOM is ready)
+    setTimeout(() => {
+        updateColumnWidths();
+    }, 0);
     
     // Load commission settings
     loadCommission();
@@ -5455,8 +7251,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Update chart with data
     updateChart();
     
-    // Set up event listeners
-    setupThemeToggle();  // Setup dark mode toggle
+    // Set up remaining event listeners
     setupUniversalControls();  // Setup new universal control bar
     setupTradesSymbolFilter();
     setupStatusFilter();
@@ -5550,7 +7345,7 @@ async function updateChart() {
         if (startDate) params.append('start_date', startDate);
         if (endDate) params.append('end_date', endDate);
         
-        const response = await fetch(`/api/chart-data?${params}`);
+        const response = await apiFetch(`/api/chart-data?${params}`);
         const data = await response.json();
         
         premiumChart.data.labels = data.map(d => d.date);
@@ -5569,34 +7364,24 @@ function toggleCommissionSettings() {
     const modal = new bootstrap.Modal(document.getElementById('commission-modal'));
     modal.show();
     
-    // Load accounts and commissions when modal opens
+    // Load accounts for the form dropdown and all commissions when modal opens
     loadCommissionAccounts();
     loadCommissions();
 }
 
 async function loadCommissionAccounts() {
     try {
-        const response = await fetch('/api/accounts');
+        const response = await apiFetch('/api/accounts');
         const accounts = await response.json();
         const select = document.getElementById('commission-account-select');
         
         if (select) {
-            select.innerHTML = '<option value="">All Accounts</option>';
+            select.innerHTML = '<option value="">Select an account...</option>';
             accounts.forEach(account => {
                 const option = document.createElement('option');
                 option.value = account.id;
                 option.textContent = account.account_name || `Account ${account.id}`;
                 select.appendChild(option);
-            });
-            
-            // Set default to first account if available
-            if (accounts.length > 0) {
-                select.value = accounts[0].id;
-            }
-            
-            // Load commissions when account changes
-            select.addEventListener('change', function() {
-                loadCommissions();
             });
         }
     } catch (error) {
@@ -5606,46 +7391,98 @@ async function loadCommissionAccounts() {
 
 async function loadCommissions() {
     try {
-        const accountSelect = document.getElementById('commission-account-select');
-        const accountId = accountSelect ? accountSelect.value : '';
-        
-        if (!accountId) {
-            document.getElementById('commissions-table-body').innerHTML = '<tr><td colspan="4" class="text-center text-muted">Please select an account</td></tr>';
-            return;
-        }
-        
-        const response = await fetch(`/api/commissions?account_id=${accountId}`);
+        // Load all commissions for all accounts
+        const response = await apiFetch('/api/commissions');
         const commissions = await response.json();
         
-        const tbody = document.getElementById('commissions-table-body');
-        if (!tbody) return;
+        const container = document.getElementById('commissions-table-container');
+        if (!container) return;
         
         if (commissions.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No commission records found</td></tr>';
+            container.innerHTML = '<div class="text-center text-muted">No commission records found</div>';
             return;
         }
         
-        tbody.innerHTML = commissions.map(comm => {
-            const effectiveDate = comm.effective_date ? new Date(comm.effective_date).toLocaleDateString() : '';
-            return `
-                <tr>
-                    <td>${effectiveDate}</td>
-                    <td>$${comm.commission_rate.toFixed(5)}</td>
-                    <td>${comm.notes || ''}</td>
-                    <td>
-                        <button class="btn btn-sm btn-outline-primary me-1" onclick="editCommission(${comm.id}, ${comm.commission_rate}, '${comm.effective_date}', '${(comm.notes || '').replace(/'/g, "\\'")}')">
-                            <i class="fas fa-edit"></i>
-                        </button>
-                        <button class="btn btn-sm btn-outline-danger" onclick="deleteCommission(${comm.id})">
-                            <i class="fas fa-trash"></i>
-                        </button>
-                    </td>
-                </tr>
+        // Group commissions by account
+        const commissionsByAccount = {};
+        commissions.forEach(comm => {
+            const accountId = comm.account_id;
+            const accountName = comm.account_name || `Account ${accountId}`;
+            
+            if (!commissionsByAccount[accountId]) {
+                commissionsByAccount[accountId] = {
+                    accountId: accountId,
+                    accountName: accountName,
+                    commissions: []
+                };
+            }
+            commissionsByAccount[accountId].commissions.push(comm);
+        });
+        
+        // Sort accounts by name
+        const sortedAccounts = Object.values(commissionsByAccount).sort((a, b) => 
+            a.accountName.localeCompare(b.accountName)
+        );
+        
+        // Build HTML with one table per account
+        let html = '';
+        sortedAccounts.forEach(accountData => {
+            const { accountId, accountName, commissions } = accountData;
+            
+            // Sort commissions by effective date (descending)
+            commissions.sort((a, b) => {
+                const dateA = new Date(a.effective_date);
+                const dateB = new Date(b.effective_date);
+                return dateB - dateA;
+            });
+            
+            html += `
+                <div class="mb-4">
+                    <h6 class="mb-2" style="font-weight: 600; color: var(--text-color);">${accountName}</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-striped">
+                            <thead class="table-light sticky-top">
+                                <tr>
+                                    <th>Effective Date</th>
+                                    <th>Commission Rate ($)</th>
+                                    <th>Notes</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${commissions.map(comm => {
+                                    const effectiveDate = comm.effective_date ? new Date(comm.effective_date).toLocaleDateString() : '';
+                                    const escapedNotes = (comm.notes || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                                    return `
+                                        <tr>
+                                            <td>${effectiveDate}</td>
+                                            <td>$${comm.commission_rate.toFixed(5)}</td>
+                                            <td>${comm.notes || ''}</td>
+                                            <td>
+                                                <button class="btn btn-sm btn-outline-primary me-1" onclick="editCommission(${comm.id}, ${comm.account_id}, ${comm.commission_rate}, '${comm.effective_date}', '${escapedNotes}')">
+                                                    <i class="fas fa-edit"></i>
+                                                </button>
+                                                <button class="btn btn-sm btn-outline-danger" onclick="deleteCommission(${comm.id})">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    `;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             `;
-        }).join('');
+        });
+        
+        container.innerHTML = html;
     } catch (error) {
         console.error('Error loading commissions:', error);
-        document.getElementById('commissions-table-body').innerHTML = '<tr><td colspan="4" class="text-center text-danger">Error loading commissions</td></tr>';
+        const container = document.getElementById('commissions-table-container');
+        if (container) {
+            container.innerHTML = '<div class="text-center text-danger">Error loading commissions</div>';
+        }
     }
 }
 
@@ -5653,6 +7490,7 @@ function openNewCommissionForm() {
     const formContainer = document.getElementById('commission-form-container');
     const formTitle = document.getElementById('commission-form-title');
     const editId = document.getElementById('commission-edit-id');
+    const accountSelect = document.getElementById('commission-account-select');
     const rateInput = document.getElementById('commission-rate-input');
     const dateInput = document.getElementById('commission-effective-date-input');
     const notesInput = document.getElementById('commission-notes-input');
@@ -5660,6 +7498,10 @@ function openNewCommissionForm() {
     
     // Reset form
     editId.value = '';
+    if (accountSelect) {
+        accountSelect.value = '';
+        accountSelect.disabled = false; // Enable account selection for new commissions
+    }
     rateInput.value = '';
     notesInput.value = '';
     
@@ -5678,10 +7520,11 @@ function openNewCommissionForm() {
     formContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function editCommission(id, rate, effectiveDate, notes) {
+function editCommission(id, accountId, rate, effectiveDate, notes) {
     const formContainer = document.getElementById('commission-form-container');
     const formTitle = document.getElementById('commission-form-title');
     const editId = document.getElementById('commission-edit-id');
+    const accountSelect = document.getElementById('commission-account-select');
     const rateInput = document.getElementById('commission-rate-input');
     const dateInput = document.getElementById('commission-effective-date-input');
     const notesInput = document.getElementById('commission-notes-input');
@@ -5689,6 +7532,11 @@ function editCommission(id, rate, effectiveDate, notes) {
     
     // Fill form with existing data
     editId.value = id;
+    if (accountSelect) {
+        accountSelect.value = accountId;
+        // Disable account selection when editing (account cannot be changed)
+        accountSelect.disabled = true;
+    }
     rateInput.value = rate;
     dateInput.value = effectiveDate;
     notesInput.value = notes || '';
@@ -5706,7 +7554,12 @@ function editCommission(id, rate, effectiveDate, notes) {
 
 function cancelCommissionForm() {
     const formContainer = document.getElementById('commission-form-container');
+    const accountSelect = document.getElementById('commission-account-select');
     formContainer.style.display = 'none';
+    // Re-enable account select in case it was disabled during edit
+    if (accountSelect) {
+        accountSelect.disabled = false;
+    }
 }
 
 async function deleteCommission(id) {
@@ -5715,14 +7568,31 @@ async function deleteCommission(id) {
     }
     
     try {
-        const response = await fetch(`/api/commissions/${id}`, {
+        const response = await apiFetch(`/api/commissions/${id}`, {
             method: 'DELETE'
         });
         
         const result = await response.json();
         
         if (result.success) {
+            // Reload commissions table
             loadCommissions();
+            // Reload trades and cost basis to reflect updated commission rates after deletion
+            console.log(`Commission deleted. ${result.trades_updated || 0} trades updated in database.`);
+            Promise.all([
+                loadTrades(),
+                loadCostBasis(window.symbolFilter || null)
+            ]).then(() => {
+                // Update trades table with fresh data
+                updateTradesTable();
+                // Also update cost basis table if a ticker is selected
+                if (window.symbolFilter) {
+                    const currentTicker = window.symbolFilter;
+                    loadCostBasis(currentTicker);
+                }
+            }).catch(error => {
+                console.error('Error reloading data after commission deletion:', error);
+            });
         } else {
             alert('Error deleting commission: ' + (result.error || 'Unknown error'));
         }
@@ -5760,17 +7630,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 const url = id ? `/api/commissions/${id}` : '/api/commissions';
                 const method = id ? 'PUT' : 'POST';
                 
-                const response = await fetch(url, {
+                const response = await apiFetch(url, {
                     method: method,
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
+                    body: {
                         account_id: accountId,
                         commission_rate: commissionRate,
                         effective_date: effectiveDate,
                         notes: notes
-                    })
+                    }
                 });
                 
                 const result = await response.json();
@@ -5780,6 +7647,24 @@ document.addEventListener('DOMContentLoaded', function() {
                     cancelCommissionForm();
                     // Reload commissions table
                     loadCommissions();
+                    // Always reload trades and cost basis to reflect updated commission rates
+                    // The backend updates all affected trades, so we need to refresh the display
+                    console.log(`Commission ${id ? 'updated' : 'created'}. ${result.trades_updated || 0} trades updated in database.`);
+                    // Reload trades and cost basis to reflect updated commission rates
+                    Promise.all([
+                        loadTrades(),
+                        loadCostBasis(window.symbolFilter || null)
+                    ]).then(() => {
+                        // Update trades table with fresh data
+                        updateTradesTable();
+                        // Also update cost basis table if a ticker is selected
+                        if (window.symbolFilter) {
+                            const currentTicker = window.symbolFilter;
+                            loadCostBasis(currentTicker);
+                        }
+                    }).catch(error => {
+                        console.error('Error reloading data after commission update:', error);
+                    });
                 } else {
                     alert('Error saving commission: ' + (result.error || 'Unknown error'));
                 }
@@ -5874,7 +7759,7 @@ function openBTOModal(tradeData = null) {
         const modalIcon = document.querySelector('#btoModal .modal-title i');
         if (modalTitle) modalTitle.innerHTML = '<i class="fas fa-edit me-2"></i>Edit BTO Trade';
         
-        document.getElementById('bto-trade-date').value = formatDate(tradeData.trade_date || '');
+        document.getElementById('bto-trade-date').value = formatDate(tradeData.date_trade_open || tradeData.trade_date || '');
         document.getElementById('bto-underlying').value = tradeData.ticker || '';
         document.getElementById('bto-purchase-price').value = tradeData.price_per_share || '';
         document.getElementById('bto-number-shares').value = tradeData.num_of_contracts || '';
@@ -5939,7 +7824,7 @@ function openSTCModal(tradeData = null) {
         const modalTitle = document.querySelector('#stcModal .modal-title');
         if (modalTitle) modalTitle.innerHTML = '<i class="fas fa-edit me-2"></i>Edit STC Trade';
         
-        document.getElementById('stc-trade-date').value = formatDate(tradeData.trade_date || '');
+        document.getElementById('stc-trade-date').value = formatDate(tradeData.date_trade_open || tradeData.trade_date || '');
         document.getElementById('stc-underlying').value = tradeData.ticker || '';
         document.getElementById('stc-sale-price').value = tradeData.price_per_share || '';
         document.getElementById('stc-number-shares').value = tradeData.num_of_contracts || '';
@@ -6014,7 +7899,7 @@ function openROCTCallModal(tradeData = null) {
             }
         }
         
-        document.getElementById('roct-call-trade-date').value = formatDate(tradeData.trade_date || '');
+        document.getElementById('roct-call-trade-date').value = formatDate(tradeData.date_trade_open || tradeData.trade_date || '');
         document.getElementById('roct-call-underlying').value = tradeData.ticker || '';
         document.getElementById('roct-call-price').value = tradeData.current_price || '';
         document.getElementById('roct-call-expiration-date').value = formatDate(tradeData.expiration_date || '');
@@ -6024,8 +7909,9 @@ function openROCTCallModal(tradeData = null) {
         document.getElementById('roct-call-cost-basis').value = tradeData.cost_basis || '';
         
         // Calculate DTE if not provided
-        if (!tradeData.dte && tradeData.trade_date && tradeData.expiration_date) {
-            const dte = calculateDaysToExpiration(tradeData.expiration_date, tradeData.trade_date);
+        const tradeDateForDTE = tradeData.date_trade_open || tradeData.trade_date;
+        if (!tradeData.dte && tradeDateForDTE && tradeData.expiration_date) {
+            const dte = calculateDaysToExpiration(tradeData.expiration_date, tradeDateForDTE);
             document.getElementById('roct-call-dte').value = dte;
         }
         
@@ -6075,1137 +7961,266 @@ function openROCTCallModal(tradeData = null) {
     });
 }
 
-// Add new ROCT CALL column to trades table
-async function addNewROCTCallColumn() {
-    console.log('addNewROCTCallColumn called');
-    
-    // Get default account
-    const accounts = await fetch('/api/accounts').then(r => r.json());
-    const defaultAccount = accounts.find(acc => acc.is_default === 1 || acc.is_default === true);
-    const defaultAccountId = defaultAccount ? defaultAccount.id : (accounts.find(acc => acc.id === 9) ? 9 : (accounts.length > 0 ? accounts[0].id : null));
-    const defaultAccountName = defaultAccount ? defaultAccount.account_name : (accounts.find(acc => acc.id === 9) ? accounts.find(acc => acc.id === 9).account_name : (accounts.length > 0 ? accounts[0].account_name : 'Unknown'));
-    
-    // Get today's date and expiration date (10 days from today)
-    const today = new Date();
-    const expirationDate = new Date(today);
-    expirationDate.setDate(today.getDate() + 10);
-    // Use YYYY-MM-DD format for date inputs
-    const todayStr = today.toISOString().split('T')[0];
-    const expDateStr = expirationDate.toISOString().split('T')[0];
-    
-    // Check if there's an active ticker filter
-    const activeTicker = window.symbolFilter ? window.symbolFilter.trim().toUpperCase() : '';
-    
-    // Create a temporary trade object for the new column
-    const newTrade = {
-        id: 'new_' + Date.now(), // Temporary ID (use underscore instead of hyphen to avoid syntax errors)
-        account_id: defaultAccountId,
-        account_name: defaultAccountName,
-        ticker: activeTicker, // Pre-populate with active ticker filter if available
-        trade_date: todayStr,
-        expiration_date: expDateStr,
-        current_price: '',
-        strike_price: '',
-        credit_debit: '',
-        num_of_contracts: 1,
-        trade_type: 'ROCT CALL',
-        type_name: 'ROCT CALL',
-        trade_status: 'open',
-        dte: 10,
-        num_of_shares: 0,
-        commission_per_share: 0,
-        net_credit_per_share: 0,
-        risk_capital_per_share: 0,
-        margin_capital: 0,
-        rorc: 0,
-        arorc: 0
-    };
-    
-    // Add to trades array temporarily
-    trades.push(newTrade);
-    
-    // Re-render the table
-    updateTradesTable();
-    
-    // Find the new column and make it editable
+// Helper function to scroll to and focus on a newly created trade
+function scrollToNewTrade(tradeId) {
     setTimeout(() => {
         const tbody = document.getElementById('trades-table');
         if (!tbody) return;
         
-        // Find the column index for the new trade by searching for its data-trade-id
+        // Find the column index for the new trade
         let newColumnIndex = -1;
         const rows = tbody.querySelectorAll('tr');
         for (let i = 0; i < rows.length; i++) {
             const cells = rows[i].querySelectorAll('td');
-            // Skip the first cell (field name) and check data cells
             for (let j = 1; j < cells.length; j++) {
-                const input = cells[j].querySelector(`input[data-trade-id="${newTrade.id}"], select[data-trade-id="${newTrade.id}"]`);
+                const input = cells[j].querySelector(`input[data-trade-id="${tradeId}"], select[data-trade-id="${tradeId}"]`);
                 if (input) {
-                    newColumnIndex = j; // j is already the correct index (includes field name column)
+                    newColumnIndex = j;
                     break;
                 }
             }
             if (newColumnIndex !== -1) break;
         }
         
-        if (newColumnIndex === -1) {
-            console.error('Could not find column for new trade:', newTrade.id);
-            return;
-        }
-        
-        console.log('Found column index for new trade:', newTrade.id, 'at index:', newColumnIndex);
-        
-        // Make account editable (row 1)
-        const accountRow = tbody.children[1];
-        if (accountRow) {
-            const accountCell = accountRow.children[newColumnIndex];
-            if (accountCell) {
-                // Create account dropdown
-                let accountOptions = '';
-                accounts.forEach(account => {
-                    const selected = account.id === defaultAccountId ? 'selected' : '';
-                    accountOptions += `<option value="${account.id}" ${selected}>${account.account_name}</option>`;
-                });
-                accountCell.innerHTML = `
-                    <select class="form-select form-select-sm text-center new-trade-account-select" 
-                            data-trade-id="${newTrade.id}" 
-                            data-field="account_id"
-                            data-field-row="1"
-                            style="width: 100px; font-size: 0.6125rem; padding-left: 1.5rem; padding-right: 0.25rem; padding-top: 0.1rem; padding-bottom: 0.1rem;">
-                        ${accountOptions}
-                    </select>
-                `;
-                // Attach event listener after creating the element
-                const accountSelect = accountCell.querySelector('select');
-                if (accountSelect) {
-                    accountSelect.addEventListener('change', function() {
-                        updateNewTradeAccount(newTrade.id, this.value);
-                    });
+        if (newColumnIndex !== -1) {
+            // Scroll to the column
+            const firstRow = rows[0];
+            if (firstRow && firstRow.children[newColumnIndex]) {
+                firstRow.children[newColumnIndex].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+            }
+            
+            // Focus on the ticker input field (row 2, typically)
+            if (rows.length > 2) {
+                const tickerRow = rows[2];
+                if (tickerRow && tickerRow.children[newColumnIndex]) {
+                    const tickerInput = tickerRow.children[newColumnIndex].querySelector(`input[data-trade-id="${tradeId}"]`);
+                    if (tickerInput) {
+                        setTimeout(() => tickerInput.focus(), 300);
+                    }
                 }
             }
         }
+    }, 500);
+}
+
+// Add new ROCT CALL column to trades table
+async function addNewROCTCallColumn() {
+    console.log('addNewROCTCallColumn called');
+    
+    try {
+        // Get accounts
+        const response = await apiFetch('/api/accounts');
+        const accounts = await response.json();
         
-        // Make ticker editable and add auto-filter (row 2)
-        const tickerRow = tbody.children[2];
-        if (tickerRow) {
-            const tickerCell = tickerRow.children[newColumnIndex];
-            if (tickerCell) {
-                // Find the input specifically for this new trade
-                let tickerInput = tickerCell.querySelector(`input[data-trade-id="${newTrade.id}"]`);
-                if (!tickerInput) {
-                    // Fallback: just get any input in the cell
-                    tickerInput = tickerCell.querySelector('input');
-                }
-                if (tickerInput) {
-                    console.log('Found ticker input for new trade:', newTrade.id, 'Element:', tickerInput);
-                    console.log('Ticker input data-trade-id:', tickerInput.getAttribute('data-trade-id'));
-                    // Verify we have the right element
-                    if (tickerInput.getAttribute('data-trade-id') !== newTrade.id) {
-                        console.error('ERROR: Found wrong input element! Expected:', newTrade.id, 'Got:', tickerInput.getAttribute('data-trade-id'));
-                        return; // Don't attach handlers to wrong element
-                    }
-                    // Remove the existing oninput handler and replace with our own
-                    tickerInput.removeAttribute('oninput');
-                    
-                    // If there's an active ticker filter, populate the field
-                    if (activeTicker) {
-                        tickerInput.value = activeTicker;
-                        // Update the trade object in memory
-                        const trade = trades.find(t => t.id === newTrade.id);
-                        if (trade) {
-                            trade.ticker = activeTicker;
-                        }
-                    }
-                    
-                    // Function to show/hide loading spinner
-                    const showLoadingSpinner = () => {
-                        const spinner = document.getElementById('trade-loading-spinner');
-                        if (spinner) {
-                            spinner.classList.add('show');
-                            console.log('[DEBUG] Loading spinner shown');
-                        }
-                    };
-                    
-                    const hideLoadingSpinner = () => {
-                        const spinner = document.getElementById('trade-loading-spinner');
-                        if (spinner) {
-                            spinner.classList.remove('show');
-                            console.log('[DEBUG] Loading spinner hidden');
-                        }
-                    };
-                    
-                    // Function to update ticker display and filter tables
-                    const updateTickerDisplay = (tickerValue) => {
-                        // Execute immediately (no debounce for blur/Enter events)
-                        const ticker = tickerValue.trim().toUpperCase();
-                        console.log('updateTickerDisplay called with ticker:', ticker);
-                        if (ticker) {
-                            // Show loading spinner
-                            showLoadingSpinner();
-                            // Update the trade object in memory first
-                            const trade = trades.find(t => t.id === newTrade.id);
-                            if (trade) {
-                                trade.ticker = ticker;
-                            }
-                            
-                            // Save a reference to the new trade before loading (it will be lost when loadTrades() replaces the array)
-                            const newTradeCopy = trade ? {...trade} : {...newTrade};
-                            newTradeCopy.ticker = ticker; // Ensure ticker is updated
-                            
-                            // Save current input values from the new trade column before re-rendering
-                            // First, read all current values from the DOM and save them to the trade object in memory
-                            const tbody = document.getElementById('trades-table');
-                            let savedInputValues = {};
-                            let savedFocusedField = null; // Save which field was focused
-                            if (tbody) {
-                                const tradeColumnIndex = findColumnIndexForTrade(newTrade.id);
-                                if (tradeColumnIndex !== -1) {
-                                    // Save the currently focused field
-                                    const activeElement = document.activeElement;
-                                    if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'SELECT')) {
-                                        // Check if the focused element is in this trade's column
-                                        const cell = activeElement.closest('td');
-                                        if (cell) {
-                                            const row = cell.closest('tr');
-                                            if (row && row.children[tradeColumnIndex] === cell) {
-                                                const fieldName = activeElement.getAttribute('data-field');
-                                                const rowIndex = Array.from(tbody.children).indexOf(row);
-                                                if (fieldName || rowIndex !== -1) {
-                                                    savedFocusedField = {
-                                                        field: fieldName || `row_${rowIndex}`,
-                                                        rowIndex: rowIndex
-                                                    };
-                                                    console.log('[DEBUG] Saved focused field:', savedFocusedField);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    
-                                    // Save values from all input fields in the new trade column
-                                    const inputRows = [1, 2, 3, 4, 5, 7, 8, 9]; // Account, Ticker, Trade Date, Price, Exp Date, Strike, Credit, Contracts
-                                    inputRows.forEach(rowIndex => {
-                                        const row = tbody.children[rowIndex];
-                                        if (row && row.children[tradeColumnIndex]) {
-                                            const cell = row.children[tradeColumnIndex];
-                                            const input = cell.querySelector('input, select');
-                                            if (input) {
-                                                const fieldName = input.getAttribute('data-field') || `row_${rowIndex}`;
-                                                const inputValue = input.value.trim();
-                                                savedInputValues[fieldName] = inputValue;
-                                                
-                                                // Also update the trade object in memory immediately
-                                                const trade = trades.find(t => t.id === newTrade.id);
-                                                if (trade && inputValue) {
-                                                    if (fieldName === 'account_id') {
-                                                        trade.account_id = parseInt(inputValue) || trade.account_id;
-                                                    } else if (fieldName === 'ticker') {
-                                                        trade.ticker = inputValue.toUpperCase();
-                                                    } else if (fieldName === 'trade_date') {
-                                                        trade.trade_date = inputValue;
-                                                    } else if (fieldName === 'current_price') {
-                                                        trade.current_price = parseFloat(inputValue) || trade.current_price;
-                                                    } else if (fieldName === 'expiration_date') {
-                                                        trade.expiration_date = inputValue;
-                                                    } else if (fieldName === 'strike_price') {
-                                                        trade.strike_price = parseFloat(inputValue) || trade.strike_price;
-                                                    } else if (fieldName === 'credit_debit') {
-                                                        trade.credit_debit = parseFloat(inputValue) || trade.credit_debit;
-                                                    } else if (fieldName === 'num_of_contracts') {
-                                                        trade.num_of_contracts = parseInt(inputValue) || trade.num_of_contracts;
-                                                    }
-                                                }
-                                                
-                                                console.log(`[DEBUG] Saved input value for ${fieldName}:`, inputValue);
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-                            
-                            // Set global ticker filter
-                            window.symbolFilter = ticker;
-                            setUniversalTickerFilterSilent(ticker);
-                            
-                            // Optimize: Update filter UI immediately, then load data asynchronously
-                            // This reduces perceived lag by updating the filter input first
-                            const symbolFilterInput = document.getElementById('symbol-filter');
-                            if (symbolFilterInput) {
-                                symbolFilterInput.value = ticker;
-                            }
-                            
-                            // Update tables with existing filtered data first (client-side filter)
-                            updateTradesTable();
-                            
-                            // Restore saved input values immediately after re-render
-                            setTimeout(() => {
-                                if (tbody) {
-                                    const tradeColumnIndex = findColumnIndexForTrade(newTrade.id);
-                                    if (tradeColumnIndex !== -1) {
-                                        let fieldToFocus = null;
-                                        Object.keys(savedInputValues).forEach(fieldName => {
-                                            const inputRows = [1, 2, 3, 4, 5, 7, 8, 9];
-                                            inputRows.forEach(rowIndex => {
-                                                const row = tbody.children[rowIndex];
-                                                if (row && row.children[tradeColumnIndex]) {
-                                                    const cell = row.children[tradeColumnIndex];
-                                                    const input = cell.querySelector('input, select');
-                                                    if (input && (input.getAttribute('data-field') === fieldName || `row_${rowIndex}` === fieldName)) {
-                                                        input.value = savedInputValues[fieldName];
-                                                        console.log(`[DEBUG] Restored input value for ${fieldName}:`, savedInputValues[fieldName]);
-                                                        
-                                                        // Check if this is the field that was focused before re-render
-                                                        if (savedFocusedField && (
-                                                            (savedFocusedField.field === fieldName) ||
-                                                            (savedFocusedField.rowIndex === rowIndex)
-                                                        )) {
-                                                            fieldToFocus = input;
-                                                        }
-                                                    }
-                                                }
-                                            });
-                                        });
-                                        
-                                        // Restore focus to the field that was focused before re-render
-                                        if (fieldToFocus) {
-                                            setTimeout(() => {
-                                                fieldToFocus.focus();
-                                                // If it's a text input, place cursor at the end
-                                                if (fieldToFocus.tagName === 'INPUT' && fieldToFocus.type === 'text') {
-                                                    fieldToFocus.setSelectionRange(fieldToFocus.value.length, fieldToFocus.value.length);
-                                                }
-                                                console.log('[DEBUG] Restored focus to field:', savedFocusedField);
-                                            }, 10);
-                                        }
-                                    }
-                                }
-                            }, 50);
-                            
-                            // Then load fresh data asynchronously without blocking
-                            requestAnimationFrame(() => {
-                                // Show loading spinner again for async data loading
-                                showLoadingSpinner();
-                                Promise.all([
-                                    loadTrades(),
-                                    loadCostBasis(ticker)
-                                ]).then(() => {
-                            // After loadTrades() completes, check if the new trade is still in the array
-                            // Only add it back if it hasn't been saved to the database yet
-                            // Check if the trade has been created using the global flags
-                            const flags = window.tradeCreationFlags && window.tradeCreationFlags[newTrade.id];
-                            const hasBeenCreated = flags && flags.hasBeenCreated;
-                            
-                            // Only preserve the temporary trade if it hasn't been created yet
-                            if (!hasBeenCreated) {
-                                const existingNewTrade = trades.find(t => t.id === newTrade.id);
-                                if (!existingNewTrade) {
-                                    console.log('New trade not found after loadTrades(), adding it back (not yet created):', newTradeCopy);
-                                    // Update the trade object with saved input values before adding it back
-                                    Object.keys(savedInputValues).forEach(fieldName => {
-                                        if (fieldName === 'account_id') {
-                                            newTradeCopy.account_id = parseInt(savedInputValues[fieldName]);
-                                        } else if (fieldName === 'ticker') {
-                                            newTradeCopy.ticker = savedInputValues[fieldName].toUpperCase();
-                                        } else if (fieldName === 'trade_date') {
-                                            newTradeCopy.trade_date = savedInputValues[fieldName];
-                                        } else if (fieldName === 'current_price') {
-                                            newTradeCopy.current_price = savedInputValues[fieldName];
-                                        } else if (fieldName === 'expiration_date') {
-                                            newTradeCopy.expiration_date = savedInputValues[fieldName];
-                                        } else if (fieldName === 'strike_price') {
-                                            newTradeCopy.strike_price = savedInputValues[fieldName];
-                                        } else if (fieldName === 'credit_debit') {
-                                            newTradeCopy.credit_debit = savedInputValues[fieldName];
-                                        } else if (fieldName === 'num_of_contracts') {
-                                            newTradeCopy.num_of_contracts = parseInt(savedInputValues[fieldName]) || 1;
-                                        }
-                                    });
-                                    trades.push(newTradeCopy);
-                                    // Re-render the table with the new trade included
-                                    updateTradesTable();
-                                } else {
-                                    console.log('New trade found after loadTrades(), not adding it back');
-                                }
-                            } else {
-                                console.log('Trade has been created, not preserving temporary trade');
-                            }
-                                
-                                // Restore saved input values after re-render
-                                // Use the trade object in memory to restore values (more reliable than savedInputValues)
-                                setTimeout(() => {
-                                    const tbody = document.getElementById('trades-table');
-                                    if (tbody) {
-                                        const tradeColumnIndex = findColumnIndexForTrade(newTrade.id);
-                                        if (tradeColumnIndex !== -1) {
-                                            // Get the trade object from memory (it should have all the latest values)
-                                            const trade = trades.find(t => t.id === newTrade.id);
-                                            if (trade) {
-                                                // Restore values from the trade object
-                                                const inputRows = [1, 2, 3, 4, 5, 7, 8, 9]; // Account, Ticker, Trade Date, Price, Exp Date, Strike, Credit, Contracts
-                                                let fieldToFocus = null;
-                                                inputRows.forEach(rowIndex => {
-                                                    const row = tbody.children[rowIndex];
-                                                    if (row && row.children[tradeColumnIndex]) {
-                                                        const cell = row.children[tradeColumnIndex];
-                                                        const input = cell.querySelector('input, select');
-                                                        if (input) {
-                                                            const fieldName = input.getAttribute('data-field');
-                                                            let valueToRestore = '';
-                                                            
-                                                            if (fieldName === 'account_id') {
-                                                                valueToRestore = trade.account_id || savedInputValues['account_id'] || '';
-                                                            } else if (fieldName === 'ticker') {
-                                                                valueToRestore = trade.ticker || savedInputValues['ticker'] || '';
-                                                            } else if (fieldName === 'trade_date') {
-                                                                valueToRestore = trade.trade_date || savedInputValues['trade_date'] || '';
-                                                            } else if (fieldName === 'current_price') {
-                                                                valueToRestore = trade.current_price ? parseFloat(trade.current_price).toFixed(2) : (savedInputValues['current_price'] || '');
-                                                            } else if (fieldName === 'expiration_date') {
-                                                                valueToRestore = trade.expiration_date || savedInputValues['expiration_date'] || '';
-                                                            } else if (fieldName === 'strike_price') {
-                                                                valueToRestore = trade.strike_price ? parseFloat(trade.strike_price).toFixed(2) : (savedInputValues['strike_price'] || '');
-                                                            } else if (fieldName === 'credit_debit') {
-                                                                valueToRestore = trade.credit_debit ? parseFloat(trade.credit_debit).toFixed(2) : (savedInputValues['credit_debit'] || '');
-                                                            } else if (fieldName === 'num_of_contracts') {
-                                                                valueToRestore = trade.num_of_contracts || savedInputValues['num_of_contracts'] || '';
-                                                            }
-                                                            
-                                                            if (valueToRestore) {
-                                                                input.value = valueToRestore;
-                                                                console.log(`[DEBUG] Restored input value for ${fieldName} after loadTrades() from trade object:`, valueToRestore);
-                                                            }
-                                                            
-                                                            // Check if this is the field that was focused before re-render
-                                                            if (savedFocusedField && (
-                                                                (savedFocusedField.field === fieldName) ||
-                                                                (savedFocusedField.rowIndex === rowIndex)
-                                                            )) {
-                                                                fieldToFocus = input;
-                                                            }
-                                                        }
-                                                    }
-                                                });
-                                                
-                                                // Restore focus to the field that was focused before re-render
-                                                if (fieldToFocus) {
-                                                    setTimeout(() => {
-                                                        fieldToFocus.focus();
-                                                        // If it's a text input, place cursor at the end
-                                                        if (fieldToFocus.tagName === 'INPUT' && fieldToFocus.type === 'text') {
-                                                            fieldToFocus.setSelectionRange(fieldToFocus.value.length, fieldToFocus.value.length);
-                                                        }
-                                                        console.log('[DEBUG] Restored focus to field after loadTrades():', savedFocusedField);
-                                                    }, 10);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }, 50);
-                            
-                            // After data is loaded, update first row for this specific trade and re-attach handlers
-                            setTimeout(() => {
-                                const tbody = document.getElementById('trades-table');
-                                if (!tbody) {
-                                    hideLoadingSpinner();
-                                    return;
-                                }
-                                
-                                // Check if the trade has been created - if so, just hide the spinner and return
-                                const flags = window.tradeCreationFlags && window.tradeCreationFlags[newTrade.id];
-                                const hasBeenCreated = flags && flags.hasBeenCreated;
-                                
-                                if (hasBeenCreated) {
-                                    console.log('[DEBUG] Trade has been created, skipping updateTickerDisplay logic for temporary trade');
-                                    hideLoadingSpinner();
-                                    return;
-                                }
-                                
-                                // Find the column index for this trade using DOM search
-                                const tradeColumnIndex = findColumnIndexForTrade(newTrade.id);
-                                if (tradeColumnIndex === -1) {
-                                    console.error('Could not find new trade column after reload:', newTrade.id);
-                                    hideLoadingSpinner();
-                                    return;
-                                }
-                                
-                                // Update first row (symbol/type row) to show ticker + trade_type
-                                const firstRow = tbody.children[0];
-                                if (firstRow && firstRow.children[tradeColumnIndex]) {
-                                    const firstRowCell = firstRow.children[tradeColumnIndex];
-                                    const tradeType = newTradeCopy.trade_type || 'ROCT CALL';
-                                    // Check if trade_type already includes the ticker (backend appends it)
-                                    let displayType;
-                                    if (tradeType && tradeType.toUpperCase().startsWith(ticker.toUpperCase() + ' ')) {
-                                        // Trade type already includes ticker, use as-is
-                                        displayType = tradeType;
-                                    } else {
-                                        // Trade type doesn't include ticker, append it
-                                        displayType = `${ticker} ${tradeType}`;
-                                    }
-                                    // Check if dark mode is active - use CSS variable that changes with theme
-                                    const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
-                                    const tickerLinkColor = isDarkMode ? 'var(--primary-color-alt)' : '#000000';
-                                    firstRowCell.innerHTML = `<div style="text-align: center; white-space: normal; word-wrap: break-word; vertical-align: top;"><strong><span class="clickable-symbol" onclick="filterBySymbol('${ticker}')" style="cursor: pointer; color: ${tickerLinkColor}; text-decoration: underline;">${displayType}</span></strong></div>`;
-                                }
-                                
-                                // Re-attach ticker handlers and setup trade creation after table update
-                                if (window._attachTickerHandlersForTrade && window._attachTickerHandlersForTrade[newTrade.id]) {
-                                    window._attachTickerHandlersForTrade[newTrade.id]();
-                                }
-                                
-                                // Re-attach event listeners for trade creation only if trade hasn't been created yet
-                                // Use the same flags and hasBeenCreated variables that were already declared above
-                                if (!hasBeenCreated) {
-                                    console.log('[DEBUG] Re-attaching setupNewTradeCreation for tradeId:', newTrade.id);
-                                    setupNewTradeCreation(newTrade.id);
-                                } else {
-                                    console.log('[DEBUG] Trade has been created, not re-attaching setupNewTradeCreation for tradeId:', newTrade.id);
-                                }
-                                
-                                // Hide loading spinner after everything is complete
-                                hideLoadingSpinner();
-                                
-                                // Restore focus to the field that was focused before re-render
-                                // (This is handled in the earlier setTimeout that restores input values)
-                                // Only focus on trade date if no field was previously focused
-                                if (!savedFocusedField) {
-                                    const tradeDateRow = tbody.children[3];
-                                    if (tradeDateRow && tradeDateRow.children[tradeColumnIndex]) {
-                                        const tradeDateCell = tradeDateRow.children[tradeColumnIndex];
-                                        const tradeDateInput = tradeDateCell.querySelector('input');
-                                        if (tradeDateInput) {
-                                            setTimeout(() => {
-                                                tradeDateInput.focus();
-                                                tradeDateInput.select();
-                                            }, 100);
-                                        }
-                                    }
-                                }
-                            }, 50);
-                        }).catch(error => {
-                            console.error('Error loading data after setting ticker filter:', error);
-                            hideLoadingSpinner();
-                        });
-                    });
-                }
-            };
-                    
-                    // Store the update function globally so autoSaveTradeField can call it
-                    window._updateTickerDisplayForTrade = window._updateTickerDisplayForTrade || {};
-                    window._updateTickerDisplayForTrade[newTrade.id] = updateTickerDisplay;
-                    
-                    // Store the update function reference so we can re-attach it after table updates
-                    const attachTickerHandlers = (inputElement) => {
-                        if (!inputElement) {
-                            console.log('attachTickerHandlers: No input element provided');
-                            return;
-                        }
-                        console.log('attachTickerHandlers: Attaching handlers to input element:', inputElement);
-                        
-                        // Remove all inline handlers
-                        inputElement.removeAttribute('oninput');
-                        inputElement.removeAttribute('onblur');
-                        inputElement.removeAttribute('onkeydown');
-                        
-                        // Store reference to updateTickerDisplay in closure
-                        const updateFn = updateTickerDisplay;
-                        const tradeId = newTrade.id;
-                        
-                        // Create named functions so we can remove them later if needed
-                        const inputHandler = function(e) {
-                            const ticker = this.value.trim().toUpperCase();
-                            this.value = ticker;
-                            console.log('Ticker input event: value =', ticker);
-                            // Update the trade object in memory but don't filter yet
-                            const trade = trades.find(t => t.id === tradeId);
-                            if (trade) {
-                                trade.ticker = ticker;
-                            }
-                        };
-                        
-                        let isUpdating = false; // Flag to prevent duplicate calls
-                        const blurHandler = function(e) {
-                            if (isUpdating) return; // Prevent duplicate calls
-                            const ticker = this.value.trim().toUpperCase();
-                            console.log('Ticker blur event triggered, ticker:', ticker);
-                            if (ticker) {
-                                isUpdating = true;
-                                console.log('Calling updateTickerDisplay with ticker:', ticker);
-                                updateFn(ticker);
-                                setTimeout(() => { isUpdating = false; }, 2000); // Reset after 2 seconds
-                            } else {
-                                console.log('No ticker value, skipping updateTickerDisplay');
-                            }
-                        };
-                        
-                        const keydownHandler = function(e) {
-                            console.log('Keydown event, key:', e.key);
-                            if (e.key === 'Enter') {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                if (isUpdating) return;
-                                const ticker = this.value.trim().toUpperCase();
-                                this.value = ticker;
-                                if (ticker) {
-                                    isUpdating = true;
-                                    console.log('Enter key pressed, calling updateTickerDisplay with ticker:', ticker);
-                                    updateFn(ticker);
-                                    setTimeout(() => { isUpdating = false; }, 2000);
-                                }
-                                this.blur();
-                            } else if (e.key === 'Tab' || e.keyCode === 9) {
-                                // For Tab, use handleTabNavigation to move down rows instead of across columns
-                                // First update ticker if needed, then navigate
-                                const ticker = this.value.trim().toUpperCase();
-                                this.value = ticker;
-                                
-                                // Call handleTabNavigation to move down to next row
-                                const result = handleTabNavigation(e, tradeId, 2);
-                                
-                                // If tab navigation handled it, don't update ticker display
-                                if (result === false) {
-                                    // Tab navigation was handled, but we still want to update ticker display if there's a value
-                                    if (ticker && !isUpdating) {
-                                        isUpdating = true;
-                                        setTimeout(() => {
-                                            console.log('Tab navigation completed, calling updateTickerDisplay with ticker:', ticker);
-                                            updateFn(ticker);
-                                            setTimeout(() => { isUpdating = false; }, 2000);
-                                        }, 100);
-                                    }
-                                    return;
-                                }
-                                
-                                // If handleTabNavigation didn't handle it, fall back to default behavior
-                                // But still update ticker if needed
-                                if (ticker && !isUpdating) {
-                                    isUpdating = true;
-                                    setTimeout(() => {
-                                        console.log('Tab completed, calling updateTickerDisplay with ticker:', ticker);
-                                        updateFn(ticker);
-                                        setTimeout(() => { isUpdating = false; }, 2000);
-                                    }, 100);
-                                }
-                            }
-                        };
-                        
-                        const focusoutHandler = function(e) {
-                            // Skip if blur already handled it
-                            if (isUpdating) return;
-                            const ticker = this.value.trim().toUpperCase();
-                            console.log('Ticker focusout event triggered, ticker:', ticker);
-                            if (ticker) {
-                                isUpdating = true;
-                                console.log('Calling updateTickerDisplay with ticker:', ticker);
-                                updateFn(ticker);
-                                setTimeout(() => { isUpdating = false; }, 2000);
-                            }
-                        };
-                        
-                        // Remove any existing listeners first
-                        inputElement.removeEventListener('input', inputHandler);
-                        inputElement.removeEventListener('blur', blurHandler);
-                        inputElement.removeEventListener('keydown', keydownHandler);
-                        inputElement.removeEventListener('focusout', focusoutHandler);
-                        
-                        // Add event listeners directly to the element
-                        inputElement.addEventListener('input', inputHandler, false);
-                        inputElement.addEventListener('blur', blurHandler, false);
-                        inputElement.addEventListener('keydown', keydownHandler, false);
-                        inputElement.addEventListener('focusout', focusoutHandler, false);
-                        
-                        // Also add a simple click handler to test if events work at all
-                        inputElement.addEventListener('click', function(e) {
-                            console.log('Ticker input clicked!');
-                        }, false);
-                        
-                        // Store handlers on element for later removal
-                        inputElement._tickerHandlers = {
-                            input: inputHandler,
-                            blur: blurHandler,
-                            keydown: keydownHandler,
-                            focusout: focusoutHandler
-                        };
-                        
-                        console.log('attachTickerHandlers: Event listeners attached to element');
-                        console.log('attachTickerHandlers: Element:', inputElement);
-                        console.log('attachTickerHandlers: Element value:', inputElement.value);
-                        console.log('attachTickerHandlers: Element id:', inputElement.id);
-                        console.log('attachTickerHandlers: Element data-trade-id:', inputElement.getAttribute('data-trade-id'));
-                        
-                        // Test if we can manually trigger an event
-                        setTimeout(() => {
-                            console.log('Testing if element still exists after 100ms...');
-                            const testElement = document.querySelector(`input[data-trade-id="${newTrade.id}"][data-field="ticker"]`);
-                            if (testElement) {
-                                console.log('Element still exists:', testElement);
-                                console.log('Element value:', testElement.value);
-                            } else {
-                                console.log('Element NOT found! It may have been replaced.');
-                            }
-                        }, 100);
-                        
-                        return inputElement; // Return the input element
-                    };
-                    
-                    // Attach handlers initially
-                    console.log('Attaching ticker handlers for new trade:', newTrade.id);
-                    attachTickerHandlers(tickerInput);
-                    console.log('Ticker handlers attached');
-                    
-                    // If there's an active ticker filter, trigger the update after handlers are attached
-                    if (activeTicker) {
-                        setTimeout(() => {
-                            console.log('Auto-triggering updateTickerDisplay for pre-populated ticker:', activeTicker);
-                            updateTickerDisplay(activeTicker);
-                        }, 100);
-                    }
-                    
-                    // Store handler attachment function for re-use after table updates
-                    window._attachTickerHandlersForTrade = window._attachTickerHandlersForTrade || {};
-                    window._attachTickerHandlersForTrade[newTrade.id] = () => {
-                        console.log('Re-attaching ticker handlers for trade:', newTrade.id);
-                        const tbody = document.getElementById('trades-table');
-                        if (!tbody) {
-                            console.log('No tbody found');
-                            return;
-                        }
-                        const tradeColumnIndex = findColumnIndexForTrade(newTrade.id);
-                        if (tradeColumnIndex === -1) {
-                            console.log('Trade column not found in table');
-                            return;
-                        }
-                        const tickerRow = tbody.children[2];
-                        if (tickerRow && tickerRow.children[tradeColumnIndex]) {
-                            const tickerCell = tickerRow.children[tradeColumnIndex];
-                            const input = tickerCell.querySelector(`input[data-trade-id="${newTrade.id}"]`);
-                            if (input) {
-                                console.log('Found input, attaching handlers');
-                                attachTickerHandlers(input);
-                            } else {
-                                console.log('No input found in ticker cell');
-                            }
-                        } else {
-                            console.log('Ticker row or cell not found');
-                        }
-                    };
-                }
-            }
+        // Get selected account from control bar dropdown, or fall back to default
+        const universalAccountFilter = document.getElementById('universal-account-filter');
+        const selectedAccountId = universalAccountFilter && universalAccountFilter.value ? parseInt(universalAccountFilter.value) : null;
+        
+        let accountId;
+        if (selectedAccountId) {
+            const selectedAccount = accounts.find(acc => acc.id === selectedAccountId);
+            accountId = selectedAccount ? selectedAccount.id : null;
         }
         
-        // Add event listener to create trade when all fields are filled
-        setupNewTradeCreation(newTrade.id);
-    }, 100);
+        // Fall back to default account if no account selected in dropdown
+        if (!accountId) {
+            const defaultAccount = accounts.find(acc => acc.is_default === 1 || acc.is_default === true);
+            accountId = defaultAccount ? defaultAccount.id : (accounts.find(acc => acc.id === 9) ? 9 : (accounts.length > 0 ? accounts[0].id : null));
+        }
+        
+        // Check if there's an active ticker filter
+        const activeTicker = window.symbolFilter ? window.symbolFilter.trim().toUpperCase() : '';
+        
+        // Call quick-add API
+        const quickAddResponse = await apiFetch('/api/trades/quick-add', {
+            method: 'POST',
+            body: {
+                tradeType: 'ROCT CALL',
+                accountId: accountId,
+                ticker: activeTicker || ''
+            }
+        });
+        
+        const result = await quickAddResponse.json();
+        
+        if (result.success && result.new_trade_id) {
+            // Reload trades from database
+            await loadTrades();
+            
+            // Scroll to and focus on the new trade
+            scrollToNewTrade(result.new_trade_id);
+        } else {
+            alert('Failed to create trade: ' + (result.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error creating ROCT CALL trade:', error);
+        alert('Error creating trade: ' + error.message);
+    }
 }
 
 // Add new ROCT PUT column to trades table
 async function addNewROCTPutColumn() {
     console.log('addNewROCTPutColumn called');
     
-    // Get default account
-    const accounts = await fetch('/api/accounts').then(r => r.json());
-    const defaultAccount = accounts.find(acc => acc.is_default === 1 || acc.is_default === true);
-    const defaultAccountId = defaultAccount ? defaultAccount.id : (accounts.find(acc => acc.id === 9) ? 9 : (accounts.length > 0 ? accounts[0].id : null));
-    const defaultAccountName = defaultAccount ? defaultAccount.account_name : (accounts.find(acc => acc.id === 9) ? accounts.find(acc => acc.id === 9).account_name : (accounts.length > 0 ? accounts[0].account_name : 'Unknown'));
-    
-    // Get today's date and expiration date (10 days from today)
-    const today = new Date();
-    const expirationDate = new Date(today);
-    expirationDate.setDate(today.getDate() + 10);
-    // Use YYYY-MM-DD format for date inputs
-    const todayStr = today.toISOString().split('T')[0];
-    const expDateStr = expirationDate.toISOString().split('T')[0];
-    
-    // Check if there's an active ticker filter
-    const activeTicker = window.symbolFilter ? window.symbolFilter.trim().toUpperCase() : '';
-    
-    // Create a temporary trade object for the new column
-    const newTrade = {
-        id: 'new_' + Date.now(), // Temporary ID (use underscore instead of hyphen to avoid syntax errors)
-        account_id: defaultAccountId,
-        account_name: defaultAccountName,
-        ticker: activeTicker, // Pre-populate with active ticker filter if available
-        trade_date: todayStr,
-        expiration_date: expDateStr,
-        current_price: '',
-        strike_price: '',
-        credit_debit: '',
-        num_of_contracts: 1,
-        trade_type: 'ROCT PUT',
-        type_name: 'ROCT PUT',
-        trade_status: 'open',
-        dte: 10,
-        num_of_shares: 0,
-        commission_per_share: 0,
-        net_credit_per_share: 0,
-        risk_capital_per_share: 0,
-        margin_capital: 0,
-        rorc: 0,
-        arorc: 0
-    };
-    
-    // Add to trades array temporarily
-    trades.push(newTrade);
-    
-    // Re-render the table
-    updateTradesTable();
-    
-    // Find the new column and make it editable (same logic as ROCT CALL)
-    setTimeout(() => {
-        const tbody = document.getElementById('trades-table');
-        if (!tbody) return;
+    try {
+        // Get accounts
+        const response = await apiFetch('/api/accounts');
+        const accounts = await response.json();
         
-        // Find the column index for the new trade by searching for its data-trade-id
-        let newColumnIndex = -1;
-        const rows = tbody.querySelectorAll('tr');
-        for (let i = 0; i < rows.length; i++) {
-            const cells = rows[i].querySelectorAll('td');
-            // Skip the first cell (field name) and check data cells
-            for (let j = 1; j < cells.length; j++) {
-                const input = cells[j].querySelector(`input[data-trade-id="${newTrade.id}"], select[data-trade-id="${newTrade.id}"]`);
-                if (input) {
-                    newColumnIndex = j; // j is already the correct index (includes field name column)
-                    break;
-                }
+        // Get selected account from control bar dropdown, or fall back to default
+        const universalAccountFilter = document.getElementById('universal-account-filter');
+        const selectedAccountId = universalAccountFilter && universalAccountFilter.value ? parseInt(universalAccountFilter.value) : null;
+        
+        let accountId;
+        if (selectedAccountId) {
+            const selectedAccount = accounts.find(acc => acc.id === selectedAccountId);
+            accountId = selectedAccount ? selectedAccount.id : null;
+        }
+        
+        // Fall back to default account if no account selected in dropdown
+        if (!accountId) {
+            const defaultAccount = accounts.find(acc => acc.is_default === 1 || acc.is_default === true);
+            accountId = defaultAccount ? defaultAccount.id : (accounts.find(acc => acc.id === 9) ? 9 : (accounts.length > 0 ? accounts[0].id : null));
+        }
+        
+        // Check if there's an active ticker filter
+        const activeTicker = window.symbolFilter ? window.symbolFilter.trim().toUpperCase() : '';
+        
+        // Call quick-add API
+        const quickAddResponse = await apiFetch('/api/trades/quick-add', {
+            method: 'POST',
+            body: {
+                tradeType: 'ROCT PUT',
+                accountId: accountId,
+                ticker: activeTicker || ''
             }
-            if (newColumnIndex !== -1) break;
-        }
+        });
         
-        if (newColumnIndex === -1) {
-            console.error('Could not find column for new trade:', newTrade.id);
-            return;
-        }
+        const result = await quickAddResponse.json();
         
-        console.log('Found column index for new trade:', newTrade.id, 'at index:', newColumnIndex);
-        
-        // Make account editable (row 1)
-        const accountRow = tbody.children[1];
-        if (accountRow) {
-            const accountCell = accountRow.children[newColumnIndex];
-            if (accountCell) {
-                // Create account dropdown
-                let accountOptions = '';
-                accounts.forEach(account => {
-                    const selected = account.id === defaultAccountId ? 'selected' : '';
-                    accountOptions += `<option value="${account.id}" ${selected}>${account.account_name}</option>`;
-                });
-                accountCell.innerHTML = `
-                    <select class="form-select form-select-sm text-center new-trade-account-select" 
-                            data-trade-id="${newTrade.id}" 
-                            data-field="account_id"
-                            data-field-row="1"
-                            style="width: 100px; font-size: 0.6125rem; padding-left: 1.5rem; padding-right: 0.25rem; padding-top: 0.1rem; padding-bottom: 0.1rem;">
-                        ${accountOptions}
-                    </select>
-                `;
-                // Attach event listener after creating the element
-                const accountSelect = accountCell.querySelector('select');
-                if (accountSelect) {
-                    accountSelect.addEventListener('change', function() {
-                        updateNewTradeAccount(newTrade.id, this.value);
-                    });
-                }
-            }
-        }
-        
-        // Setup ticker handlers and trade creation (reuse the same logic as ROCT CALL)
-        // Use the same helper function that was created for ROCT CALL
-        if (window._attachTickerHandlersForTrade && typeof window._attachTickerHandlersForTrade[newTrade.id] === 'function') {
-            // Handlers already set up by updateTradesTable, just trigger setup
+        if (result.success && result.new_trade_id) {
+            // Reload trades from database
+            await loadTrades();
+            
+            // Scroll to and focus on the new trade
+            scrollToNewTrade(result.new_trade_id);
         } else {
-            // Find ticker input and set up handlers
-            const tickerRow = tbody.children[2];
-            if (tickerRow) {
-                const tickerCell = tickerRow.children[newColumnIndex];
-                if (tickerCell) {
-                    let tickerInput = tickerCell.querySelector(`input[data-trade-id="${newTrade.id}"]`);
-                    if (tickerInput && activeTicker) {
-                        tickerInput.value = activeTicker;
-                        const trade = trades.find(t => t.id === newTrade.id);
-                        if (trade) {
-                            trade.ticker = activeTicker;
-                        }
-                    }
-                }
-            }
+            alert('Failed to create trade: ' + (result.error || 'Unknown error'));
         }
-        
-        // Add event listener to create trade when all fields are filled
-        setupNewTradeCreation(newTrade.id);
-    }, 100);
+    } catch (error) {
+        console.error('Error creating ROCT PUT trade:', error);
+        alert('Error creating trade: ' + error.message);
+    }
 }
 
 // Add new ROC column to trades table
 async function addNewROCColumn() {
     console.log('addNewROCColumn called');
     
-    // Get default account
-    const accounts = await fetch('/api/accounts').then(r => r.json());
-    const defaultAccount = accounts.find(acc => acc.is_default === 1 || acc.is_default === true);
-    const defaultAccountId = defaultAccount ? defaultAccount.id : (accounts.find(acc => acc.id === 9) ? 9 : (accounts.length > 0 ? accounts[0].id : null));
-    const defaultAccountName = defaultAccount ? defaultAccount.account_name : (accounts.find(acc => acc.id === 9) ? accounts.find(acc => acc.id === 9).account_name : (accounts.length > 0 ? accounts[0].account_name : 'Unknown'));
-    
-    // Get today's date and expiration date (10 days from today)
-    const today = new Date();
-    const expirationDate = new Date(today);
-    expirationDate.setDate(today.getDate() + 10);
-    // Use YYYY-MM-DD format for date inputs
-    const todayStr = today.toISOString().split('T')[0];
-    const expDateStr = expirationDate.toISOString().split('T')[0];
-    
-    // Check if there's an active ticker filter
-    const activeTicker = window.symbolFilter ? window.symbolFilter.trim().toUpperCase() : '';
-    
-    // Create a temporary trade object for the new column
-    const newTrade = {
-        id: 'new_' + Date.now(), // Temporary ID (use underscore instead of hyphen to avoid syntax errors)
-        account_id: defaultAccountId,
-        account_name: defaultAccountName,
-        ticker: activeTicker, // Pre-populate with active ticker filter if available
-        trade_date: todayStr,
-        expiration_date: expDateStr,
-        current_price: '',
-        strike_price: '',
-        credit_debit: '',
-        num_of_contracts: 1,
-        trade_type: 'ROC',
-        type_name: 'ROC',
-        trade_status: 'open',
-        dte: 10,
-        num_of_shares: 0,
-        commission_per_share: 0,
-        net_credit_per_share: 0,
-        risk_capital_per_share: 0,
-        margin_capital: 0,
-        rorc: 0,
-        arorc: 0
-    };
-    
-    // Add to trades array temporarily
-    trades.push(newTrade);
-    
-    // Re-render the table
-    updateTradesTable();
-    
-    // Find the new column and make it editable (same logic as ROCT CALL)
-    setTimeout(() => {
-        const tbody = document.getElementById('trades-table');
-        if (!tbody) return;
+    try {
+        // Get accounts
+        const response = await apiFetch('/api/accounts');
+        const accounts = await response.json();
         
-        // Find the column index for the new trade by searching for its data-trade-id
-        let newColumnIndex = -1;
-        const rows = tbody.querySelectorAll('tr');
-        for (let i = 0; i < rows.length; i++) {
-            const cells = rows[i].querySelectorAll('td');
-            // Skip the first cell (field name) and check data cells
-            for (let j = 1; j < cells.length; j++) {
-                const input = cells[j].querySelector(`input[data-trade-id="${newTrade.id}"], select[data-trade-id="${newTrade.id}"]`);
-                if (input) {
-                    newColumnIndex = j; // j is already the correct index (includes field name column)
-                    break;
-                }
+        // Get selected account from control bar dropdown, or fall back to default
+        const universalAccountFilter = document.getElementById('universal-account-filter');
+        const selectedAccountId = universalAccountFilter && universalAccountFilter.value ? parseInt(universalAccountFilter.value) : null;
+        
+        let accountId;
+        if (selectedAccountId) {
+            const selectedAccount = accounts.find(acc => acc.id === selectedAccountId);
+            accountId = selectedAccount ? selectedAccount.id : null;
+        }
+        
+        // Fall back to default account if no account selected in dropdown
+        if (!accountId) {
+            const defaultAccount = accounts.find(acc => acc.is_default === 1 || acc.is_default === true);
+            accountId = defaultAccount ? defaultAccount.id : (accounts.find(acc => acc.id === 9) ? 9 : (accounts.length > 0 ? accounts[0].id : null));
+        }
+        
+        // Check if there's an active ticker filter
+        const activeTicker = window.symbolFilter ? window.symbolFilter.trim().toUpperCase() : '';
+        
+        // Call quick-add API
+        const quickAddResponse = await apiFetch('/api/trades/quick-add', {
+            method: 'POST',
+            body: {
+                tradeType: 'ROC',
+                accountId: accountId,
+                ticker: activeTicker || ''
             }
-            if (newColumnIndex !== -1) break;
-        }
+        });
         
-        if (newColumnIndex === -1) {
-            console.error('Could not find column for new trade:', newTrade.id);
-            return;
-        }
+        const result = await quickAddResponse.json();
         
-        console.log('Found column index for new trade:', newTrade.id, 'at index:', newColumnIndex);
-        
-        // Make account editable (row 1)
-        const accountRow = tbody.children[1];
-        if (accountRow) {
-            const accountCell = accountRow.children[newColumnIndex];
-            if (accountCell) {
-                // Create account dropdown
-                let accountOptions = '';
-                accounts.forEach(account => {
-                    const selected = account.id === defaultAccountId ? 'selected' : '';
-                    accountOptions += `<option value="${account.id}" ${selected}>${account.account_name}</option>`;
-                });
-                accountCell.innerHTML = `
-                    <select class="form-select form-select-sm text-center new-trade-account-select" 
-                            data-trade-id="${newTrade.id}" 
-                            data-field="account_id"
-                            data-field-row="1"
-                            style="width: 100px; font-size: 0.6125rem; padding-left: 1.5rem; padding-right: 0.25rem; padding-top: 0.1rem; padding-bottom: 0.1rem;">
-                        ${accountOptions}
-                    </select>
-                `;
-                // Attach event listener after creating the element
-                const accountSelect = accountCell.querySelector('select');
-                if (accountSelect) {
-                    accountSelect.addEventListener('change', function() {
-                        updateNewTradeAccount(newTrade.id, this.value);
-                    });
-                }
-            }
-        }
-        
-        // Setup ticker handlers and trade creation (reuse the same logic as ROCT CALL)
-        // Use the same helper function that was created for ROCT CALL
-        if (window._attachTickerHandlersForTrade && typeof window._attachTickerHandlersForTrade[newTrade.id] === 'function') {
-            // Handlers already set up by updateTradesTable, just trigger setup
+        if (result.success && result.new_trade_id) {
+            // Reload trades from database
+            await loadTrades();
+            
+            // Scroll to and focus on the new trade
+            scrollToNewTrade(result.new_trade_id);
         } else {
-            // Find ticker input and set up handlers
-            const tickerRow = tbody.children[2];
-            if (tickerRow) {
-                const tickerCell = tickerRow.children[newColumnIndex];
-                if (tickerCell) {
-                    let tickerInput = tickerCell.querySelector(`input[data-trade-id="${newTrade.id}"]`);
-                    if (tickerInput && activeTicker) {
-                        tickerInput.value = activeTicker;
-                        const trade = trades.find(t => t.id === newTrade.id);
-                        if (trade) {
-                            trade.ticker = activeTicker;
-                        }
-                    }
-                }
-            }
+            alert('Failed to create trade: ' + (result.error || 'Unknown error'));
         }
-        
-        // Add event listener to create trade when all fields are filled
-        setupNewTradeCreation(newTrade.id);
-    }, 100);
+    } catch (error) {
+        console.error('Error creating ROC trade:', error);
+        alert('Error creating trade: ' + error.message);
+    }
 }
 
 // Add new ROP column to trades table
 async function addNewROPColumn() {
     console.log('addNewROPColumn called');
     
-    // Get default account
-    const accounts = await fetch('/api/accounts').then(r => r.json());
-    const defaultAccount = accounts.find(acc => acc.is_default === 1 || acc.is_default === true);
-    const defaultAccountId = defaultAccount ? defaultAccount.id : (accounts.find(acc => acc.id === 9) ? 9 : (accounts.length > 0 ? accounts[0].id : null));
-    const defaultAccountName = defaultAccount ? defaultAccount.account_name : (accounts.find(acc => acc.id === 9) ? accounts.find(acc => acc.id === 9).account_name : (accounts.length > 0 ? accounts[0].account_name : 'Unknown'));
-    
-    // Get today's date and expiration date (10 days from today)
-    const today = new Date();
-    const expirationDate = new Date(today);
-    expirationDate.setDate(today.getDate() + 10);
-    // Use YYYY-MM-DD format for date inputs
-    const todayStr = today.toISOString().split('T')[0];
-    const expDateStr = expirationDate.toISOString().split('T')[0];
-    
-    // Check if there's an active ticker filter
-    const activeTicker = window.symbolFilter ? window.symbolFilter.trim().toUpperCase() : '';
-    
-    // Create a temporary trade object for the new column
-    const newTrade = {
-        id: 'new_' + Date.now(), // Temporary ID (use underscore instead of hyphen to avoid syntax errors)
-        account_id: defaultAccountId,
-        account_name: defaultAccountName,
-        ticker: activeTicker, // Pre-populate with active ticker filter if available
-        trade_date: todayStr,
-        expiration_date: expDateStr,
-        current_price: '',
-        strike_price: '',
-        credit_debit: '',
-        num_of_contracts: 1,
-        trade_type: 'ROP',
-        type_name: 'ROP',
-        trade_status: 'open',
-        dte: 10,
-        num_of_shares: 0,
-        commission_per_share: 0,
-        net_credit_per_share: 0,
-        risk_capital_per_share: 0,
-        margin_capital: 0,
-        rorc: 0,
-        arorc: 0
-    };
-    
-    // Add to trades array temporarily
-    trades.push(newTrade);
-    
-    // Re-render the table
-    updateTradesTable();
-    
-    // Find the new column and make it editable (same logic as ROCT CALL)
-    setTimeout(() => {
-        const tbody = document.getElementById('trades-table');
-        if (!tbody) return;
+    try {
+        // Get accounts
+        const response = await apiFetch('/api/accounts');
+        const accounts = await response.json();
         
-        // Find the column index for the new trade by searching for its data-trade-id
-        let newColumnIndex = -1;
-        const rows = tbody.querySelectorAll('tr');
-        for (let i = 0; i < rows.length; i++) {
-            const cells = rows[i].querySelectorAll('td');
-            // Skip the first cell (field name) and check data cells
-            for (let j = 1; j < cells.length; j++) {
-                const input = cells[j].querySelector(`input[data-trade-id="${newTrade.id}"], select[data-trade-id="${newTrade.id}"]`);
-                if (input) {
-                    newColumnIndex = j; // j is already the correct index (includes field name column)
-                    break;
-                }
+        // Get selected account from control bar dropdown, or fall back to default
+        const universalAccountFilter = document.getElementById('universal-account-filter');
+        const selectedAccountId = universalAccountFilter && universalAccountFilter.value ? parseInt(universalAccountFilter.value) : null;
+        
+        let accountId;
+        if (selectedAccountId) {
+            const selectedAccount = accounts.find(acc => acc.id === selectedAccountId);
+            accountId = selectedAccount ? selectedAccount.id : null;
+        }
+        
+        // Fall back to default account if no account selected in dropdown
+        if (!accountId) {
+            const defaultAccount = accounts.find(acc => acc.is_default === 1 || acc.is_default === true);
+            accountId = defaultAccount ? defaultAccount.id : (accounts.find(acc => acc.id === 9) ? 9 : (accounts.length > 0 ? accounts[0].id : null));
+        }
+        
+        // Check if there's an active ticker filter
+        const activeTicker = window.symbolFilter ? window.symbolFilter.trim().toUpperCase() : '';
+        
+        // Call quick-add API
+        const quickAddResponse = await apiFetch('/api/trades/quick-add', {
+            method: 'POST',
+            body: {
+                tradeType: 'ROP',
+                accountId: accountId,
+                ticker: activeTicker || ''
             }
-            if (newColumnIndex !== -1) break;
-        }
+        });
         
-        if (newColumnIndex === -1) {
-            console.error('Could not find column for new trade:', newTrade.id);
-            return;
-        }
+        const result = await quickAddResponse.json();
         
-        console.log('Found column index for new trade:', newTrade.id, 'at index:', newColumnIndex);
-        
-        // Make account editable (row 1)
-        const accountRow = tbody.children[1];
-        if (accountRow) {
-            const accountCell = accountRow.children[newColumnIndex];
-            if (accountCell) {
-                // Create account dropdown
-                let accountOptions = '';
-                accounts.forEach(account => {
-                    const selected = account.id === defaultAccountId ? 'selected' : '';
-                    accountOptions += `<option value="${account.id}" ${selected}>${account.account_name}</option>`;
-                });
-                accountCell.innerHTML = `
-                    <select class="form-select form-select-sm text-center new-trade-account-select" 
-                            data-trade-id="${newTrade.id}" 
-                            data-field="account_id"
-                            data-field-row="1"
-                            style="width: 100px; font-size: 0.6125rem; padding-left: 1.5rem; padding-right: 0.25rem; padding-top: 0.1rem; padding-bottom: 0.1rem;">
-                        ${accountOptions}
-                    </select>
-                `;
-                // Attach event listener after creating the element
-                const accountSelect = accountCell.querySelector('select');
-                if (accountSelect) {
-                    accountSelect.addEventListener('change', function() {
-                        updateNewTradeAccount(newTrade.id, this.value);
-                    });
-                }
-            }
-        }
-        
-        // Setup ticker handlers and trade creation (reuse the same logic as ROCT CALL)
-        // Use the same helper function that was created for ROCT CALL
-        if (window._attachTickerHandlersForTrade && typeof window._attachTickerHandlersForTrade[newTrade.id] === 'function') {
-            // Handlers already set up by updateTradesTable, just trigger setup
+        if (result.success && result.new_trade_id) {
+            // Reload trades from database
+            await loadTrades();
+            
+            // Scroll to and focus on the new trade
+            scrollToNewTrade(result.new_trade_id);
         } else {
-            // Find ticker input and set up handlers
-            const tickerRow = tbody.children[2];
-            if (tickerRow) {
-                const tickerCell = tickerRow.children[newColumnIndex];
-                if (tickerCell) {
-                    let tickerInput = tickerCell.querySelector(`input[data-trade-id="${newTrade.id}"]`);
-                    if (tickerInput && activeTicker) {
-                        tickerInput.value = activeTicker;
-                        const trade = trades.find(t => t.id === newTrade.id);
-                        if (trade) {
-                            trade.ticker = activeTicker;
-                        }
-                    }
-                }
-            }
+            alert('Failed to create trade: ' + (result.error || 'Unknown error'));
         }
-        
-        // Add event listener to create trade when all fields are filled
-        setupNewTradeCreation(newTrade.id);
-    }, 100);
+    } catch (error) {
+        console.error('Error creating ROP trade:', error);
+        alert('Error creating trade: ' + error.message);
+    }
 }
 
 // Update account for new trade
@@ -7216,6 +8231,19 @@ function updateNewTradeAccount(tradeId, accountId) {
         const account = accounts.find(a => a.id == accountId);
         trade.account_id = parseInt(accountId);
         trade.account_name = account ? account.account_name : 'Unknown';
+        
+        // Update the universal account filter in the control bar
+        const universalAccountFilter = document.getElementById('universal-account-filter');
+        if (universalAccountFilter && accountId) {
+            universalAccountFilter.value = accountId;
+            // Trigger change event to update filters and reload data
+            universalAccountFilter.dispatchEvent(new Event('change'));
+        }
+        
+        // Fetch commission for the new account
+        if (window._fetchAndPopulateCommissionForTrade && window._fetchAndPopulateCommissionForTrade[tradeId]) {
+            window._fetchAndPopulateCommissionForTrade[tradeId]();
+        }
     }
 }
 
@@ -7277,6 +8305,7 @@ function setupNewTradeCreation(tradeId) {
         }
         
         console.log('[DEBUG] checkAndCreateTrade called for tradeId:', tradeId, '- User exited contracts field');
+        console.log('[DEBUG] checkAndCreateTrade - Flags state:', { isCreating: flags.isCreating, hasBeenCreated: flags.hasBeenCreated });
         const tbody = document.getElementById('trades-table');
         if (!tbody) {
             console.log('[DEBUG] checkAndCreateTrade - tbody not found');
@@ -7324,7 +8353,16 @@ function setupNewTradeCreation(tradeId) {
         
         if (!accountSelect || !tickerInput || !tradeDateInput || !priceInput || !expDateInput || !strikeInput || !creditInput || !contractsInput) return;
         
-        const accountId = accountSelect.value;
+        // Get accountId from dropdown, with fallback to trade object
+        let accountId = accountSelect.value;
+        if (!accountId) {
+            // Fallback to trade object's account_id if dropdown value is empty
+            const trade = trades.find(t => t.id === tradeId);
+            if (trade && trade.account_id) {
+                accountId = trade.account_id.toString();
+            }
+        }
+        
         const ticker = tickerInput.value.trim().toUpperCase();
         const tradeDate = tradeDateInput.value.trim();
         const price = priceInput.value.trim();
@@ -7348,6 +8386,21 @@ function setupNewTradeCreation(tradeId) {
         const hasValidCredit = credit && credit !== '0' && credit !== '0.0' && credit !== '0.00';
         const hasValidPrice = price && price !== '0' && price !== '0.0' && price !== '0.00';
         const hasValidContracts = contracts && contracts !== '0';
+        
+        console.log('[DEBUG] checkAndCreateTrade - Field validation:', {
+            accountId: accountId ? '✓' : '✗',
+            ticker: ticker ? '✓' : '✗',
+            tradeDate: tradeDate ? '✓' : '✗',
+            expDate: expDate ? '✓' : '✗',
+            hasValidPrice: hasValidPrice ? '✓' : '✗',
+            hasValidStrike: hasValidStrike ? '✓' : '✗',
+            hasValidCredit: hasValidCredit ? '✓' : '✗',
+            hasValidContracts: hasValidContracts ? '✓' : '✗',
+            price: price,
+            strike: strike,
+            credit: credit,
+            contracts: contracts
+        });
         
         if (accountId && ticker && tradeDate && hasValidPrice && expDate && hasValidStrike && hasValidCredit && hasValidContracts) {
             console.log('[DEBUG] checkAndCreateTrade - All fields filled with valid values!');
@@ -7411,6 +8464,17 @@ function setupNewTradeCreation(tradeId) {
                     return;
                 }
                 
+                // Get the trade type from the trade object (should be set when column was created)
+                // Use the trade's actual trade_type, not a hardcoded default
+                const tradeType = trade.trade_type || trade.type_name;
+                
+                if (!tradeType) {
+                    console.error('[DEBUG] checkAndCreateTrade - No trade type found for trade:', trade);
+                    alert('Error: Trade type not found. Please refresh the page and try again.');
+                    flags.isCreating = false;
+                    return;
+                }
+                
                 // Update global flags
                 flags.isCreating = true;
                 console.log('[DEBUG] setupNewTradeCreation - All fields filled, creating trade:', {
@@ -7422,7 +8486,7 @@ function setupNewTradeCreation(tradeId) {
                     strikePrice: strikePrice,
                     premium: premium,
                     num_of_contracts: numContracts,
-                    tradeType: 'ROCT CALL'
+                    tradeType: tradeType
                 });
                 
                 // Create the trade
@@ -7435,7 +8499,7 @@ function setupNewTradeCreation(tradeId) {
                     strikePrice: strikePrice,
                     premium: premium,
                     num_of_contracts: numContracts,
-                    tradeType: 'ROCT CALL'
+                    tradeType: tradeType
                 }).then(() => {
                     flags.hasBeenCreated = true;
                     flags.isCreating = false;
@@ -7470,16 +8534,51 @@ function setupNewTradeCreation(tradeId) {
     
     // Only attach blur listener to the contracts field (row 9) - this is the last field
     // The trade will only be created when the user exits the contracts field after filling all fields
-    const contractsRow = tbody.children[9];
-    if (contractsRow) {
-        const contractsCell = contractsRow.children[newColumnIndex];
-        if (contractsCell) {
-            const contractsInput = contractsCell.querySelector('input');
-            if (contractsInput) {
-                contractsInput.addEventListener('blur', checkAndCreateTrade);
-                console.log('[DEBUG] setupNewTradeCreation - Attached blur listener to contracts field (row 9)');
+    // Use a more robust approach: try multiple times with delays to ensure the element exists
+    const attachContractsBlurListener = () => {
+        const contractsRow = tbody.children[9];
+        if (contractsRow) {
+            const contractsCell = contractsRow.children[newColumnIndex];
+            if (contractsCell) {
+                const contractsInput = contractsCell.querySelector('input[data-trade-id="' + tradeId + '"]');
+                if (contractsInput) {
+                    // Store the handler function on the element itself so we can remove it later
+                    const blurHandler = () => {
+                        console.log('[DEBUG] Contracts field blur event fired for tradeId:', tradeId);
+                        checkAndCreateTrade();
+                    };
+                    
+                    // Remove any existing handler
+                    if (contractsInput._blurHandler) {
+                        contractsInput.removeEventListener('blur', contractsInput._blurHandler);
+                    }
+                    
+                    // Store and attach new handler
+                    contractsInput._blurHandler = blurHandler;
+                    contractsInput.addEventListener('blur', blurHandler);
+                    console.log('[DEBUG] setupNewTradeCreation - Attached blur listener to contracts field (row 9) for tradeId:', tradeId, 'input:', contractsInput);
+                    return true;
+                } else {
+                    console.log('[DEBUG] setupNewTradeCreation - Contracts input not found in cell for tradeId:', tradeId);
+                }
+            } else {
+                console.log('[DEBUG] setupNewTradeCreation - Contracts cell not found at column index:', newColumnIndex);
             }
+        } else {
+            console.log('[DEBUG] setupNewTradeCreation - Contracts row (row 9) not found');
         }
+        return false;
+    };
+    
+    // Try immediately
+    if (!attachContractsBlurListener()) {
+        // If it fails, try again after a short delay (table might still be rendering)
+        setTimeout(() => {
+            if (!attachContractsBlurListener()) {
+                // Try one more time after a longer delay
+                setTimeout(attachContractsBlurListener, 200);
+            }
+        }, 50);
     }
     
     // Also check on account change (but don't create trade, just update the trade object in memory)
@@ -7500,7 +8599,21 @@ function setupNewTradeCreation(tradeId) {
                             trade.account_name = account.account_name;
                         }
                     }
-                    console.log('[DEBUG] setupNewTradeCreation - Account changed, updated trade in memory');
+                    
+                    // Update the universal account filter in the control bar
+                    const universalAccountFilter = document.getElementById('universal-account-filter');
+                    if (universalAccountFilter && this.value) {
+                        universalAccountFilter.value = this.value;
+                        // Trigger change event to update filters and reload data
+                        universalAccountFilter.dispatchEvent(new Event('change'));
+                    }
+                    
+                    // Fetch commission for the new account
+                    if (window._fetchAndPopulateCommissionForTrade && window._fetchAndPopulateCommissionForTrade[tradeId]) {
+                        window._fetchAndPopulateCommissionForTrade[tradeId]();
+                    }
+                    
+                    console.log('[DEBUG] setupNewTradeCreation - Account changed, updated trade in memory and universal filter');
                 });
             }
         }
@@ -7563,18 +8676,17 @@ async function createNewTradeFromColumn(tradeId, tradeData) {
         };
         
         console.log('[DEBUG] createNewTradeFromColumn - Sending request:', requestBody);
+        console.log('[DEBUG] createNewTradeFromColumn - accountId type:', typeof requestBody.accountId, 'value:', requestBody.accountId);
         
         // Create the trade via API
-        const response = await fetch('/api/trades', {
+        const response = await apiFetch('/api/trades', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(requestBody)
+            body: requestBody
         });
         
         const result = await response.json();
         console.log('[DEBUG] createNewTradeFromColumn - Response:', result);
+        console.log('[DEBUG] createNewTradeFromColumn - Response success:', result.success, 'error:', result.error);
         
         if (result.success) {
             console.log('[DEBUG] createNewTradeFromColumn - Trade created successfully, reloading...');
@@ -7644,7 +8756,7 @@ function openROCTPutModal(tradeData = null) {
         }
         
         // Populate form fields
-        document.getElementById('roct-put-trade-date').value = tradeData.trade_date;
+        document.getElementById('roct-put-trade-date').value = tradeData.date_trade_open || tradeData.trade_date || '';
         document.getElementById('roct-put-underlying').value = tradeData.ticker;
         document.getElementById('roct-put-price').value = tradeData.price;
         document.getElementById('roct-put-expiration-date').value = tradeData.expiration_date;
@@ -7767,7 +8879,7 @@ async function loadTopSymbols() {
             params.append('end_date', dashboardEndDate);
         }
         
-        const response = await fetch(`/api/top-symbols?${params}`);
+        const response = await apiFetch(`/api/top-symbols?${params}`);
         const topSymbols = await response.json();
         
         const container = document.getElementById('top-symbols-list');
@@ -7795,7 +8907,7 @@ async function loadTopSymbols() {
             
             html += `
                 <div class="d-flex justify-content-between align-items-center mb-1">
-                    <span class="small ${colorClass}" onclick="filterByTopSymbol('${symbol.ticker}')" style="cursor: pointer;" title="Click to filter trades and cost basis">${index + 1}. ${symbol.ticker}</span>
+                    <span class="small ${colorClass} top-symbol-link" data-symbol="${String(symbol.ticker || '').replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;')}" style="cursor: pointer;" title="Click to filter trades and cost basis">${index + 1}. ${symbol.ticker}</span>
                     <span class="badge bg-light text-dark small">${symbol.trade_count}</span>
                 </div>
             `;
@@ -8006,10 +9118,12 @@ async function handleExcelUpload(event) {
     }
     
     try {
+        showLoadingSpinner(`Importing ${importType === 'cost-basis' ? 'cost basis' : 'trades'}...`);
+        
         // Determine which endpoint to use based on import type
         const endpoint = importType === 'cost-basis' ? '/api/import-cost-basis-excel' : '/api/import-excel';
         console.log('Import type:', importType, 'Using endpoint:', endpoint);
-        const response = await fetch(endpoint, {
+        const response = await apiFetch(endpoint, {
             method: 'POST',
             body: formData
         });
@@ -8032,6 +9146,16 @@ async function handleExcelUpload(event) {
         
         if (result.success) {
             let message = `Successfully imported ${result.imported} ${importType === 'cost-basis' ? 'cost basis entries' : 'trades'}.`;
+            if (result.imported === 0 && result.diagnostic) {
+                // Show diagnostic information when 0 trades imported
+                message = `No trades were imported.\n\n`;
+                if (result.diagnostic.diagnostic) {
+                    message += result.diagnostic.diagnostic + '\n\n';
+                }
+                if (result.diagnostic.checks && Array.isArray(result.diagnostic.checks)) {
+                    message += result.diagnostic.checks.join('\n');
+                }
+            }
             if (result.skipped > 0) {
                 message += `\n${result.skipped} duplicate entries skipped.`;
             }
@@ -8054,6 +9178,8 @@ async function handleExcelUpload(event) {
     } catch (error) {
         console.error('Upload error:', error);
         alert('Error uploading file: ' + error.message);
+    } finally {
+        hideLoadingSpinner();
     }
     
     // Reset file input
@@ -8096,7 +9222,9 @@ async function handleCostBasisUpload(event) {
     }
     
     try {
-        const response = await fetch('/api/import-cost-basis-excel', {
+        showLoadingSpinner('Importing cost basis...');
+        
+        const response = await apiFetch('/api/import-cost-basis-excel', {
             method: 'POST',
             body: formData
         });
@@ -8186,5 +9314,304 @@ document.addEventListener('DOMContentLoaded', function() {
         excelUpload.addEventListener('change', handleExcelUpload);
     }
 });
+
+// ============================================================================
+// SCHWAB API INTEGRATION
+// ============================================================================
+
+async function openSchwabSyncModal() {
+    const modal = new bootstrap.Modal(document.getElementById('schwabSyncModal'));
+    modal.show();
+    
+    // Check Schwab API status
+    await checkSchwabStatus();
+}
+
+async function checkSchwabStatus() {
+    const statusDiv = document.getElementById('schwab-status');
+    const syncForm = document.getElementById('schwab-sync-form');
+    const syncBtn = document.getElementById('schwab-sync-btn');
+    
+    try {
+        const response = await apiFetch('/api/schwab/status');
+        const data = await response.json();
+        
+        if (!data.available) {
+            statusDiv.className = 'alert alert-warning';
+            statusDiv.innerHTML = `
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                <strong>Schwab API not available:</strong> ${data.message || 'Library not installed'}
+            `;
+            syncForm.style.display = 'none';
+            syncBtn.style.display = 'none';
+            return;
+        }
+        
+        if (!data.authenticated) {
+            statusDiv.className = 'alert alert-warning';
+            statusDiv.innerHTML = `
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                <strong>Not Authenticated:</strong> ${data.message || 'Please configure Schwab API credentials in .env file'}
+                <br><br>
+                <button class="btn btn-primary btn-sm" onclick="authenticateSchwab()">
+                    <i class="fas fa-key me-2"></i>Authenticate with Schwab
+                </button>
+            `;
+            syncForm.style.display = 'none';
+            syncBtn.style.display = 'none';
+            return;
+        }
+        
+        // API is available and authenticated
+        statusDiv.className = 'alert alert-success';
+        statusDiv.innerHTML = `
+            <i class="fas fa-check-circle me-2"></i>
+            <strong>Schwab API Connected</strong>
+        `;
+        syncForm.style.display = 'block';
+        syncBtn.style.display = 'block';
+        
+        // Load accounts
+        await loadSchwabAccounts();
+        await loadLocalAccounts();
+        
+        // Set default dates (last 30 days)
+        const endDate = new Date();
+        const startDate = new Date();
+        startDate.setDate(startDate.getDate() - 30);
+        
+        document.getElementById('schwab-start-date').value = startDate.toISOString().split('T')[0];
+        document.getElementById('schwab-end-date').value = endDate.toISOString().split('T')[0];
+        
+    } catch (error) {
+        statusDiv.className = 'alert alert-danger';
+        statusDiv.innerHTML = `
+            <i class="fas fa-times-circle me-2"></i>
+            <strong>Error:</strong> ${error.message}
+        `;
+        syncForm.style.display = 'none';
+        syncBtn.style.display = 'none';
+    }
+}
+
+async function loadSchwabAccounts() {
+    try {
+        const response = await apiFetch('/api/schwab/accounts');
+        const data = await response.json();
+        
+        const select = document.getElementById('schwab-account-select');
+        select.innerHTML = '<option value="">All Accounts</option>';
+        
+        if (data.success && data.accounts) {
+            data.accounts.forEach(account => {
+                const option = document.createElement('option');
+                option.value = account.account_number;
+                option.textContent = `${account.account_name} (${account.account_number})`;
+                select.appendChild(option);
+            });
+        }
+    } catch (error) {
+        console.error('Error loading Schwab accounts:', error);
+    }
+}
+
+async function loadLocalAccounts() {
+    try {
+        const response = await apiFetch('/api/accounts');
+        const accounts = await response.json();
+        
+        const select = document.getElementById('schwab-local-account');
+        select.innerHTML = '<option value="">Select account...</option>';
+        
+        if (Array.isArray(accounts)) {
+            accounts.forEach(account => {
+                const option = document.createElement('option');
+                option.value = account.id;
+                option.textContent = account.account_name;
+                select.appendChild(option);
+            });
+        }
+    } catch (error) {
+        console.error('Error loading local accounts:', error);
+    }
+}
+
+async function syncSchwabTrades() {
+    const syncBtn = document.getElementById('schwab-sync-btn');
+    const resultsDiv = document.getElementById('schwab-sync-results');
+    const statsDiv = document.getElementById('schwab-sync-stats');
+    
+    // Get form data
+    const accountNumber = document.getElementById('schwab-account-select').value;
+    const startDate = document.getElementById('schwab-start-date').value;
+    const endDate = document.getElementById('schwab-end-date').value;
+    const accountId = document.getElementById('schwab-local-account').value;
+    
+    if (!accountId) {
+        alert('Please select a local account to map trades to');
+        return;
+    }
+    
+    // Disable button and show loading
+    syncBtn.disabled = true;
+    syncBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Syncing...';
+    
+    try {
+        const response = await apiFetch('/api/schwab/sync-trades', {
+            method: 'POST',
+            body: {
+                account_number: accountNumber || null,
+                start_date: startDate,
+                end_date: endDate,
+                account_id: parseInt(accountId)
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            statsDiv.innerHTML = `
+                <ul class="mb-0 mt-2">
+                    <li>Imported: ${data.imported} trade(s)</li>
+                    <li>Skipped: ${data.skipped} duplicate(s)</li>
+                    ${data.errors && data.errors.length > 0 ? `<li class="text-warning">Errors: ${data.errors.length}</li>` : ''}
+                </ul>
+            `;
+            
+            if (data.errors && data.errors.length > 0) {
+                console.warn('Sync errors:', data.errors);
+            }
+            
+            resultsDiv.style.display = 'block';
+            
+            // Reload trades table
+            await loadTrades();
+            loadSummary();
+            
+            // Hide form
+            document.getElementById('schwab-sync-form').style.display = 'none';
+            
+        } else {
+            alert('Sync failed: ' + (data.error || 'Unknown error'));
+        }
+        
+    } catch (error) {
+        alert('Error syncing trades: ' + error.message);
+    } finally {
+        syncBtn.disabled = false;
+        syncBtn.innerHTML = '<i class="fas fa-sync me-2"></i>Sync Trades';
+    }
+}
+
+// Function to get real-time quotes from Schwab
+async function getSchwabQuotes(symbols) {
+    try {
+        const symbolsStr = Array.isArray(symbols) ? symbols.join(',') : symbols;
+        const response = await apiFetch(`/api/schwab/quotes?symbols=${encodeURIComponent(symbolsStr)}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            return data.quotes;
+        }
+        return null;
+    } catch (error) {
+        console.error('Error fetching Schwab quotes:', error);
+        return null;
+    }
+}
+
+// Function to authenticate with Schwab API
+async function authenticateSchwab() {
+    const statusDiv = document.getElementById('schwab-status');
+    
+    // Show loading state
+    statusDiv.className = 'alert alert-info';
+    statusDiv.innerHTML = `
+        <i class="fas fa-spinner fa-spin me-2"></i>
+        <strong>Authenticating...</strong> Please wait...
+    `;
+    
+    try {
+        const response = await apiFetch('/api/schwab/authenticate', {
+            method: 'POST'
+        });
+        
+        const data = await response.json();
+        
+        if (data.success && data.authenticated) {
+            statusDiv.className = 'alert alert-success';
+            statusDiv.innerHTML = `
+                <i class="fas fa-check-circle me-2"></i>
+                <strong>Authentication Successful!</strong> ${data.message || ''}
+            `;
+            
+            // Re-check status to show the sync form
+            setTimeout(() => {
+                checkSchwabStatus();
+            }, 1000);
+        } else if (data.auth_url) {
+            // Need to redirect to authorization URL
+            statusDiv.className = 'alert alert-info';
+            statusDiv.innerHTML = `
+                <i class="fas fa-info-circle me-2"></i>
+                <strong>Authorization Required</strong>
+                <br><br>
+                <p>Please click the button below to authorize this application with Schwab.</p>
+                <a href="${data.auth_url}" target="_blank" class="btn btn-primary btn-sm">
+                    <i class="fas fa-external-link-alt me-2"></i>Authorize with Schwab
+                </a>
+                <br><br>
+                <small>After authorizing, you'll be redirected back. Then click "Check Status" below.</small>
+                <br><br>
+                <button class="btn btn-secondary btn-sm mt-2" onclick="checkSchwabStatus()">
+                    <i class="fas fa-sync me-2"></i>Check Status
+                </button>
+            `;
+        } else {
+            statusDiv.className = 'alert alert-danger';
+            statusDiv.innerHTML = `
+                <i class="fas fa-times-circle me-2"></i>
+                <strong>Authentication Failed:</strong> ${data.message || data.error || 'Unknown error'}
+                <br><br>
+                <small>Make sure your Schwab API credentials are correct in your .env file.</small>
+                <br><br>
+                <button class="btn btn-primary btn-sm" onclick="authenticateSchwab()">
+                    <i class="fas fa-key me-2"></i>Try Again
+                </button>
+            `;
+        }
+    } catch (error) {
+        statusDiv.className = 'alert alert-danger';
+        statusDiv.innerHTML = `
+            <i class="fas fa-times-circle me-2"></i>
+            <strong>Error:</strong> ${error.message}
+            <br><br>
+            <button class="btn btn-primary btn-sm" onclick="authenticateSchwab()">
+                <i class="fas fa-key me-2"></i>Try Again
+            </button>
+        `;
+    }
+}
+
+// Function to get historical data from Schwab
+async function getSchwabHistorical(symbol, startDate, endDate) {
+    try {
+        const startStr = startDate instanceof Date ? startDate.toISOString().split('T')[0] : startDate;
+        const endStr = endDate instanceof Date ? endDate.toISOString().split('T')[0] : endDate;
+        
+        const response = await apiFetch(
+            `/api/schwab/historical?symbol=${encodeURIComponent(symbol)}&start_date=${startStr}&end_date=${endStr}`
+        );
+        const data = await response.json();
+        
+        if (data.success) {
+            return data.data;
+        }
+        return null;
+    } catch (error) {
+        console.error('Error fetching Schwab historical data:', error);
+        return null;
+    }
+}
 
 

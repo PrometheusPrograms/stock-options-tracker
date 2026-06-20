@@ -11,7 +11,7 @@ SELECT
     t.account_id,
     tk.ticker,
     tk.company_name,
-    t.trade_date,
+    t.date_trade_open,
     t.expiration_date,
     t.num_of_contracts,
     t.premium,
@@ -40,7 +40,7 @@ SELECT
     tk.ticker,
     t.status,
     t.trade_type,
-    t.trade_date,
+    t.date_trade_open,
     t.num_of_contracts,
     t.strike_price,
     t.premium,
@@ -108,7 +108,7 @@ SELECT
     tk.ticker,
     t.trade_type,
     t.status,
-    t.trade_date,
+    t.date_trade_open,
     t.expiration_date,
     t.days_to_expiration,
     t.premium,
@@ -197,8 +197,8 @@ SELECT
     AVG(t.total_premium) AS avg_premium,
     SUM(t.commission) AS total_commission,
     SUM(t.total_premium - COALESCE(t.commission, 0)) AS net_premium,
-    MIN(t.trade_date) AS first_trade_date,
-    MAX(t.trade_date) AS last_trade_date
+    MIN(t.date_trade_open) AS first_trade_date,
+    MAX(t.date_trade_open) AS last_trade_date
 FROM trades t
 WHERE t.status != 'roll'
 GROUP BY t.account_id, t.status;

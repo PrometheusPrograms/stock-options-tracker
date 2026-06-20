@@ -20,7 +20,7 @@ def create_missing_cash_flows():
     
     # Find all trades without cash_flow entries
     cursor.execute('''
-        SELECT t.id, t.account_id, t.ticker_id, t.trade_date, t.trade_type, 
+        SELECT t.id, t.account_id, t.ticker_id, t.date_trade_open, t.trade_type, 
                t.num_of_contracts, t.credit_debit, t.total_premium, t.trade_status,
                tt.requires_contracts
         FROM trades t
@@ -41,7 +41,7 @@ def create_missing_cash_flows():
         trade_id = trade['id']
         account_id = trade['account_id']
         ticker_id = trade['ticker_id']
-        trade_date = trade['trade_date']
+        date_trade_open = trade['date_trade_open']
         trade_type = trade['trade_type']
         num_of_contracts = trade['num_of_contracts']
         credit_debit = trade['credit_debit']
@@ -69,7 +69,7 @@ def create_missing_cash_flows():
             cursor.execute('''
                 INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (account_id, trade_date, transaction_type, round(amount, 2), 
+            ''', (account_id, date_trade_open, transaction_type, round(amount, 2), 
                   f"{trade_type} premium received", trade_id, ticker_id))
             cash_flow_id = cursor.lastrowid
         else:
@@ -83,7 +83,7 @@ def create_missing_cash_flows():
             cursor.execute('''
                 INSERT INTO cash_flows (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (account_id, trade_date, transaction_type, round(amount, 2), 
+            ''', (account_id, date_trade_open, transaction_type, round(amount, 2), 
                   f"{trade_type} {num_of_contracts} shares", trade_id, ticker_id))
             cash_flow_id = cursor.lastrowid
         
@@ -92,7 +92,7 @@ def create_missing_cash_flows():
             cursor.execute('''
                 UPDATE cost_basis SET cash_flow_id = ? 
                 WHERE trade_id = ? AND ticker_id = ? AND transaction_date = ? AND cash_flow_id IS NULL
-            ''', (cash_flow_id, trade_id, ticker_id, trade_date))
+            ''', (cash_flow_id, trade_id, ticker_id, date_trade_open))
             linked_count += cursor.rowcount
         
         created_count += 1
