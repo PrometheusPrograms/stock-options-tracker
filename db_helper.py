@@ -24,12 +24,17 @@ class DatabaseHelper:
         self.database_path = database_path
         # Create engine with connection pooling
         # SQLite doesn't support true connection pooling, but we get better error handling
+        def _set_pragmas(conn, _):
+            conn.execute('PRAGMA busy_timeout=5000')
+
+        from sqlalchemy import event
         self.engine = create_engine(
             f'sqlite:///{database_path}',
-            poolclass=pool.StaticPool,  # SQLite uses StaticPool
-            connect_args={'check_same_thread': False},  # Allow multi-threading
-            echo=False  # Set to True for SQL query logging
+            poolclass=pool.NullPool,  # open/close per operation — avoids cross-connection write locks
+            connect_args={'check_same_thread': False},
+            echo=False
         )
+        event.listen(self.engine, 'connect', _set_pragmas)
     
     @contextmanager
     def get_connection(self):
@@ -54,7 +59,9 @@ class DatabaseHelper:
         Returns:
             sqlite3.Connection with row_factory set to sqlite3.Row
         """
-        conn = sqlite3.connect(self.database_path)
+        conn = sqlite3.connect(self.database_path, timeout=10)
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=5000')
         conn.row_factory = sqlite3.Row
         return conn
     

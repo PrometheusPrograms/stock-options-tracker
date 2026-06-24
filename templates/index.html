@@ -442,6 +442,11 @@
 </head>
 <body>
 
+    <!-- Environment banner — hidden in production, shown in test/dev -->
+    <div id="env-banner" style="display:none; background:#d63031; color:#fff; text-align:center; font-size:0.75rem; font-weight:600; padding:3px 0; letter-spacing:0.05em; z-index:9999; position:relative;">
+        ⚠ TEST ENVIRONMENT — data may be reset at any time
+    </div>
+
     <div class="page-wrapper">
         <!-- Header Banner -->
         <div class="header-banner-wrapper">
@@ -529,6 +534,9 @@
                         <button class="btn btn-sm btn-light quick-add-btn" onclick="addNewROCTPutColumn()">
                             <i class="fas fa-plus me-1"></i>ROCT PUT
                         </button>
+                        <button class="btn btn-sm btn-light quick-add-btn" onclick="addNewROCSBullPutSpreadColumn()">
+                            <i class="fas fa-plus me-1"></i>ROCS BPS
+                        </button>
                         <button class="btn btn-sm btn-light quick-add-btn" onclick="addNewROPColumn()">
                             <i class="fas fa-plus me-1"></i>ROP
                         </button>
@@ -538,11 +546,16 @@
                     </div>
                 </div>
                 
-                <!-- Schwab API Sync -->
-                <div class="control-group">
-                    <button class="btn btn-sm btn-info quick-add-btn" onclick="openSchwabSyncModal()" title="Sync trades from Schwab API">
-                        <i class="fas fa-sync me-1"></i>Schwab Sync
+                <!-- Schwab BTO Auto-Sync -->
+                <div class="control-group" id="schwab-sync-group">
+                    <button class="btn btn-sm btn-info quick-add-btn" id="schwab-sync-btn"
+                            onclick="triggerSchwabSync()" title="Sync BTO trades from Schwab now">
+                        <i class="fas fa-sync me-1" id="schwab-sync-icon"></i>Schwab
+                        <span id="schwab-poll-dot" title="Auto-syncing every 60s"
+                              style="display:none; width:7px; height:7px; border-radius:50%;
+                                     background:#28a745; display:inline-block; margin-left:3px; vertical-align:middle;"></span>
                     </button>
+                    <small id="schwab-last-sync-label" class="text-muted ms-1" style="font-size:0.55rem; white-space:nowrap;"></small>
                 </div>
                 
                 <!-- Universal Ticker Filter -->

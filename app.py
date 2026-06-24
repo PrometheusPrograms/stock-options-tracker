@@ -80,18 +80,30 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Setup logging to file
+APP_ENV = os.getenv('APP_ENV', 'development')
+IS_PRODUCTION = APP_ENV == 'production'
+
+# Disable browser caching of static files outside production so JS/CSS changes
+# take effect immediately without a hard refresh.
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 3600 if IS_PRODUCTION else 0
+
+# Setup logging
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('flask_debug.log'),
         logging.StreamHandler()
     ]
 )
+# Suppress noisy third-party debug logs
+for _noisy in ('httpcore', 'httpx', 'urllib3', 'yfinance', 'peewee', 'schwab.client.base'):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 # Database configuration
-DATABASE = 'trades.db'
+# DB_PATH env var lets test and prod sites point to different databases.
+# Falls back to 'trades.db' in the current working directory for local dev.
+DATABASE = os.getenv('DB_PATH', 'trades.db')
 
 # Initialize database helper
 init_db_helper(DATABASE)
@@ -285,6 +297,8 @@ def init_db():
             days_to_expiration INTEGER NOT NULL,
             current_price REAL NOT NULL,
             strike_price NUMERIC(12,2) NOT NULL,
+            long_strike NUMERIC(12,2) DEFAULT NULL,
+            needs_review INTEGER DEFAULT 0,
             trade_status TEXT DEFAULT 'open',
             trade_type TEXT NOT NULL,
             commission_per_share REAL DEFAULT 0,
@@ -340,6 +354,15 @@ def init_db():
         )
     ''')
     
+    # Settings table (key-value store for app-level config / sync state)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     # Create bankroll table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS bankroll (
@@ -549,7 +572,8 @@ def init_db():
         ('ROCT PUT', 'Roll Over Cash-secured PUT', 'OPTIONS', 1, 1, 1, 1, 0),
         ('ROCT CALL', 'Roll Over Cash-secured CALL', 'OPTIONS', 1, 1, 1, 1, 0),
         ('BTO', 'Buy To Open Stock', 'STOCK', 0, 0, 0, 0, 1),
-        ('STC', 'Sell To Close Stock', 'STOCK', 0, 0, 0, 0, 1)
+        ('STC', 'Sell To Close Stock', 'STOCK', 0, 0, 0, 0, 1),
+        ('ROCS BULL PUT SPREAD', 'Rule One Credit Spread - Bull Put Spread', 'OPTIONS', 1, 1, 1, 1, 0)
     ''')
     
     # Create SQL views to simplify queries
@@ -1402,6 +1426,22 @@ def get_trades():
         trades_list = []
         # Create a map of trade_id to trade for quick lookup
         trade_map = {trade['id']: trade for trade in trades}
+
+        # Compute net_credit_per_share for each trade:
+        # - Rolled trade (has parent with closing_debit > 0): net = STO price - parent's closing_debit
+        # - Standalone trade: net = credit_debit (the premium received)
+        for trade in trades:
+            sto_price = trade.get('price_per_share') or trade.get('credit_debit') or 0
+            parent_id = trade.get('trade_parent_id')
+            if parent_id and parent_id in trade_map:
+                parent = trade_map[parent_id]
+                parent_cd = parent.get('closing_debit') or 0
+                if parent_cd > 0:
+                    trade['net_credit_per_share'] = round(sto_price - parent_cd, 4)
+                else:
+                    trade['net_credit_per_share'] = sto_price
+            else:
+                trade['net_credit_per_share'] = sto_price
         
         def calculate_cumulative_net_credit(trade_id):
             """Calculate cumulative net credit for a trade by summing all ancestors"""
@@ -1411,10 +1451,13 @@ def get_trades():
             trade = trade_map[trade_id]
             trade_parent_id = trade.get('trade_parent_id')
             
-            # Calculate net credit total for this trade
-            num_of_contracts = trade.get('num_of_contracts', 1)
-            net_credit_per_share = trade.get('net_credit_per_share', 0)
-            net_credit_total = net_credit_per_share * num_of_contracts * 100 if trade.get('trade_type') not in ['BTO', 'STC'] else net_credit_per_share * num_of_contracts
+            # Use pre-computed net_credit_per_share
+            num_of_contracts = trade.get('num_of_contracts', 1) or 1
+            net_credit_per_share = trade.get('net_credit_per_share') or 0
+            commission = (trade.get('commission_per_share') or 0) * num_of_contracts * 100
+            is_equity = trade.get('trade_type') in ['BTO', 'STC']
+            multiplier = num_of_contracts if is_equity else num_of_contracts * 100
+            net_credit_total = net_credit_per_share * multiplier - commission
             
             # If this trade has a parent, add parent's cumulative net credit
             if trade_parent_id:
@@ -1428,6 +1471,8 @@ def get_trades():
             trade_dict['shares'] = trade_dict['num_of_contracts'] * 100 if trade_dict['trade_type'] not in ['BTO', 'STC'] else trade_dict['num_of_contracts']
             # Calculate cumulative net credit total
             trade_dict['cumulative_net_credit_total'] = calculate_cumulative_net_credit(trade_dict['id'])
+            # Flag trades that were assigned (so UI can show ASSIGNED badge)
+            trade_dict['is_assigned'] = (trade_dict.get('trade_status') == 'assigned')
             trades_list.append(trade_dict)
         
         return jsonify(trades_list)
@@ -1467,6 +1512,8 @@ def add_trade():
         premium = float(data['premium'])
         current_price = float(data['currentPrice'])
         strike_price = round_standard(float(data.get('strikePrice', 0)), 2)
+        long_strike_raw = data.get('longStrike')
+        long_strike = round_standard(float(long_strike_raw), 2) if long_strike_raw else None
         trade_type = data.get('tradeType', 'ROCT PUT')
         account_id = data.get('accountId', 9)  # Default to Rule One
         
@@ -1569,11 +1616,11 @@ def add_trade():
         cursor.execute('''
             INSERT INTO trades 
             (account_id, ticker_id, ticker, date_trade_open, expiration_date, num_of_contracts, num_of_shares, credit_debit, total_premium, 
-             days_to_expiration, current_price, strike_price, trade_status, trade_type, 
+             days_to_expiration, current_price, strike_price, long_strike, trade_status, trade_type, 
              price_per_share, total_amount, commission_per_share, margin_capital, net_credit_per_share, risk_capital_per_share, margin_percent, ARORC, trade_type_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (account_id, ticker_id, ticker, date_trade_open, expiration_date, num_of_contracts, num_of_shares, premium, total_premium,
-              days_to_expiration, current_price, strike_price, 'open', trade_type,
+              days_to_expiration, current_price, strike_price, long_strike, 'open', trade_type,
               price_per_share, total_amount, commission, margin_capital, net_credit_per_share, risk_capital_per_share, margin_percent, arorc, trade_type_id))
         
         trade_id = cursor.lastrowid
@@ -2292,10 +2339,17 @@ def update_trade_status(trade_id):
         # Update status and closing_debit based on new status
         # If status is not 'roll' or 'closed', set closing_debit to 0.00
         new_status_lower = new_status.lower() if new_status else ''
+        from datetime import datetime
+        current_date = datetime.now().strftime('%Y-%m-%d')
         if new_status_lower not in ['roll', 'closed']:
-            cursor.execute('UPDATE trades SET trade_status = ?, closing_debit = 0.00, total_debit = 0.00 WHERE id = ?', (new_status, trade_id))
+            cursor.execute('UPDATE trades SET trade_status = ?, closing_debit = 0.00, total_debit = 0.00, date_trade_rolled = NULL WHERE id = ?', (new_status, trade_id))
         else:
-            cursor.execute('UPDATE trades SET trade_status = ? WHERE id = ?', (new_status, trade_id))
+            # Auto-fill today as roll/close date if not already set
+            cursor.execute('''
+                UPDATE trades SET trade_status = ?,
+                    date_trade_rolled = CASE WHEN date_trade_rolled IS NULL OR date_trade_rolled = '' THEN ? ELSE date_trade_rolled END
+                WHERE id = ?
+            ''', (new_status, current_date, trade_id))
         
         # Record status change (only if status actually changed)
         if old_status != new_status:
@@ -2505,10 +2559,10 @@ def update_trade_status(trade_id):
                 cursor.execute('''
                     INSERT INTO trades 
                     (account_id, ticker_id, ticker, date_trade_open, expiration_date, num_of_contracts, num_of_shares,
-                     credit_debit, total_premium, days_to_expiration, current_price, strike_price, trade_status, 
+                     credit_debit, total_premium, days_to_expiration, current_price, strike_price, long_strike, trade_status, 
                      trade_type, commission_per_share, price_per_share, total_amount, margin_capital,
                      net_credit_per_share, risk_capital_per_share, margin_percent, ARORC, trade_type_id, trade_parent_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     account_id,
                     ticker_id,
@@ -2522,6 +2576,7 @@ def update_trade_status(trade_id):
                     0,             # Default DTE (will be recalculated using parent's date_trade_rolled)
                     0.0,           # Default current_price
                     0.0,           # Default strike (editable)
+                    None,          # long_strike (NULL for non-spread roll trades)
                     'open',        # New trade starts as 'open'
                     formatted_trade_type,    # Same trade_type (formatted with ticker)
                     commission,   # Commission rate in effect at trade date
@@ -2561,6 +2616,60 @@ def update_trade_status(trade_id):
                 'message': 'New trade created for roll'
             })
         
+        # Handle ROCS BPS closed -> auto-create adjacent ROP trade
+        trade_type_for_bps = trade_dict.get('trade_type', '')
+        if new_status == 'closed' and old_status == 'open' and ('BULL PUT SPREAD' in trade_type_for_bps or 'BPS' in trade_type_for_bps):
+            print(f'[DEBUG] ROCS BPS closed - creating adjacent ROP trade for trade_id: {trade_id}')
+            bps_account_id = trade_dict.get('account_id', 9)
+            bps_ticker_id = trade_dict.get('ticker_id')
+            from datetime import datetime
+            bps_current_date = datetime.now().strftime('%Y-%m-%d')
+            bps_expiration = next_friday_str = None
+            try:
+                def _next_friday(d):
+                    days_ahead = 4 - d.weekday()
+                    if days_ahead <= 0:
+                        days_ahead += 7
+                    return d + timedelta(days=days_ahead)
+                bps_expiration = _next_friday(datetime.now()).strftime('%Y-%m-%d')
+            except:
+                bps_expiration = bps_current_date
+
+            if bps_ticker_id:
+                cursor.execute('SELECT ticker FROM tickers WHERE id = ?', (bps_ticker_id,))
+                bps_ticker_row = cursor.fetchone()
+                bps_ticker = bps_ticker_row['ticker'] if bps_ticker_row else 'TBD'
+                
+                db = get_db_helper()
+                bps_commission = db.get_commission_rate(bps_account_id, bps_current_date)
+                
+                cursor.execute('SELECT id FROM trade_types WHERE type_name = ?', ('ROP',))
+                rop_type_row = cursor.fetchone()
+                rop_type_id = rop_type_row['id'] if rop_type_row else None
+                bps_child_num_contracts = trade_dict.get('num_of_contracts', 1)
+                bps_child_num_shares = bps_child_num_contracts * 100
+
+                cursor.execute('''
+                    INSERT INTO trades
+                    (account_id, ticker_id, ticker, date_trade_open, expiration_date, num_of_contracts, num_of_shares,
+                     credit_debit, total_premium, days_to_expiration, current_price, strike_price, long_strike, trade_status,
+                     trade_type, commission_per_share, price_per_share, total_amount, margin_capital,
+                     net_credit_per_share, risk_capital_per_share, margin_percent, ARORC, trade_type_id, trade_parent_id)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ''', (
+                    bps_account_id, bps_ticker_id, bps_ticker, bps_current_date, bps_expiration,
+                    bps_child_num_contracts, bps_child_num_shares,
+                    0.0, 0.0, 0, 0.0, 0.0, None, 'open',
+                    f'{bps_ticker} ROP',
+                    bps_commission, 0.0, 0.0, None, 0.0, None, 100.0, None,
+                    rop_type_id, trade_id
+                ))
+                new_rop_trade_id = cursor.lastrowid
+                print(f'[DEBUG] ROCS BPS - created adjacent ROP trade_id: {new_rop_trade_id}')
+                conn.commit()
+                conn.close()
+                return jsonify({'success': True, 'new_trade_id': new_rop_trade_id, 'message': 'ROCS BPS closed; new ROP trade created'})
+
         conn.commit()
         conn.close()
         
@@ -2597,7 +2706,7 @@ def quick_add_trade():
             return jsonify({'error': 'tradeType is required'}), 400
         
         # Validate trade type
-        valid_quick_add_types = ['ROC', 'ROCT CALL', 'ROCT PUT', 'ROP']
+        valid_quick_add_types = ['ROC', 'ROCT CALL', 'ROCT PUT', 'ROP', 'ROCS BULL PUT SPREAD']
         if trade_type not in valid_quick_add_types:
             return jsonify({'error': f'Invalid trade type for quick add: {trade_type}. Must be one of: {", ".join(valid_quick_add_types)}'}), 400
         
@@ -2608,10 +2717,15 @@ def quick_add_trade():
         from datetime import datetime, timedelta
         current_date = datetime.now().strftime('%Y-%m-%d')
         
-        # Calculate expiration date (10 days from today, or use today if ticker not provided)
-        expiration_date = (datetime.now() + timedelta(days=10)).strftime('%Y-%m-%d')
-        if not ticker:
-            expiration_date = current_date  # Use current date if no ticker
+        # Calculate expiration date as the next Friday after today
+        def next_friday(from_date):
+            """Return the next Friday strictly after from_date (if from_date is Friday, returns +7)."""
+            days_ahead = 4 - from_date.weekday()  # Friday is weekday 4
+            if days_ahead <= 0:
+                days_ahead += 7
+            return from_date + timedelta(days=days_ahead)
+        
+        expiration_date = next_friday(datetime.now()).strftime('%Y-%m-%d')
         
         # Get or create ticker if provided
         db = get_db_helper()
@@ -2643,7 +2757,7 @@ def quick_add_trade():
         
         # Format trade_type with ticker for options trades
         base_trade_type = trade_type
-        if trade_type in ['ROCT PUT', 'ROCT CALL', 'ROP', 'ROC']:
+        if trade_type in ['ROCT PUT', 'ROCT CALL', 'ROP', 'ROC', 'ROCS BULL PUT SPREAD']:
             formatted_trade_type = f"{ticker} {trade_type}"
         else:
             formatted_trade_type = trade_type
@@ -2662,10 +2776,10 @@ def quick_add_trade():
             cursor.execute('''
                 INSERT INTO trades 
                 (account_id, ticker_id, ticker, date_trade_open, expiration_date, num_of_contracts, num_of_shares,
-                 credit_debit, total_premium, days_to_expiration, current_price, strike_price, trade_status, 
+                 credit_debit, total_premium, days_to_expiration, current_price, strike_price, long_strike, trade_status, 
                  trade_type, commission_per_share, price_per_share, total_amount, margin_capital,
                  net_credit_per_share, risk_capital_per_share, margin_percent, ARORC, trade_type_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 account_id,
                 ticker_id,
@@ -2679,6 +2793,7 @@ def quick_add_trade():
                 0,             # Default DTE (will be recalculated when dates are set)
                 0.0,           # Default current_price
                 0.0,           # Default strike (editable)
+                None,          # long_strike (NULL for non-spread; user fills in)
                 'open',        # New trade starts as 'open'
                 formatted_trade_type,
                 commission,   # Commission rate in effect at trade date
@@ -2962,7 +3077,7 @@ def update_trade_field(trade_id):
         cursor = conn.cursor()
         
         # Validate field name (use snake_case to match database schema)
-        valid_fields = ['num_of_contracts', 'credit_debit', 'strike_price', 'trade_status', 'current_price', 'expiration_date', 'ticker', 'date_trade_open', 'account_id', 'closing_debit', 'total_debit', 'date_trade_rolled', 'notes']
+        valid_fields = ['num_of_contracts', 'credit_debit', 'strike_price', 'long_strike', 'trade_status', 'current_price', 'expiration_date', 'ticker', 'date_trade_open', 'account_id', 'closing_debit', 'total_debit', 'date_trade_rolled', 'notes', 'needs_review']
         if field not in valid_fields:
             return jsonify({'error': 'Invalid field'}), 400
         
@@ -3000,6 +3115,8 @@ def update_trade_field(trade_id):
             value = float(value) if value and str(value).strip() else 0.0
         elif field == 'strike_price':
             value = round_standard(float(value), 2) if value and str(value).strip() else 0.0
+        elif field == 'long_strike':
+            value = round_standard(float(value), 2) if value and str(value).strip() else None
         elif field == 'current_price':
             value = round_standard(float(value), 2) if value and str(value).strip() else 0.0
         elif field == 'expiration_date':
@@ -3144,7 +3261,18 @@ def update_trade_field(trade_id):
             # Use unrounded risk_capital_per_share for margin_capital calculation
             current_strike = trade.get('strike_price', 0)
             
-            if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+            if 'BULL PUT SPREAD' in trade_type or 'BPS' in trade_type:
+                # BPS: risk_capital = (short_strike - long_strike) - net_credit; commission doubled
+                current_commission = trade.get('commission_per_share', 0)
+                current_net_credit = round_standard((current_credit_debit - current_commission * 2), 5)
+                long_strike_val = trade.get('long_strike') or 0
+                spread_width = (current_strike or 0) - long_strike_val
+                if spread_width > 0:
+                    risk_capital_unrounded = spread_width - current_net_credit
+                    new_margin_capital = value * 100 * risk_capital_unrounded
+                    updates.append('margin_capital = ?')
+                    params.append(new_margin_capital)
+            elif 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
                 # Calculate unrounded risk_capital_per_share for margin_capital
                 current_commission = trade.get('commission_per_share', 0)
                 current_net_credit = round_standard((current_credit_debit - current_commission), 5)
@@ -3166,20 +3294,33 @@ def update_trade_field(trade_id):
             updates.append('total_premium = ?')
             params.append(new_total_premium)
             
-            # Recalculate net_credit_per_share (rounded to 5 decimal places)
+            # BPS has two legs, so commission is charged twice per share
+            trade_type = trade.get('trade_type', '')
             current_commission = trade.get('commission_per_share', 0)
-            new_net_credit = round_standard((value - current_commission), 5)
+            is_bps = 'BULL PUT SPREAD' in trade_type or 'BPS' in trade_type
+            eff_commission = current_commission * 2 if is_bps else current_commission
+            new_net_credit = round_standard((value - eff_commission), 5)
             updates.append('net_credit_per_share = ?')
             params.append(new_net_credit)
             
             # Diagonal entry creation is now handled AFTER the trade update (see below)
             
-            # Recalculate risk_capital_per_share for ROCT PUT and RULE ONE PUT trades
-            trade_type = trade.get('trade_type', '')
+            # Recalculate risk_capital_per_share for PUT-based and spread trades
             current_strike = trade.get('strike_price', 0)
             new_risk_capital = None  # Initialize for ARORC calculation
             
-            if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+            if is_bps:
+                # BPS: risk_capital = (short_strike - long_strike) - net_credit
+                long_strike_val = trade.get('long_strike') or 0
+                spread_width = (current_strike or 0) - long_strike_val
+                if spread_width > 0:
+                    new_risk_capital = round_standard((spread_width - new_net_credit), 2)
+                    updates.append('risk_capital_per_share = ?')
+                    params.append(new_risk_capital)
+                    new_margin_capital = current_num_contracts * 100 * new_risk_capital
+                    updates.append('margin_capital = ?')
+                    params.append(new_margin_capital)
+            elif 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
                 new_risk_capital = round_standard((current_strike - new_net_credit), 2)
                 updates.append('risk_capital_per_share = ?')
                 params.append(new_risk_capital)
@@ -3240,7 +3381,42 @@ def update_trade_field(trade_id):
             current_commission = trade.get('commission_per_share', 0)
             current_net_credit = round_standard((current_credit_debit - current_commission), 5)
             
-            if 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
+            # For BPS trades, use spread width as risk capital instead of naked-put formula
+            is_bps_strike = 'BULL PUT SPREAD' in trade_type or 'BPS' in trade_type
+            if is_bps_strike:
+                # BPS has two legs: double the commission when computing net credit
+                current_net_credit = round_standard((current_credit_debit - current_commission * 2), 5)
+                long_strike_val = trade.get('long_strike') or 0
+                spread_width = value - long_strike_val
+                if spread_width > 0 and long_strike_val > 0:
+                    new_risk_capital = round_standard((spread_width - current_net_credit), 2)
+                    current_num_contracts = trade.get('num_of_contracts', 1)
+                    updates.append('risk_capital_per_share = ?')
+                    params.append(new_risk_capital)
+                    updates.append('margin_capital = ?')
+                    params.append(current_num_contracts * 100 * new_risk_capital)
+                    date_trade_open = trade.get('date_trade_open')
+                    effective_exp_date = get_effective_expiration_date(cursor, trade)
+                    days_to_expiration = trade.get('days_to_expiration', 0)
+                    if date_trade_open and effective_exp_date:
+                        from datetime import datetime
+                        try:
+                            dte_open = datetime.strptime(date_trade_open, '%Y-%m-%d')
+                            dte_exp = datetime.strptime(effective_exp_date, '%Y-%m-%d')
+                            days_to_expiration = (dte_exp - dte_open).days
+                            updates.append('days_to_expiration = ?')
+                            params.append(days_to_expiration)
+                        except:
+                            pass
+                    margin_percent = trade.get('margin_percent', 100.0)
+                    risk_capital_unrounded = spread_width - current_net_credit
+                    if risk_capital_unrounded > 0 and days_to_expiration > 0 and margin_percent > 0:
+                        denominator = risk_capital_unrounded * (margin_percent / 100.0)
+                        if denominator > 0:
+                            arorc_decimal = (365.0 / days_to_expiration) * (current_net_credit / denominator)
+                            updates.append('ARORC = ?')
+                            params.append(round_standard(arorc_decimal * 100.0, 1))
+            elif 'ROCT PUT' in trade_type or 'RULE ONE PUT' in trade_type or ('PUT' in trade_type and ('ROCT' in trade_type or 'RULE ONE' in trade_type)):
                 new_risk_capital = round_standard((value - current_net_credit), 2)
                 updates.append('risk_capital_per_share = ?')
                 params.append(new_risk_capital)
@@ -3295,6 +3471,46 @@ def update_trade_field(trade_id):
                     params.append(new_margin_capital)
             
             # Diagonal entry creation is now handled AFTER the trade update (see below)
+        
+        elif field == 'long_strike':
+            # Recalculate spread risk capital / ARORC when long strike changes on BPS trades
+            trade_type = trade.get('trade_type', '')
+            if 'BULL PUT SPREAD' in trade_type or 'BPS' in trade_type:
+                short_strike = trade.get('strike_price', 0) or 0
+                current_credit_debit = trade.get('credit_debit', 0) or 0
+                current_commission = trade.get('commission_per_share', 0) or 0
+                # BPS has two legs: double the commission
+                current_net_credit = round_standard((current_credit_debit - current_commission * 2), 5)
+                long_strike_val = value or 0
+                spread_width = short_strike - long_strike_val
+                if spread_width > 0:
+                    new_risk_capital = round_standard((spread_width - current_net_credit), 2)
+                    current_num_contracts = trade.get('num_of_contracts', 1)
+                    updates.append('risk_capital_per_share = ?')
+                    params.append(new_risk_capital)
+                    updates.append('margin_capital = ?')
+                    params.append(current_num_contracts * 100 * new_risk_capital)
+                    date_trade_open = trade.get('date_trade_open')
+                    effective_exp_date = get_effective_expiration_date(cursor, trade)
+                    days_to_expiration = trade.get('days_to_expiration', 0)
+                    if date_trade_open and effective_exp_date:
+                        from datetime import datetime
+                        try:
+                            dte_open = datetime.strptime(date_trade_open, '%Y-%m-%d')
+                            dte_exp = datetime.strptime(effective_exp_date, '%Y-%m-%d')
+                            days_to_expiration = (dte_exp - dte_open).days
+                            updates.append('days_to_expiration = ?')
+                            params.append(days_to_expiration)
+                        except:
+                            pass
+                    margin_percent = trade.get('margin_percent', 100.0)
+                    risk_capital_unrounded = spread_width - current_net_credit
+                    if risk_capital_unrounded > 0 and days_to_expiration > 0 and margin_percent > 0:
+                        denominator = risk_capital_unrounded * (margin_percent / 100.0)
+                        if denominator > 0:
+                            arorc_decimal = (365.0 / days_to_expiration) * (current_net_credit / denominator)
+                            updates.append('ARORC = ?')
+                            params.append(round_standard(arorc_decimal * 100.0, 1))
         
         # Execute update
         if updates:
@@ -4194,16 +4410,26 @@ def get_cost_basis():
         # Query cost_basis table directly instead of trades table
         # Also include dividend entries from cash_flows table
         if ticker:
-            # Query cost_basis entries - explicitly list all columns to match UNION structure
+            # Query cost_basis entries — include parent trade info for diagonal roll display
             query = '''
                 SELECT 
                     cb.id, cb.account_id, cb.ticker_id, cb.trade_id, cb.cash_flow_id,
                     cb.transaction_date, cb.description, cb.shares, cb.cost_per_share,
                     cb.total_amount, cb.running_basis, cb.running_shares, cb.basis_per_share, cb.created_at,
-                    t.ticker, tr.trade_status as status, tr.trade_type, a.account_name, 'cost_basis' as entry_type
+                    t.ticker, tr.trade_status as status, tr.trade_type, a.account_name, 'cost_basis' as entry_type,
+                    tr.trade_parent_id,
+                    tr.price_per_share as sto_price,
+                    tr.num_of_contracts as trade_num_contracts,
+                    tr.strike_price as new_strike,
+                    tr.expiration_date as new_exp,
+                    ptr.strike_price as orig_strike,
+                    ptr.expiration_date as orig_exp,
+                    ptr.closing_debit as parent_closing_debit,
+                    ptr.trade_type as parent_trade_type
                 FROM cost_basis cb
                 JOIN tickers t ON cb.ticker_id = t.id
                 LEFT JOIN trades tr ON cb.trade_id = tr.id
+                LEFT JOIN trades ptr ON tr.trade_parent_id = ptr.id
                 LEFT JOIN accounts a ON cb.account_id = a.id
                 WHERE t.ticker = ? AND t.ticker IS NOT NULL AND t.ticker != ""
             '''
@@ -4212,13 +4438,17 @@ def get_cost_basis():
                 query += ' AND cb.account_id = ?'
                 params.append(account_id)
             
-            # Query dividend entries from cash_flows - match column structure exactly
+            # Query dividend entries — pad with NULLs for parent columns
             dividend_query = '''
                 SELECT 
                     cf.id, cf.account_id, t.id as ticker_id, NULL as trade_id, cf.id as cash_flow_id,
                     cf.transaction_date, cf.description, 0 as shares, 0 as cost_per_share,
                     cf.amount as total_amount, 0 as running_basis, 0 as running_shares, 0 as basis_per_share, cf.created_at,
-                    t.ticker, NULL as status, NULL as trade_type, a.account_name, 'dividend' as entry_type
+                    t.ticker, NULL as status, NULL as trade_type, a.account_name, 'dividend' as entry_type,
+                    NULL as trade_parent_id, NULL as sto_price, NULL as trade_num_contracts,
+                    NULL as new_strike, NULL as new_exp,
+                    NULL as orig_strike, NULL as orig_exp,
+                    NULL as parent_closing_debit, NULL as parent_trade_type
                 FROM cash_flows cf
                 JOIN tickers t ON cf.ticker_id = t.id
                 LEFT JOIN accounts a ON cf.account_id = a.id
@@ -4228,27 +4458,62 @@ def get_cost_basis():
             if account_id:
                 dividend_query += ' AND cf.account_id = ?'
                 dividend_params.append(account_id)
+
+            # Query CLOSING_DEBIT entries — pad with NULLs for parent columns
+            # Note: cf.trade_id is the PARENT trade being closed, not the new STO
+            closing_debit_query = '''
+                SELECT
+                    cf.id, cf.account_id, t.id as ticker_id, cf.trade_id, cf.id as cash_flow_id,
+                    cf.transaction_date, cf.description, 0 as shares, 0 as cost_per_share,
+                    cf.amount as total_amount, 0 as running_basis, 0 as running_shares, 0 as basis_per_share, cf.created_at,
+                    t.ticker, tr.trade_status as status, tr.trade_type, a.account_name, 'closing_debit' as entry_type,
+                    NULL as trade_parent_id, NULL as sto_price, NULL as trade_num_contracts,
+                    NULL as new_strike, NULL as new_exp,
+                    NULL as orig_strike, NULL as orig_exp,
+                    NULL as parent_closing_debit, NULL as parent_trade_type
+                FROM cash_flows cf
+                JOIN tickers t ON cf.ticker_id = t.id
+                LEFT JOIN trades tr ON cf.trade_id = tr.id
+                LEFT JOIN accounts a ON cf.account_id = a.id
+                WHERE t.ticker = ? AND cf.transaction_type = 'CLOSING_DEBIT'
+            '''
+            closing_debit_params = [ticker]
+            if account_id:
+                closing_debit_query += ' AND cf.account_id = ?'
+                closing_debit_params.append(account_id)
             
-            # Combine both queries with UNION
+            # Combine all three queries with UNION
             combined_query = f'''
                 {query}
                 UNION ALL
                 {dividend_query}
+                UNION ALL
+                {closing_debit_query}
                 ORDER BY transaction_date ASC
             '''
-            combined_params = params + dividend_params
+            combined_params = params + dividend_params + closing_debit_params
             cursor.execute(combined_query, combined_params)
         else:
-            # Query cost_basis entries - explicitly list all columns to match UNION structure
+            # Query cost_basis entries — include parent trade info for diagonal roll display
             query = '''
                 SELECT 
                     cb.id, cb.account_id, cb.ticker_id, cb.trade_id, cb.cash_flow_id,
                     cb.transaction_date, cb.description, cb.shares, cb.cost_per_share,
                     cb.total_amount, cb.running_basis, cb.running_shares, cb.basis_per_share, cb.created_at,
-                    t.ticker, tr.trade_status as status, tr.trade_type, a.account_name, 'cost_basis' as entry_type
+                    t.ticker, tr.trade_status as status, tr.trade_type, a.account_name, 'cost_basis' as entry_type,
+                    tr.trade_parent_id,
+                    tr.price_per_share as sto_price,
+                    tr.num_of_contracts as trade_num_contracts,
+                    tr.strike_price as new_strike,
+                    tr.expiration_date as new_exp,
+                    ptr.strike_price as orig_strike,
+                    ptr.expiration_date as orig_exp,
+                    ptr.closing_debit as parent_closing_debit,
+                    ptr.trade_type as parent_trade_type
                 FROM cost_basis cb
                 JOIN tickers t ON cb.ticker_id = t.id
                 LEFT JOIN trades tr ON cb.trade_id = tr.id
+                LEFT JOIN trades ptr ON tr.trade_parent_id = ptr.id
                 LEFT JOIN accounts a ON cb.account_id = a.id
                 WHERE t.ticker IS NOT NULL AND t.ticker != ""
             '''
@@ -4257,13 +4522,17 @@ def get_cost_basis():
                 query += ' AND cb.account_id = ?'
                 params.append(account_id)
             
-            # Query dividend entries from cash_flows - match column structure exactly
+            # Query dividend entries — pad with NULLs for parent columns
             dividend_query = '''
                 SELECT 
                     cf.id, cf.account_id, t.id as ticker_id, NULL as trade_id, cf.id as cash_flow_id,
                     cf.transaction_date, cf.description, 0 as shares, 0 as cost_per_share,
                     cf.amount as total_amount, 0 as running_basis, 0 as running_shares, 0 as basis_per_share, cf.created_at,
-                    t.ticker, NULL as status, NULL as trade_type, a.account_name, 'dividend' as entry_type
+                    t.ticker, NULL as status, NULL as trade_type, a.account_name, 'dividend' as entry_type,
+                    NULL as trade_parent_id, NULL as sto_price, NULL as trade_num_contracts,
+                    NULL as new_strike, NULL as new_exp,
+                    NULL as orig_strike, NULL as orig_exp,
+                    NULL as parent_closing_debit, NULL as parent_trade_type
                 FROM cash_flows cf
                 JOIN tickers t ON cf.ticker_id = t.id
                 LEFT JOIN accounts a ON cf.account_id = a.id
@@ -4273,15 +4542,39 @@ def get_cost_basis():
             if account_id:
                 dividend_query += ' AND cf.account_id = ?'
                 dividend_params.append(account_id)
+
+            # Query CLOSING_DEBIT entries — pad with NULLs for parent columns
+            closing_debit_query = '''
+                SELECT
+                    cf.id, cf.account_id, t.id as ticker_id, cf.trade_id, cf.id as cash_flow_id,
+                    cf.transaction_date, cf.description, 0 as shares, 0 as cost_per_share,
+                    cf.amount as total_amount, 0 as running_basis, 0 as running_shares, 0 as basis_per_share, cf.created_at,
+                    t.ticker, tr.trade_status as status, tr.trade_type, a.account_name, 'closing_debit' as entry_type,
+                    NULL as trade_parent_id, NULL as sto_price, NULL as trade_num_contracts,
+                    NULL as new_strike, NULL as new_exp,
+                    NULL as orig_strike, NULL as orig_exp,
+                    NULL as parent_closing_debit, NULL as parent_trade_type
+                FROM cash_flows cf
+                JOIN tickers t ON cf.ticker_id = t.id
+                LEFT JOIN trades tr ON cf.trade_id = tr.id
+                LEFT JOIN accounts a ON cf.account_id = a.id
+                WHERE cf.transaction_type = 'CLOSING_DEBIT'
+            '''
+            closing_debit_params = []
+            if account_id:
+                closing_debit_query += ' AND cf.account_id = ?'
+                closing_debit_params.append(account_id)
             
-            # Combine both queries with UNION
+            # Combine all three queries with UNION
             combined_query = f'''
                 {query}
                 UNION ALL
                 {dividend_query}
+                UNION ALL
+                {closing_debit_query}
                 ORDER BY t.ticker, transaction_date ASC
             '''
-            combined_params = params + dividend_params
+            combined_params = params + dividend_params + closing_debit_params
             cursor.execute(combined_query, combined_params)
         
         cost_basis_entries = cursor.fetchall()
@@ -4355,6 +4648,30 @@ def get_cost_basis():
             
             # Get company name from pre-fetched dictionary
             company_name = company_names.get(ticker, ticker)
+
+            # ----------------------------------------------------------------
+            # PRE-PASS: index closing_debit entries by the parent_trade_id they
+            # belong to. This lets rolled STO entries absorb the debit and render
+            # as a single DIAGONAL row instead of two separate rows.
+            # closing_debit.trade_id == the rolled-out (parent) trade
+            # ----------------------------------------------------------------
+            closing_debits_by_parent_id = {}
+            for entry in entries_list:
+                if entry.get('entry_type') == 'closing_debit':
+                    pid = entry.get('trade_id')
+                    if pid:
+                        closing_debits_by_parent_id[pid] = entry
+
+            # PRE-PASS 2: find all rolled STO cost_basis entries that have a
+            # matching closing_debit — mark their parent_ids as merged so the
+            # standalone closing_debit rows are skipped in the main loop.
+            merged_parent_ids = set()
+            for entry in entries_list:
+                if entry.get('entry_type') == 'cost_basis':
+                    parent_id = entry.get('trade_parent_id')
+                    parent_cd = entry.get('parent_closing_debit') or 0
+                    if parent_id and parent_id in closing_debits_by_parent_id and parent_cd > 0:
+                        merged_parent_ids.add(parent_id)
             
             # Map cost_basis entries and dividends to trade structure
             mapped_trades = []
@@ -4365,52 +4682,137 @@ def get_cost_basis():
                 entry_type = entry.get('entry_type', 'cost_basis')
                 
                 if entry_type == 'dividend':
-                    # Handle dividend entries
-                    # For dividends, the SQL query uses 'cf.amount as total_amount'
                     amount = entry.get('total_amount', 0) or 0
-                    # Dividends don't affect shares, but they do affect the basis (they're income)
-                    # For display purposes, we'll show the dividend amount but keep shares unchanged
-                    calculated_running_basis += amount  # Dividends increase basis (they're income)
+                    calculated_running_basis += amount
                     
                     trade = {
                         'id': entry.get('id'),
                         'date_trade_open': entry.get('transaction_date'),
                         'trade_description': entry.get('description', 'Dividend'),
-                        'shares': 0,  # Dividends don't affect share count
+                        'shares': 0,
                         'cost_per_share': 0,
                         'amount': amount,
                         'running_basis': calculated_running_basis,
                         'running_basis_per_share': calculated_running_basis / calculated_running_shares if calculated_running_shares != 0 else calculated_running_basis,
-                        'running_shares': calculated_running_shares,  # Shares unchanged
+                        'running_shares': calculated_running_shares,
                         'trade_status': None,
                         'trade_type': 'Dividend',
                         'is_dividend': True
                     }
                     mapped_trades.append(trade)
-                else:
-                    # Handle cost_basis entries (trades)
-                    shares = entry.get('shares', 0) or 0
-                    amount = entry.get('total_amount', 0) or 0
-                    calculated_running_shares += shares
+
+                elif entry_type == 'closing_debit':
+                    # Skip if this closing_debit was merged into a DIAGONAL row
+                    pid = entry.get('trade_id')
+                    if pid and pid in merged_parent_ids:
+                        continue
+                    # Standalone closing_debit (no matching rolled STO found) — show as its own row
+                    raw_amount = entry.get('total_amount', 0) or 0
+                    amount = -raw_amount  # flip sign: cash outflow → positive cost
                     calculated_running_basis += amount
-                    
-                    # Calculate basis per share for this entry
-                    basis_per_share = calculated_running_basis / calculated_running_shares if calculated_running_shares != 0 else calculated_running_basis
-                    
+
                     trade = {
                         'id': entry.get('id'),
                         'date_trade_open': entry.get('transaction_date'),
-                        'trade_description': entry.get('description'),
-                        'shares': shares,
-                        'cost_per_share': entry.get('cost_per_share'),
+                        'trade_description': '↩ ' + (entry.get('description') or 'Rolling debit (BTC)'),
+                        'shares': 0,
+                        'cost_per_share': 0,
                         'amount': amount,
                         'running_basis': calculated_running_basis,
-                        'running_basis_per_share': basis_per_share,
+                        'running_basis_per_share': calculated_running_basis / calculated_running_shares if calculated_running_shares != 0 else calculated_running_basis,
                         'running_shares': calculated_running_shares,
-                        'trade_status': entry.get('status'),  # From linked trade
-                        'trade_type': entry.get('trade_type'),  # From linked trade
-                        'is_dividend': False
+                        'trade_status': entry.get('status'),
+                        'trade_type': entry.get('trade_type'),
+                        'is_dividend': False,
+                        'is_closing_debit': True,
                     }
+                    mapped_trades.append(trade)
+
+                else:
+                    # cost_basis entry — check if this is a rolled STO with a parent closing_debit
+                    parent_id = entry.get('trade_parent_id')
+                    parent_cd = entry.get('parent_closing_debit') or 0
+
+                    if parent_id and parent_id in closing_debits_by_parent_id and parent_cd > 0:
+                        # ---- DIAGONAL MERGE ----
+
+                        sto_price   = entry.get('sto_price') or 0
+                        n_contracts = entry.get('trade_num_contracts') or 1
+                        net_credit  = round(sto_price - parent_cd, 4)
+                        net_amount  = -(net_credit * n_contracts * 100)
+
+                        # Format dates
+                        from datetime import datetime as _dt
+                        def _fmt(d):
+                            try:
+                                return _dt.strptime(d, '%Y-%m-%d').strftime('%d-%b-%y').upper()
+                            except Exception:
+                                return d or ''
+
+                        new_exp_str  = _fmt(entry.get('new_exp', ''))
+                        orig_exp_str = _fmt(entry.get('orig_exp', ''))
+                        new_strike   = entry.get('new_strike') or 0
+                        orig_strike  = entry.get('orig_strike') or 0
+
+                        # Determine PUT/CALL from trade_type
+                        ttype = (entry.get('trade_type') or entry.get('parent_trade_type') or '').upper()
+                        opt_label = 'PUT' if 'PUT' in ttype else ('CALL' if 'CALL' in ttype else '')
+
+                        description = (
+                            f"SELL -{n_contracts} DIAGONAL {ticker} 100 "
+                            f"{new_exp_str}/{orig_exp_str} "
+                            f"{new_strike}/{orig_strike} {opt_label} @{net_credit:.2f}"
+                        )
+
+                        calculated_running_basis += net_amount
+
+                        trade = {
+                            'id': entry.get('id'),
+                            'date_trade_open': entry.get('transaction_date'),
+                            'trade_description': description,
+                            'shares': 0,
+                            'cost_per_share': 0,
+                            'amount': net_amount,
+                            'running_basis': calculated_running_basis,
+                            'running_basis_per_share': calculated_running_basis / calculated_running_shares if calculated_running_shares != 0 else calculated_running_basis,
+                            'running_shares': calculated_running_shares,
+                            'trade_status': entry.get('status'),
+                            'trade_type': entry.get('trade_type'),
+                            'is_diagonal': True,
+                        }
+                    else:
+                        # Regular cost_basis row (no merge)
+                        shares = entry.get('shares', 0) or 0
+                        amount = entry.get('total_amount', 0) or 0
+                        calculated_running_shares += shares
+                        calculated_running_basis += amount
+
+                        basis_per_share = calculated_running_basis / calculated_running_shares if calculated_running_shares != 0 else calculated_running_basis
+
+                        # Detect assignment rows: BTO trade with a parent option trade
+                        is_assignment = (
+                            entry.get('trade_type') == 'BTO' and
+                            entry.get('trade_parent_id') is not None and
+                            shares > 0
+                        )
+
+                        trade = {
+                            'id': entry.get('id'),
+                            'date_trade_open': entry.get('transaction_date'),
+                            'trade_description': entry.get('description'),
+                            'shares': shares,
+                            'cost_per_share': entry.get('cost_per_share'),
+                            'amount': amount,
+                            'running_basis': calculated_running_basis,
+                            'running_basis_per_share': basis_per_share,
+                            'running_shares': calculated_running_shares,
+                            'trade_status': entry.get('status'),
+                            'trade_type': entry.get('trade_type'),
+                            'is_dividend': False,
+                            'is_closing_debit': False,
+                            'is_diagonal': False,
+                            'is_assignment': is_assignment,
+                        }
                     mapped_trades.append(trade)
             
             # Calculate totals from the calculated running totals (more reliable than database values)
@@ -7215,121 +7617,687 @@ def schwab_get_historical():
         print(f'[SCHWAB API] Error fetching historical data: {e}', flush=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/api/schwab/sync-trades', methods=['POST'])
-def schwab_sync_trades():
-    """Sync trades from Schwab API to local database"""
-    if not SCHWAB_API_AVAILABLE or not schwab_client:
-        return jsonify({'success': False, 'error': 'Schwab API not available'}), 500
-    
+# ---------------------------------------------------------------------------
+# Schwab BTO auto-sync helpers
+# ---------------------------------------------------------------------------
+import threading as _threading
+
+_schwab_poll_stop = _threading.Event()
+_schwab_poll_thread = None
+
+
+def _setting_get(key, default=None):
+    """Read a value from the settings table."""
     try:
-        data = request.get_json() or {}
-        account_number = data.get('account_number')
-        start_date_str = data.get('start_date')
-        end_date_str = data.get('end_date')
-        
-        start_date = None
-        end_date = None
-        
-        if start_date_str:
-            start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
-        if end_date_str:
-            end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
-        
-        # Get orders from Schwab
-        orders = schwab_client.get_orders(account_number, start_date, end_date)
-        
-        # Import orders into database
         conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        imported_count = 0
-        skipped_count = 0
-        errors = []
-        
-        for order in orders:
-            try:
-                # Check if order already exists
-                cursor.execute('SELECT id FROM trades WHERE schwab_order_id = ?', (order.get('order_id'),))
-                if cursor.fetchone():
-                    skipped_count += 1
-                    continue
-                
-                # Map Schwab order to trade format
-                symbol = order.get('symbol', '')
-                if not symbol:
-                    continue
-                
-                # Get or create ticker
-                db = get_db_helper()
-                ticker_id = db.create_or_get_ticker(symbol, symbol)
-                
-                # Parse order date
-                entered_time = order.get('entered_time', '')
-                if entered_time:
-                    try:
-                        # Parse ISO format datetime
-                        order_date = datetime.fromisoformat(entered_time.replace('Z', '+00:00'))
-                        date_trade_open = order_date.strftime('%Y-%m-%d')
-                    except:
-                        date_trade_open = datetime.now().strftime('%Y-%m-%d')
-                else:
-                    date_trade_open = datetime.now().strftime('%Y-%m-%d')
-                
-                # Determine trade type
-                trade_type = order.get('trade_type', 'STOCK')
-                if trade_type == 'OPTION':
-                    option_type = order.get('option_type', '')
-                    if option_type == 'PUT':
-                        trade_type = 'ROCT PUT'
-                    elif option_type == 'CALL':
-                        trade_type = 'ROCT CALL'
-                
-                # Get account_id (you may need to map Schwab account to local account)
-                account_id = data.get('account_id', 9)  # Default account
-                
-                # Insert trade
-                cursor.execute('''
-                    INSERT INTO trades (
-                        ticker_id, account_id, date_trade_open, trade_date,
-                        expiration_date, current_price, strike_price, credit_debit,
-                        num_of_contracts, trade_type, trade_status, schwab_order_id,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-                ''', (
-                    ticker_id, account_id, date_trade_open, date_trade_open,
-                    order.get('expiration_date'), order.get('price', 0),
-                    order.get('strike_price'), order.get('price', 0),
-                    order.get('quantity', 1), trade_type, 'open',
-                    order.get('order_id')
-                ))
-                
-                imported_count += 1
-                
-            except Exception as e:
-                errors.append(f"Error importing order {order.get('order_id')}: {str(e)}")
-                print(f'[SCHWAB SYNC] Error importing order: {e}', flush=True)
-                continue
-        
+        row = conn.execute('SELECT value FROM settings WHERE key = ?', (key,)).fetchone()
+        conn.close()
+        return row['value'] if row else default
+    except Exception:
+        return default
+
+
+def _setting_set(key, value):
+    """Upsert a value in the settings table."""
+    try:
+        conn = get_db_connection()
+        conn.execute(
+            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime("now")) '
+            'ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at',
+            (key, str(value))
+        )
         conn.commit()
         conn.close()
-        
-        return jsonify({
-            'success': True,
-            'imported': imported_count,
-            'skipped': skipped_count,
-            'errors': errors,
-            'message': f'Imported {imported_count} trade(s), skipped {skipped_count} duplicate(s)'
-        })
-        
+    except Exception as e:
+        print(f'[SCHWAB SETTINGS] Error saving setting {key}: {e}', flush=True)
+
+
+def _map_option_trade_type(symbol, option_type, instruction):
+    """Map a Schwab option transaction to an app trade type string."""
+    option_type = (option_type or '').upper()
+    instruction = (instruction or '').upper()
+    if instruction == 'SELL_TO_OPEN':
+        if option_type == 'PUT':
+            return f'{symbol} ROCT PUT', False   # short put — standard
+        elif option_type == 'CALL':
+            return f'{symbol} ROCT CALL', False  # short call
+    # Everything else (BTC, BTO option, STC option) needs manual review
+    label = f'{symbol} {instruction} {option_type}'.strip()
+    return label, True
+
+
+def _do_schwab_sync(account_id_override=None, since_override=None, until_override=None):
+    """
+    Core sync: fetch all TRADE transactions since last sync and insert new trades.
+    Handles BTO (equity buy), STC (equity sell), short options (sell-to-open),
+    and flags everything else for manual review.
+    Also creates cost_basis and cash_flows entries to mirror the manual add_trade flow.
+    Returns (imported_count, skipped_count, errors[]).
+    """
+    if not SCHWAB_API_AVAILABLE or not schwab_client:
+        return 0, 0, ['Schwab API not available']
+
+    imported_count = 0
+    skipped_count  = 0
+    errors         = []
+
+    try:
+        # Use explicit override dates if provided, otherwise fall back to last_sync
+        if since_override:
+            since = datetime.fromisoformat(since_override) if isinstance(since_override, str) else since_override
+        else:
+            last_sync_str = _setting_get('schwab_last_sync')
+            since = None
+            if last_sync_str:
+                try:
+                    since = datetime.fromisoformat(last_sync_str)
+                except Exception:
+                    since = None
+
+        until = None
+        if until_override:
+            until = datetime.fromisoformat(until_override) if isinstance(until_override, str) else until_override
+
+        transactions = schwab_client.get_all_trade_transactions(since=since, until=until)
+        print(f'[SCHWAB SYNC] Found {len(transactions)} transaction(s) {since} → {until}', flush=True)
+
+        conn   = get_db_connection()
+        cursor = conn.cursor()
+
+        def _get_or_create_ticker_raw(sym):
+            """Get or insert ticker using existing cursor (avoids SA cross-connection lock)."""
+            cursor.execute('SELECT id FROM tickers WHERE ticker = ?', (sym.upper(),))
+            row = cursor.fetchone()
+            if row:
+                return row['id']
+            cursor.execute(
+                'INSERT INTO tickers (ticker, company_name) VALUES (?, ?)',
+                (sym.upper(), sym.upper())
+            )
+            conn.commit()
+            return cursor.lastrowid
+
+        def _get_commission_raw(acct_id, date_str):
+            """Get commission rate using existing cursor."""
+            cursor.execute('''
+                SELECT commission_rate FROM commissions
+                WHERE account_id = ? AND effective_date <= ?
+                ORDER BY effective_date DESC LIMIT 1
+            ''', (acct_id, date_str))
+            row = cursor.fetchone()
+            return float(row['commission_rate']) if row else 0.0
+
+        for txn in transactions:
+            txn_id   = txn.get('transaction_id', '')
+            symbol   = txn.get('symbol', '').upper()
+            category = txn.get('category', 'UNKNOWN')
+
+            if not symbol or not txn_id:
+                continue
+
+            # Dedup by schwab_order_id
+            cursor.execute('SELECT id FROM trades WHERE schwab_order_id = ?', (txn_id,))
+            if cursor.fetchone():
+                skipped_count += 1
+                continue
+
+            try:
+                ticker_id       = _get_or_create_ticker_raw(symbol)
+                account_id      = account_id_override or 9
+                date_trade_open = txn.get('date', datetime.now().strftime('%Y-%m-%d'))
+                commission      = _get_commission_raw(account_id, date_trade_open)
+                needs_review    = 1 if txn.get('needs_review') else 0
+
+                # ----------------------------------------------------------------
+                # EQUITY: BTO and STC
+                # ----------------------------------------------------------------
+                if category in ('BTO', 'STC'):
+                    price_per_share = txn.get('price_per_share', 0) or 0
+                    num_shares      = int(txn.get('num_shares', 0) or 0)
+                    total_amount    = round(price_per_share * num_shares, 2)
+                    trade_type      = category  # 'BTO' or 'STC'
+
+                    cursor.execute('SELECT id FROM trade_types WHERE type_name = ?', (trade_type,))
+                    tt_row        = cursor.fetchone()
+                    trade_type_id = tt_row['id'] if tt_row else None
+
+                    cursor.execute('''
+                        INSERT INTO trades
+                            (account_id, ticker_id, ticker, date_trade_open,
+                             num_of_shares, num_of_contracts,
+                             current_price, price_per_share, total_amount,
+                             credit_debit, total_premium,
+                             trade_status, trade_type, trade_type_id,
+                             commission_per_share, schwab_order_id,
+                             expiration_date,
+                             strike_price, long_strike, net_credit_per_share,
+                             margin_percent, days_to_expiration, needs_review)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'',0,NULL,0,100,0,?)
+                    ''', (
+                        account_id, ticker_id, symbol, date_trade_open,
+                        num_shares, num_shares,
+                        price_per_share, price_per_share, total_amount,
+                        0.0, total_amount,
+                        'open', trade_type, trade_type_id,
+                        commission, txn_id,
+                        needs_review,
+                    ))
+                    trade_id = cursor.lastrowid
+
+                    # Cost basis
+                    create_cost_basis_entry(
+                        cursor, account_id, ticker_id, trade_id, date_trade_open,
+                        trade_type, num_shares, price_per_share, total_amount
+                    )
+                    # Cash flow
+                    cf_type   = 'PREMIUM_DEBIT' if trade_type == 'BTO' else 'PREMIUM_CREDIT'
+                    cf_amount = -total_amount if trade_type == 'BTO' else total_amount
+                    cursor.execute('''
+                        INSERT INTO cash_flows
+                            (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
+                        VALUES (?,?,?,?,?,?,?)
+                    ''', (account_id, date_trade_open, cf_type, round(cf_amount, 2),
+                          f'{trade_type} {num_shares} {symbol}', trade_id, ticker_id))
+                    cf_id = cursor.lastrowid
+                    cursor.execute('UPDATE cost_basis SET cash_flow_id=? WHERE trade_id=? AND cash_flow_id IS NULL',
+                                   (cf_id, trade_id))
+
+                    print(f'[SCHWAB SYNC] {trade_type} {symbol} x{num_shares} @ ${price_per_share} on {date_trade_open}', flush=True)
+                    imported_count += 1
+
+                # ----------------------------------------------------------------
+                # OPTIONS: SELL_TO_OPEN  →  short option (ROCT PUT / ROCT CALL)
+                # ----------------------------------------------------------------
+                elif category == 'OPTION_SELL_OPEN':
+                    option_type    = txn.get('option_type', '')
+                    strike_price   = txn.get('strike_price', 0) or 0
+                    expiration_date= txn.get('expiration_date', '') or ''
+                    num_contracts  = txn.get('num_contracts', 1) or 1
+                    premium        = txn.get('price_per_share', 0) or 0  # price per share
+                    total_premium  = round(premium * num_contracts * 100, 2)
+
+                    trade_type, _  = _map_option_trade_type(symbol, option_type, 'SELL_TO_OPEN')
+                    base_type      = 'ROCT PUT' if 'PUT' in trade_type else 'ROCT CALL'
+
+                    cursor.execute('SELECT id FROM trade_types WHERE type_name = ?', (base_type,))
+                    tt_row        = cursor.fetchone()
+                    trade_type_id = tt_row['id'] if tt_row else None
+
+                    # DTE
+                    dte = 0
+                    if expiration_date:
+                        try:
+                            exp_obj = datetime.strptime(expiration_date, '%Y-%m-%d')
+                            open_obj = datetime.strptime(date_trade_open, '%Y-%m-%d')
+                            dte = max(0, (exp_obj - open_obj).days)
+                        except Exception:
+                            pass
+
+                    net_credit = round(premium - commission, 5)
+                    risk_capital = round(strike_price - net_credit, 2) if strike_price > 0 else None
+                    margin_capital = num_contracts * 100 * risk_capital if risk_capital else None
+                    arorc = None
+                    if risk_capital and risk_capital > 0 and dte > 0:
+                        arorc = round_standard((365.0 / dte) * (net_credit / risk_capital) * 100, 1)
+
+                    cursor.execute('''
+                        INSERT INTO trades
+                            (account_id, ticker_id, ticker, date_trade_open, expiration_date,
+                             num_of_contracts, num_of_shares,
+                             credit_debit, total_premium,
+                             days_to_expiration, current_price, strike_price, long_strike,
+                             trade_status, trade_type, trade_type_id,
+                             commission_per_share, price_per_share, total_amount,
+                             margin_capital, net_credit_per_share, risk_capital_per_share,
+                             margin_percent, ARORC, schwab_order_id, needs_review)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ''', (
+                        account_id, ticker_id, symbol, date_trade_open, expiration_date,
+                        num_contracts, num_contracts * 100,
+                        premium, total_premium,
+                        dte, 0.0, strike_price, None,
+                        'open', trade_type, trade_type_id,
+                        commission, premium, total_premium,
+                        margin_capital, net_credit, risk_capital,
+                        100.0, arorc, txn_id, needs_review,
+                    ))
+                    trade_id = cursor.lastrowid
+
+                    # Cost basis + cash flow (mirrors create_options_cost_basis_entry path)
+                    try:
+                        create_options_cost_basis_entry(
+                            cursor, account_id, ticker_id, trade_id, date_trade_open,
+                            trade_type, num_contracts, premium, strike_price, expiration_date
+                        )
+                    except Exception as cbe:
+                        print(f'[SCHWAB SYNC] cost_basis warn for {txn_id}: {cbe}', flush=True)
+
+                    cf_type = 'SELL PUT' if 'PUT' in trade_type else 'SELL CALL'
+                    cursor.execute('''
+                        INSERT INTO cash_flows
+                            (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
+                        VALUES (?,?,?,?,?,?,?)
+                    ''', (account_id, date_trade_open, cf_type, total_premium,
+                          f'{trade_type} premium received', trade_id, ticker_id))
+                    cf_id = cursor.lastrowid
+                    cursor.execute('UPDATE cost_basis SET cash_flow_id=? WHERE trade_id=? AND cash_flow_id IS NULL',
+                                   (cf_id, trade_id))
+
+                    print(f'[SCHWAB SYNC] OPTION_SELL_OPEN {symbol} {option_type} x{num_contracts} '
+                          f'@ ${premium} strike=${strike_price} exp={expiration_date} needs_review={needs_review}', flush=True)
+                    imported_count += 1
+
+                # ----------------------------------------------------------------
+                # OPTIONS: BUY_TO_CLOSE  →  find existing open STO and mark it
+                #   rolled/closed; record the closing debit on that position
+                # ----------------------------------------------------------------
+                elif category == 'OPTION_BUY_CLOSE':
+                    option_type     = txn.get('option_type', '')
+                    strike_price    = txn.get('strike_price', 0) or 0
+                    expiration_date = txn.get('expiration_date', '') or ''
+                    num_contracts   = txn.get('num_contracts', 1) or 1
+                    closing_price   = txn.get('price_per_share', 0) or 0
+                    total_debit     = round(closing_price * num_contracts * 100, 2)
+
+                    # Try to find the matching open STO to update
+                    cursor.execute('''
+                        SELECT id FROM trades
+                        WHERE ticker=? AND strike_price=? AND expiration_date=?
+                          AND trade_status='open'
+                          AND trade_type NOT LIKE '%BTC%'
+                        ORDER BY date_trade_open DESC LIMIT 1
+                    ''', (symbol, strike_price, expiration_date))
+                    orig_row = cursor.fetchone()
+
+                    if orig_row:
+                        orig_trade_id = orig_row['id']
+                        # Update the existing STO with closing info; roll status
+                        # will be set later if a new STO is opened same day.
+                        # For now mark as 'closed' (will be corrected to 'roll' by
+                        # the roll-detection pass if a continuation exists).
+                        cursor.execute('''
+                            UPDATE trades SET
+                                closing_debit     = ?,
+                                total_debit       = ?,
+                                date_trade_rolled = ?,
+                                trade_status      = 'closed',
+                                needs_review      = 1,
+                                schwab_order_id   = CASE WHEN schwab_order_id IS NULL
+                                                         THEN ? ELSE schwab_order_id END
+                            WHERE id = ?
+                        ''', (closing_price, total_debit, date_trade_open, txn_id, orig_trade_id))
+                        trade_id = orig_trade_id
+                        print(f'[SCHWAB SYNC] OPTION_BUY_CLOSE {symbol} {option_type} '
+                              f'x{num_contracts} @ ${closing_price} — updated trade {orig_trade_id}',
+                              flush=True)
+                    else:
+                        # No matching open STO found — try a broader search ignoring expiration
+                        cursor.execute('''
+                            SELECT id FROM trades
+                            WHERE ticker=? AND strike_price=?
+                              AND trade_status='open'
+                              AND trade_type NOT IN ('BTO','STC')
+                              AND trade_type NOT LIKE '% CLOSE %'
+                            ORDER BY date_trade_open DESC LIMIT 1
+                        ''', (symbol, strike_price))
+                        fallback_row = cursor.fetchone()
+
+                        if fallback_row:
+                            orig_trade_id = fallback_row['id']
+                            cursor.execute('''
+                                UPDATE trades SET
+                                    closing_debit     = ?,
+                                    total_debit       = ?,
+                                    date_trade_rolled = ?,
+                                    trade_status      = 'closed',
+                                    needs_review      = 1,
+                                    schwab_order_id   = CASE WHEN schwab_order_id IS NULL
+                                                             THEN ? ELSE schwab_order_id END
+                                WHERE id = ?
+                            ''', (closing_price, total_debit, date_trade_open, txn_id, orig_trade_id))
+                            trade_id = orig_trade_id
+                            print(f'[SCHWAB SYNC] OPTION_BUY_CLOSE {symbol} {option_type} '
+                                  f'x{num_contracts} @ ${closing_price} — fallback-updated trade {orig_trade_id}',
+                                  flush=True)
+                        else:
+                            # Still no match — record only the cash flow, no phantom trade
+                            trade_id = None
+                            print(f'[SCHWAB SYNC] OPTION_BUY_CLOSE {symbol} {option_type} '
+                                  f'x{num_contracts} @ ${closing_price} — no STO found, cash flow only',
+                                  flush=True)
+
+                    if total_debit > 0:
+                        cursor.execute('''
+                            INSERT INTO cash_flows
+                                (account_id, transaction_date, transaction_type, amount, description, trade_id, ticker_id)
+                            VALUES (?,?,?,?,?,?,?)
+                        ''', (account_id, date_trade_open, 'CLOSING_DEBIT', -total_debit,
+                              f'BTC {symbol} {option_type} closing debit', trade_id, ticker_id))
+
+                    imported_count += 1
+
+                # ----------------------------------------------------------------
+                # OPTION_ASSIGNED: put/call was assigned → close the open STO
+                #   and link the resulting equity BTO that should follow
+                # ----------------------------------------------------------------
+                elif category == 'OPTION_ASSIGNED':
+                    option_type     = txn.get('option_type', '')
+                    strike_price    = txn.get('strike_price', 0) or 0
+                    expiration_date = txn.get('expiration_date', '') or ''
+                    num_contracts   = txn.get('num_contracts', 1) or 1
+
+                    # Find the open STO that matches this assignment
+                    cursor.execute('''
+                        SELECT id FROM trades
+                        WHERE ticker=? AND strike_price=? AND expiration_date=?
+                          AND trade_status='open'
+                          AND trade_type NOT IN ('BTO','STC')
+                        ORDER BY date_trade_open DESC LIMIT 1
+                    ''', (symbol, strike_price, expiration_date))
+                    sto_row = cursor.fetchone()
+                    if sto_row:
+                        sto_id = sto_row['id']
+                        cursor.execute('''
+                            UPDATE trades SET
+                                trade_status      = 'assigned',
+                                date_trade_rolled = ?
+                            WHERE id = ?
+                        ''', (date_trade_open, sto_id))
+
+                        # Find a BTO equity trade on the same date — link it as the assigned shares
+                        cursor.execute('''
+                            SELECT id FROM trades
+                            WHERE ticker=? AND date_trade_open=? AND trade_type='BTO'
+                              AND (trade_parent_id IS NULL OR trade_parent_id=0)
+                              AND num_of_shares = ?
+                            ORDER BY id ASC LIMIT 1
+                        ''', (symbol, date_trade_open, num_contracts * 100))
+                        bto_row = cursor.fetchone()
+                        if bto_row:
+                            cursor.execute('UPDATE trades SET trade_parent_id=? WHERE id=?',
+                                           (sto_id, bto_row['id']))
+                            # Update cost_basis description to clearly say ASSIGNED
+                            exp_str = expiration_date[5:7] + '/' + expiration_date[8:10] + '/' + expiration_date[2:4] if len(expiration_date) >= 10 else expiration_date
+                            assigned_desc = f'ASSIGNED {num_contracts * 100} {symbol} @ ${strike_price:.2f} ({option_type} ${strike_price} EXP {exp_str})'
+                            cursor.execute('''
+                                UPDATE cost_basis SET description=? WHERE trade_id=?
+                            ''', (assigned_desc, bto_row['id']))
+                        print(f'[SCHWAB SYNC] OPTION_ASSIGNED {symbol} {option_type} '
+                              f'{strike_price} exp {expiration_date} — closed STO {sto_id}'
+                              + (f', linked BTO {bto_row["id"]}' if bto_row else ''), flush=True)
+
+                # ----------------------------------------------------------------
+                # OPTION_EXPIRED: option expired worthless → close the open STO
+                # ----------------------------------------------------------------
+                elif category == 'OPTION_EXPIRED':
+                    option_type     = txn.get('option_type', '')
+                    strike_price    = txn.get('strike_price', 0) or 0
+                    expiration_date = txn.get('expiration_date', '') or ''
+
+                    cursor.execute('''
+                        SELECT id FROM trades
+                        WHERE ticker=? AND strike_price=? AND expiration_date=?
+                          AND trade_status='open'
+                          AND trade_type NOT IN ('BTO','STC')
+                        ORDER BY date_trade_open DESC LIMIT 1
+                    ''', (symbol, strike_price, expiration_date))
+                    sto_row = cursor.fetchone()
+                    if sto_row:
+                        sto_id = sto_row['id']
+                        cursor.execute('''
+                            UPDATE trades SET trade_status='closed', date_trade_rolled=?,
+                                closing_debit=0, total_debit=0
+                            WHERE id=?
+                        ''', (date_trade_open, sto_id))
+                        print(f'[SCHWAB SYNC] OPTION_EXPIRED {symbol} {option_type} '
+                              f'{strike_price} exp {expiration_date} — closed STO {sto_id}', flush=True)
+
+                # ----------------------------------------------------------------
+                # Everything else: insert with needs_review=1
+                # ----------------------------------------------------------------
+                else:
+                    price           = txn.get('price_per_share', 0) or 0
+                    qty_shares      = int(txn.get('num_shares', 0) or 0)
+                    qty_ctrcts      = int(txn.get('num_contracts', 0) or 0)
+                    exp_date_misc   = txn.get('expiration_date', '') or ''
+                    label           = f'{symbol} {txn.get("instruction","")} {txn.get("option_type","")}'.strip()
+
+                    total_amt_misc = round(price * (qty_shares or qty_ctrcts), 2)
+                    cursor.execute('''
+                        INSERT INTO trades
+                            (account_id, ticker_id, ticker, date_trade_open, expiration_date,
+                             num_of_shares, num_of_contracts,
+                             current_price, price_per_share, total_amount, total_premium,
+                             credit_debit, trade_status, trade_type,
+                             commission_per_share, schwab_order_id,
+                             strike_price, long_strike, margin_percent,
+                             days_to_expiration, needs_review)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,100,0,1)
+                    ''', (
+                        account_id, ticker_id, symbol, date_trade_open, exp_date_misc,
+                        qty_shares or qty_ctrcts * 100, qty_ctrcts or qty_shares,
+                        price, price, total_amt_misc, total_amt_misc,
+                        0.0, 'open', label,
+                        commission, txn_id,
+                    ))
+                    imported_count += 1
+                    print(f'[SCHWAB SYNC] UNKNOWN {symbol} {category} — flagged for review', flush=True)
+
+            except Exception as e:
+                import traceback
+                errors.append(f'Error importing txn {txn_id} ({category}): {str(e)}')
+                print(f'[SCHWAB SYNC] Error: {e}\n{traceback.format_exc()}', flush=True)
+
+        # ----------------------------------------------------------------
+        # Roll-detection pass: for each closed STO, find an STO opened
+        # on the same day for the same ticker with no parent yet → link it.
+        # ----------------------------------------------------------------
+        try:
+            cursor.execute('''
+                SELECT id, ticker, expiration_date, strike_price, date_trade_open
+                FROM trades
+                WHERE trade_status = 'closed'
+                  AND closing_debit > 0
+                  AND trade_type NOT IN ('BTO', 'STC')
+                  AND (trade_parent_id IS NULL OR trade_parent_id = 0)
+                ORDER BY date_trade_open
+            ''')
+            closed_stos = cursor.fetchall()
+            for cst in closed_stos:
+                cst_id   = cst[0]
+                ticker_c = cst[1]
+                close_dt = cst[4]  # the date the BTC was executed (= date_trade_open of the closing row)
+
+                # Find a new STO opened on the same date for same ticker with no parent
+                cursor.execute('''
+                    SELECT id FROM trades
+                    WHERE ticker = ?
+                      AND date_trade_open = ?
+                      AND (trade_parent_id IS NULL OR trade_parent_id = 0)
+                      AND trade_status IN ('open', 'closed', 'roll')
+                      AND trade_type NOT IN ('BTO', 'STC')
+                      AND id != ?
+                    ORDER BY id ASC
+                    LIMIT 1
+                ''', (ticker_c, close_dt, cst_id))
+                new_sto = cursor.fetchone()
+                if new_sto:
+                    new_sto_id = new_sto[0]
+                    cursor.execute(
+                        'UPDATE trades SET trade_parent_id = ? WHERE id = ?',
+                        (cst_id, new_sto_id)
+                    )
+                    cursor.execute(
+                        "UPDATE trades SET trade_status = 'roll' WHERE id = ?",
+                        (cst_id,)
+                    )
+                    print(f'[SCHWAB SYNC] Roll detected: trade {cst_id} ({ticker_c}) → continuation {new_sto_id}', flush=True)
+        except Exception as e:
+            import traceback
+            print(f'[SCHWAB SYNC] Roll detection error: {e}\n{traceback.format_exc()}', flush=True)
+
+        conn.commit()
+        conn.close()
+        _setting_set('schwab_last_sync', datetime.now().isoformat())
+
     except Exception as e:
         import traceback
-        error_detail = traceback.format_exc()
-        print(f'[SCHWAB SYNC] Error: {e}', flush=True)
-        print(f'[SCHWAB SYNC] Traceback: {error_detail}', flush=True)
+        errors.append(str(e))
+        print(f'[SCHWAB SYNC] Fatal error: {e}\n{traceback.format_exc()}', flush=True)
+
+    return imported_count, skipped_count, errors
+
+
+def _schwab_poll_worker(interval_seconds=60):
+    """Background thread: sync BTO trades every interval_seconds."""
+    print(f'[SCHWAB POLL] Background sync started (every {interval_seconds}s)', flush=True)
+    while not _schwab_poll_stop.wait(interval_seconds):
+        try:
+            imported, skipped, errs = _do_schwab_sync()
+            if imported:
+                print(f'[SCHWAB POLL] Auto-synced {imported} new BTO trade(s)', flush=True)
+        except Exception as e:
+            print(f'[SCHWAB POLL] Error in poll loop: {e}', flush=True)
+    print('[SCHWAB POLL] Background sync stopped', flush=True)
+
+
+def start_schwab_polling(interval_seconds=60):
+    global _schwab_poll_thread, _schwab_poll_stop
+    if _schwab_poll_thread and _schwab_poll_thread.is_alive():
+        return  # already running
+    _schwab_poll_stop.clear()
+    _schwab_poll_thread = _threading.Thread(
+        target=_schwab_poll_worker, args=(interval_seconds,), daemon=True, name='schwab-poll'
+    )
+    _schwab_poll_thread.start()
+    _setting_set('schwab_polling_active', 'true')
+
+
+def stop_schwab_polling():
+    global _schwab_poll_stop
+    _schwab_poll_stop.set()
+    _setting_set('schwab_polling_active', 'false')
+
+
+# Start polling automatically if Schwab is already authenticated at startup
+if SCHWAB_API_AVAILABLE and schwab_client and schwab_client.is_authenticated():
+    start_schwab_polling()
+
+
+@app.route('/api/schwab/sync-trades', methods=['POST'])
+def schwab_sync_trades():
+    """Manually trigger a Schwab BTO trade sync."""
+    if not SCHWAB_API_AVAILABLE or not schwab_client:
+        return jsonify({'success': False, 'error': 'Schwab API not available or not authenticated'}), 503
+
+    try:
+        data = request.get_json() or {}
+        account_id_override = data.get('account_id')
+        since_override = data.get('since')
+        until_override = data.get('until')
+        imported, skipped, errors = _do_schwab_sync(
+            account_id_override=account_id_override,
+            since_override=since_override,
+            until_override=until_override,
+        )
+        last_sync = _setting_get('schwab_last_sync', '')
         return jsonify({
-            'success': False,
-            'error': f'Failed to sync trades: {str(e)}'
-        }), 500
+            'success': True,
+            'imported': imported,
+            'skipped': skipped,
+            'errors': errors,
+            'last_sync': last_sync,
+            'message': f'Imported {imported} new BTO trade(s), skipped {skipped} duplicate(s)'
+        })
+    except Exception as e:
+        import traceback
+        print(f'[SCHWAB SYNC] Error: {e}\n{traceback.format_exc()}', flush=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/env', methods=['GET'])
+def get_env_info():
+    """Return current environment info so the UI can show a banner."""
+    return jsonify({
+        'env': APP_ENV,
+        'is_production': IS_PRODUCTION,
+        'db_path': DATABASE,
+    })
+
+
+@app.route('/api/schwab/sync-status', methods=['GET'])
+def schwab_sync_status():
+    """Return current sync state: last sync time, poll status, auth status."""
+    authenticated = SCHWAB_API_AVAILABLE and schwab_client and schwab_client.is_authenticated()
+    polling = _schwab_poll_thread is not None and _schwab_poll_thread.is_alive()
+    return jsonify({
+        'authenticated': authenticated,
+        'polling_active': polling,
+        'last_sync': _setting_get('schwab_last_sync', None),
+    })
+
+
+@app.route('/api/schwab/detect-rolls', methods=['POST'])
+def schwab_detect_rolls():
+    """Run roll-detection pass on existing data to link roll chains."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    linked = 0
+    try:
+        cursor.execute('''
+            SELECT id, ticker, expiration_date, strike_price, date_trade_open
+            FROM trades
+            WHERE trade_status = 'closed'
+              AND closing_debit > 0
+              AND trade_type NOT IN ('BTO', 'STC')
+            ORDER BY date_trade_open
+        ''')
+        closed_stos = cursor.fetchall()
+        for cst in closed_stos:
+            cst_id   = cst[0]
+            ticker_c = cst[1]
+            close_dt = cst[4]
+
+            cursor.execute('''
+                SELECT id FROM trades
+                WHERE ticker = ?
+                  AND date_trade_open = ?
+                  AND (trade_parent_id IS NULL OR trade_parent_id = 0)
+                  AND trade_status IN ('open', 'closed', 'roll')
+                  AND trade_type NOT IN ('BTO', 'STC')
+                  AND id != ?
+                ORDER BY id ASC
+                LIMIT 1
+            ''', (ticker_c, close_dt, cst_id))
+            new_sto = cursor.fetchone()
+            if new_sto:
+                new_sto_id = new_sto[0]
+                cursor.execute('UPDATE trades SET trade_parent_id = ? WHERE id = ?', (cst_id, new_sto_id))
+                cursor.execute("UPDATE trades SET trade_status = 'roll' WHERE id = ?", (cst_id,))
+                linked += 1
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'rolls_linked': linked})
+
+
+@app.route('/api/schwab/poll/start', methods=['POST'])
+def schwab_poll_start():
+    if not SCHWAB_API_AVAILABLE or not schwab_client or not schwab_client.is_authenticated():
+        return jsonify({'success': False, 'error': 'Not authenticated'}), 503
+    data = request.get_json() or {}
+    interval = int(data.get('interval_seconds', 60))
+    start_schwab_polling(interval)
+    return jsonify({'success': True, 'message': f'Polling started every {interval}s'})
+
+
+@app.route('/api/schwab/poll/stop', methods=['POST'])
+def schwab_poll_stop():
+    stop_schwab_polling()
+    return jsonify({'success': True, 'message': 'Polling stopped'})
 
 if __name__ == '__main__':
     # Run migrations first to ensure schema is up to date

@@ -969,18 +969,24 @@ function calculateRORC(netCreditPerShare, riskCapital) {
     return riskCapital !== 0 ? (netCreditPerShare / riskCapital) * 100 : 0;
 }
 
+// Returns the next Friday on or after the given date (or today if no date given).
+// If the given date is itself a Friday, returns the following Friday (7 days later)
+// so a same-day Friday is never auto-selected as the expiration.
+function getNextFriday(fromDate) {
+    const d = fromDate ? new Date(fromDate) : new Date();
+    // 5 = Friday in JS (0=Sun … 6=Sat)
+    const dayOfWeek = d.getDay();
+    const daysUntilFriday = dayOfWeek === 5 ? 7 : (5 - dayOfWeek + 7) % 7 || 7;
+    d.setDate(d.getDate() + daysUntilFriday);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
 function calculateExpirationDate(tradeDate) {
     if (!tradeDate) return '';
-    
-    const date = new Date(tradeDate);
-    date.setDate(date.getDate() + 8);
-    
-    // Format as YYYY-MM-DD for input type="date"
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    
-    return `${year}-${month}-${day}`;
+    return getNextFriday(new Date(tradeDate));
 }
 
 function setupExpirationDateCalculation(tradeDateId, expirationDateId) {
@@ -1080,12 +1086,8 @@ function setupDTECalculation(tradeDateId, expirationDateId, dteId) {
                 if (tradeDateParsed) {
                     const tradeDateObj = new Date(tradeDateParsed);
                     
-                    // Add 8 days
-                    const expirationDateObj = new Date(tradeDateObj);
-                    expirationDateObj.setDate(tradeDateObj.getDate() + 8);
-                    
-                    // Format as DD-MMM-YY
-                    const expDateFormatted = formatDate(expirationDateObj.toISOString().split('T')[0]);
+                    // Default to next Friday
+                    const expDateFormatted = formatDate(getNextFriday(tradeDateObj));
                     
                     // Only update if expiration field is empty
                     if (!expirationDateField.value) {
@@ -2736,7 +2738,7 @@ function updateTradesTable() {
         'Exp Date', // Expiration Date row (moved to be right under Trade Date)
         'DTE', // Days to Expiration row (moved to be right under Exp Date)
         'Price', // Trade Price row (moved after DTE)
-        'Strike', // Strike Price row
+        'Strike', // Strike Price row (BPS: Short Strike on top, Long Strike below)
         'Credit', // Premium row
         'Contracts', // Contracts (num_of_contracts)
         'Shares', // Shares row
@@ -2956,7 +2958,13 @@ function updateTradesTable() {
                     const tickerLinkColor = isDarkMode ? 'var(--primary-color-alt)' : '#000000';
                     // Escape ticker for use in onclick handler
                     const escapedTickerForClick = String(trade.ticker || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                    cellContent = `<div style="text-align: center; white-space: normal; word-wrap: break-word; vertical-align: top;"><strong>${isExpired ? '<i class="fas fa-exclamation-triangle text-danger me-1" title="Expired"></i>' : ''}<span class="clickable-symbol" data-symbol="${escapedTickerForClick}" style="cursor: pointer; color: ${tickerLinkColor}; text-decoration: underline;">${displayType}</span></strong></div>`;
+                    const reviewBadge = trade.needs_review
+                        ? `<span style="display:inline-block;font-size:0.5rem;background:#ffc107;color:#000;border-radius:3px;padding:1px 4px;margin-top:2px;cursor:pointer;" title="Schwab import — review this trade" onclick="markTradeReviewed(${trade.id})">REVIEW ✕</span>`
+                        : '';
+                    const assignedBadge = trade.is_assigned
+                        ? `<span style="display:inline-block;font-size:0.5rem;background:#A9D08F;color:#000;border-radius:3px;padding:1px 4px;margin-top:2px;" title="Option was assigned — shares acquired at strike price">ASSIGNED</span>`
+                        : '';
+                    cellContent = `<div style="text-align: center; white-space: normal; word-wrap: break-word; vertical-align: top;"><strong>${isExpired ? '<i class="fas fa-exclamation-triangle text-danger me-1" title="Expired"></i>' : ''}<span class="clickable-symbol" data-symbol="${escapedTickerForClick}" style="cursor: pointer; color: ${tickerLinkColor}; text-decoration: underline;">${displayType}</span></strong>${reviewBadge ? '<br>' + reviewBadge : ''}${assignedBadge ? '<br>' + assignedBadge : ''}</div>`;
                     break;
                 case 1: // Account - Editable dropdown
                     const accountName = trade.account_name || 'Unknown';
@@ -3108,35 +3116,80 @@ function updateTradesTable() {
                         </div>
                     `;
                     break;
-                case 7: // Strike - Editable for all trades
-                    // Make editable with auto-save for all trades
-                    // For new trades, leave empty instead of defaulting to 0
+                case 7: // Strike - Editable for all trades; BPS shows Short + Long Strike stacked
                     const isNewTradeStrike = typeof trade.id === 'string' && trade.id.startsWith('new_');
                     const strikeValue = isNewTradeStrike ? '' : (trade.strike_price ? parseFloat(trade.strike_price).toFixed(2) : '');
-                    cellContent = `
-                        <div style="position: relative; display: flex; align-items: center; justify-content: center;">
-                            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); font-size: 0.6125rem;">$</span>
-                            <input type="number" 
-                                   class="form-control form-control-sm text-center" 
-                                   value="${strikeValue}" 
-                                   step="0.01"
-                                   min="0"
-                                   data-trade-id="${trade.id}" 
-                                   data-field="strike_price" 
-                                   data-field-row="7"
-                                   tabindex="0"
-                                   onfocus="this.select()"
-                                   onkeydown="return handleTabNavigation(event, ${tradeIdForHandler}, 7)"
-                                   oninput="limitToTwoDecimals(this); autoSaveTradeField(${tradeIdForHandler}, 'strike_price', this.value)"
-                                   style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
-                        </div>
-                    `;
+                    const isBPSTrade = tradeType && (tradeType.includes('BULL PUT SPREAD') || tradeType.includes('BPS'));
+                    if (isBPSTrade) {
+                        const longStrikeValue = isNewTradeStrike ? '' : (trade.long_strike ? parseFloat(trade.long_strike).toFixed(2) : '');
+                        cellContent = `
+                            <div style="display: flex; flex-direction: column; gap: 2px; align-items: center;">
+                                <div style="position: relative; display: flex; align-items: center; justify-content: center;">
+                                    <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); font-size: 0.55rem; color: #666;">S$</span>
+                                    <input type="number"
+                                           class="form-control form-control-sm text-center"
+                                           value="${strikeValue}"
+                                           step="0.01" min="0"
+                                           placeholder="Short"
+                                           data-trade-id="${trade.id}"
+                                           data-field="strike_price"
+                                           data-field-row="7"
+                                           tabindex="0"
+                                           onfocus="this.select()"
+                                           onkeydown="return handleTabNavigation(event, ${tradeIdForHandler}, 7)"
+                                           oninput="limitToTwoDecimals(this); autoSaveTradeField(${tradeIdForHandler}, 'strike_price', this.value)"
+                                           style="width: 70px; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
+                                </div>
+                                <div style="position: relative; display: flex; align-items: center; justify-content: center;">
+                                    <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); font-size: 0.55rem; color: #666;">L$</span>
+                                    <input type="number"
+                                           class="form-control form-control-sm text-center"
+                                           value="${longStrikeValue}"
+                                           step="0.01" min="0"
+                                           placeholder="Long"
+                                           data-trade-id="${trade.id}"
+                                           data-field="long_strike"
+                                           data-field-row="17"
+                                           tabindex="0"
+                                           onfocus="this.select()"
+                                           onkeydown="return handleTabNavigation(event, ${tradeIdForHandler}, 17)"
+                                           oninput="limitToTwoDecimals(this); autoSaveTradeField(${tradeIdForHandler}, 'long_strike', this.value)"
+                                           style="width: 70px; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
+                                </div>
+                            </div>
+                        `;
+                    } else {
+                        cellContent = `
+                            <div style="position: relative; display: flex; align-items: center; justify-content: center;">
+                                <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); font-size: 0.6125rem;">$</span>
+                                <input type="number" 
+                                       class="form-control form-control-sm text-center" 
+                                       value="${strikeValue}" 
+                                       step="0.01"
+                                       min="0"
+                                       data-trade-id="${trade.id}" 
+                                       data-field="strike_price" 
+                                       data-field-row="7"
+                                       tabindex="0"
+                                       onfocus="this.select()"
+                                       onkeydown="return handleTabNavigation(event, ${tradeIdForHandler}, 7)"
+                                       oninput="limitToTwoDecimals(this); autoSaveTradeField(${tradeIdForHandler}, 'strike_price', this.value)"
+                                       style="width: 70px; display: inline-block; font-size: 0.6125rem; padding: 0.1rem 0.25rem;">
+                            </div>
+                        `;
+                    }
                     break;
                 case 8: // Credit - Editable for all trades
                     // Make editable with auto-save for all trades
                     // For new trades, leave empty instead of defaulting to 0
                     const isNewTradeCredit = typeof trade.id === 'string' && trade.id.startsWith('new_');
-                    const creditValue = isNewTradeCredit ? '' : (trade.credit_debit || trade.premium ? parseFloat(trade.credit_debit || trade.premium).toFixed(2) : '');
+                    // For rolled trades show NET credit (STO price − parent's BTC cost)
+                    const useNetCredit = trade.trade_parent_id &&
+                        trade.net_credit_per_share !== null && trade.net_credit_per_share !== undefined;
+                    const creditRaw = useNetCredit
+                        ? trade.net_credit_per_share
+                        : (trade.credit_debit || trade.premium || 0);
+                    const creditValue = isNewTradeCredit ? '' : (creditRaw ? parseFloat(creditRaw).toFixed(2) : '');
                     cellContent = `
                         <div style="position: relative; display: flex; align-items: center; justify-content: center;">
                             <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); font-size: 0.6125rem;">$</span>
@@ -3858,8 +3911,17 @@ function updateCostBasisTable(costBasisData) {
                 
                 // Check if dark mode is active
                 const isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
-                
-                if (status === 'roll') {
+
+                if (trade.is_closing_debit) {
+                    // Rolling debit rows: orange tint to stand out as a cost entry
+                    bgColor = isDarkMode ? 'background-color: #5a3e1b;' : 'background-color: #FEE8CC;';
+                } else if (trade.is_diagonal) {
+                    // DIAGONAL roll rows: light blue/teal to distinguish from regular STO
+                    bgColor = isDarkMode ? 'background-color: #1b3a4b;' : 'background-color: #D9EDF7;';
+                } else if (trade.is_assignment) {
+                    // Assignment rows: distinct green to highlight share acquisition
+                    bgColor = isDarkMode ? 'background-color: #1a3d2b;' : 'background-color: #C6E0B4;';
+                } else if (status === 'roll') {
                     bgColor = 'background-color: #FFF2CC;';
                     if (isDarkMode) textColor = 'color: #212529;'; // Dark text for light yellow background
                 } else if (status === 'expired' && tradeType.toLowerCase().includes('put')) {
@@ -3877,11 +3939,17 @@ function updateCostBasisTable(costBasisData) {
                 }
                 
                 const rowStyle = bgColor || textColor ? `style="${bgColor} ${textColor}"` : '';
+
+                // Clean up description for closing debit rows
+                let displayDescription = trade.trade_description || '';
+                if (trade.is_closing_debit && !trade.is_diagonal) {
+                    displayDescription = '↩ ' + displayDescription.replace(/^BTC \S+ \S+ closing debit$/i, 'Rolling debit (BTC)');
+                }
                 
                 htmlParts.push(`
                     <tr ${rowStyle}>
                         <td class="text-center align-middle" style="white-space: nowrap; padding: 0.35rem 0.525rem;">${formatDate(trade.transaction_date || trade.date_trade_open || trade.trade_date)}</td>
-                        <td class="text-start align-middle" style="width: 25%; word-wrap: break-word; overflow-wrap: break-word; padding: 0.35rem 0.525rem;">${trade.trade_description || ''}</td>
+                        <td class="text-start align-middle" style="width: 25%; word-wrap: break-word; overflow-wrap: break-word; padding: 0.35rem 0.525rem;">${displayDescription}</td>
                         <td class="text-end align-middle ${sharesClass}" style="${isSharesZero ? 'color: transparent;' : ''}">${formatShares(trade.shares || 0)}</td>
                         <td class="text-end align-middle ${costClass}" style="${isCostZero ? 'color: transparent;' : ''}">${formatNumber(trade.cost_per_share || 0)}</td>
                         <td class="text-end align-middle ${amountClass}" style="${isAmountZero ? 'color: transparent;' : ''}">${formatNumber(trade.amount || 0)}</td>
@@ -4406,11 +4474,21 @@ async function updateTradeStatus(tradeId, newStatus) {
                 const rows = tbody.querySelectorAll('tr');
                 const isRollOrClosed = newStatus.toLowerCase() === 'roll' || newStatus.toLowerCase() === 'closed';
                 
+                // Today in DD-MMM-YY format (same as trade date display)
+                const todayISO = new Date().toISOString().split('T')[0];
+                const todayFormatted = formatDate(todayISO);
+
                 rows.forEach(row => {
                     // Find roll date input (fieldIndex 15)
                     const rollDateInput = row.querySelector(`input[data-field="date_trade_rolled"][data-trade-id="${tradeId}"]`);
                     if (rollDateInput) {
                         rollDateInput.disabled = !isRollOrClosed;
+                        // Pre-fill today's date when enabling; clear when disabling
+                        if (isRollOrClosed && !rollDateInput.value) {
+                            rollDateInput.value = todayFormatted;
+                        } else if (!isRollOrClosed) {
+                            rollDateInput.value = '';
+                        }
                     }
                     
                     // Find closing debit field (fieldIndex 16) - may be input or span
@@ -5146,7 +5224,7 @@ function handleTabNavigation(event, tradeId, currentFieldIndex) {
         }
         
         // Define the order of editable fields (field indices) - these are the row indices
-        const editableFieldOrder = [2, 3, 4, 5, 7, 8, 9]; // Ticker, Trade Date, Price, Exp Date, Strike, Credit, Contracts
+        const editableFieldOrder = [2, 3, 4, 6, 7, 17, 8, 9]; // Ticker, Trade Date, Exp Date, Price, Short Strike, Long Strike (BPS), Credit, Contracts
         
         // Find current position in the order
         const currentIndex = editableFieldOrder.indexOf(currentFieldIndex);
@@ -5954,6 +6032,22 @@ async function deleteAccount(id, name) {
 
 // Setup account form submission and input formatting
 document.addEventListener('DOMContentLoaded', function() {
+    // Show environment banner for non-production environments
+    fetch('/api/env')
+        .then(r => r.json())
+        .then(d => {
+            if (!d.is_production) {
+                const banner = document.getElementById('env-banner');
+                if (banner) {
+                    banner.style.display = 'block';
+                    banner.textContent = d.env === 'test'
+                        ? '⚠ TEST ENVIRONMENT — data may be reset at any time'
+                        : `⚠ ${d.env.toUpperCase()} ENVIRONMENT`;
+                }
+            }
+        })
+        .catch(() => {});
+
     // Load all tickers into cache on page load (non-blocking)
     loadAllTickers();
     
@@ -7878,11 +7972,7 @@ function openROCTCallModal(tradeData = null) {
         // Set today's date as default for new trades
         if (!tradeData) {
             document.getElementById('roct-call-trade-date').value = getTodayInDDMMMYY();
-            // Set expiration date to 10 days from today
-            const today = new Date();
-            const expirationDate = new Date(today);
-            expirationDate.setDate(today.getDate() + 10);
-            document.getElementById('roct-call-expiration-date').value = formatDate(expirationDate.toISOString().split('T')[0]);
+            document.getElementById('roct-call-expiration-date').value = formatDate(getNextFriday());
         }
     
     // If editing, populate the form with existing data
@@ -8109,6 +8199,65 @@ async function addNewROCTPutColumn() {
         }
     } catch (error) {
         console.error('Error creating ROCT PUT trade:', error);
+        alert('Error creating trade: ' + error.message);
+    }
+}
+
+// Add new ROCS BULL PUT SPREAD column to trades table
+async function markTradeReviewed(tradeId) {
+    try {
+        await apiFetch(`/api/trades/${tradeId}/field`, {
+            method: 'PUT',
+            body: { field: 'needs_review', value: 0 }
+        });
+        await loadTrades();
+    } catch(e) {
+        console.error('markTradeReviewed error:', e);
+    }
+}
+
+async function addNewROCSBullPutSpreadColumn() {
+    console.log('addNewROCSBullPutSpreadColumn called');
+    
+    try {
+        const response = await apiFetch('/api/accounts');
+        const accounts = await response.json();
+        
+        const universalAccountFilter = document.getElementById('universal-account-filter');
+        const selectedAccountId = universalAccountFilter && universalAccountFilter.value ? parseInt(universalAccountFilter.value) : null;
+        
+        let accountId;
+        if (selectedAccountId) {
+            const selectedAccount = accounts.find(acc => acc.id === selectedAccountId);
+            accountId = selectedAccount ? selectedAccount.id : null;
+        }
+        
+        if (!accountId) {
+            const defaultAccount = accounts.find(acc => acc.is_default === 1 || acc.is_default === true);
+            accountId = defaultAccount ? defaultAccount.id : (accounts.find(acc => acc.id === 9) ? 9 : (accounts.length > 0 ? accounts[0].id : null));
+        }
+        
+        const activeTicker = window.symbolFilter ? window.symbolFilter.trim().toUpperCase() : '';
+        
+        const quickAddResponse = await apiFetch('/api/trades/quick-add', {
+            method: 'POST',
+            body: {
+                tradeType: 'ROCS BULL PUT SPREAD',
+                accountId: accountId,
+                ticker: activeTicker || ''
+            }
+        });
+        
+        const result = await quickAddResponse.json();
+        
+        if (result.success && result.new_trade_id) {
+            await loadTrades();
+            scrollToNewTrade(result.new_trade_id);
+        } else {
+            alert('Failed to create trade: ' + (result.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error creating ROCS BULL PUT SPREAD trade:', error);
         alert('Error creating trade: ' + error.message);
     }
 }
@@ -8792,11 +8941,7 @@ function openROCTPutModal(tradeData = null) {
         // Set default values
         document.getElementById('roct-put-trade-date').value = getTodayInDDMMMYY();
         
-        // Set expiration date to 8 days from today
-        const today = new Date();
-        const expirationDate = new Date(today);
-        expirationDate.setDate(today.getDate() + 8);
-        document.getElementById('roct-put-expiration-date').value = formatDate(expirationDate.toISOString().split('T')[0]);
+        document.getElementById('roct-put-expiration-date').value = formatDate(getNextFriday());
         
         // Set default number of contracts to 1
         document.getElementById('roct-put-quantity').value = 1;
@@ -9318,6 +9463,96 @@ document.addEventListener('DOMContentLoaded', function() {
 // ============================================================================
 // SCHWAB API INTEGRATION
 // ============================================================================
+
+// ---------------------------------------------------------------------------
+// Schwab BTO auto-sync (toolbar button)
+// ---------------------------------------------------------------------------
+let _schwabStatusInterval = null;
+
+async function triggerSchwabSync() {
+    const btn = document.getElementById('schwab-sync-btn');
+    const icon = document.getElementById('schwab-sync-icon');
+    if (!btn) return;
+
+    btn.disabled = true;
+    icon.classList.add('fa-spin');
+
+    try {
+        const resp = await apiFetch('/api/schwab/sync-trades', { method: 'POST', body: {} });
+        const result = await resp.json();
+        if (result.success) {
+            if (result.imported > 0) {
+                showToast(`Schwab: imported ${result.imported} new BTO trade(s)`, 'success');
+                await loadTrades();
+                loadSummary();
+            } else {
+                showToast('Schwab: no new trades', 'info');
+            }
+            _updateSchwabLastSyncLabel(result.last_sync);
+        } else {
+            showToast('Schwab sync failed: ' + (result.error || 'unknown error'), 'danger');
+        }
+    } catch (err) {
+        showToast('Schwab sync error: ' + err.message, 'danger');
+    } finally {
+        btn.disabled = false;
+        icon.classList.remove('fa-spin');
+    }
+}
+
+function _updateSchwabLastSyncLabel(isoString) {
+    const label = document.getElementById('schwab-last-sync-label');
+    if (!label || !isoString) return;
+    try {
+        const d = new Date(isoString);
+        const hh = d.getHours().toString().padStart(2,'0');
+        const mm = d.getMinutes().toString().padStart(2,'0');
+        label.textContent = `${hh}:${mm}`;
+        label.title = 'Last Schwab sync: ' + d.toLocaleString();
+    } catch(e) { label.textContent = ''; }
+}
+
+async function refreshSchwabSyncStatus() {
+    try {
+        const resp = await apiFetch('/api/schwab/sync-status');
+        const data = await resp.json();
+        const dot = document.getElementById('schwab-poll-dot');
+        const btn = document.getElementById('schwab-sync-btn');
+        if (dot) dot.style.display = data.polling_active ? 'inline-block' : 'none';
+        if (btn) btn.title = data.authenticated
+            ? (data.polling_active ? 'Auto-syncing every 60s — click to sync now' : 'Click to sync BTO trades from Schwab')
+            : 'Schwab not authenticated';
+        if (data.last_sync) _updateSchwabLastSyncLabel(data.last_sync);
+        // If authenticated and not yet polling from frontend perspective, start polling
+        if (data.authenticated && !_schwabStatusInterval) {
+            _schwabStatusInterval = setInterval(refreshSchwabSyncStatus, 65000); // refresh status every 65s
+        }
+    } catch(e) { /* silently ignore */ }
+}
+
+// Kick off status refresh after page load
+document.addEventListener('DOMContentLoaded', () => setTimeout(refreshSchwabSyncStatus, 2000));
+
+function showToast(message, type='info') {
+    // Reuse existing toast infrastructure or fall back to console
+    if (typeof window.showNotification === 'function') {
+        window.showNotification(message, type);
+        return;
+    }
+    const container = document.getElementById('toast-container') || (() => {
+        const el = document.createElement('div');
+        el.id = 'toast-container';
+        el.style.cssText = 'position:fixed;top:1rem;right:1rem;z-index:9999;display:flex;flex-direction:column;gap:0.5rem;';
+        document.body.appendChild(el);
+        return el;
+    })();
+    const colors = { success:'#198754', danger:'#dc3545', info:'#0dcaf0', warning:'#ffc107' };
+    const toast = document.createElement('div');
+    toast.style.cssText = `background:${colors[type]||colors.info};color:#fff;padding:0.6rem 1rem;border-radius:6px;font-size:0.85rem;box-shadow:0 2px 8px rgba(0,0,0,.25);max-width:320px;`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 4000);
+}
 
 async function openSchwabSyncModal() {
     const modal = new bootstrap.Modal(document.getElementById('schwabSyncModal'));

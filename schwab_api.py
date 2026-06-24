@@ -9,8 +9,8 @@ from typing import Dict, List, Optional, Any
 import logging
 
 try:
-    from schwab.client import SchwabClient
-    from schwab.auth import easy_client
+    from schwab.client import Client as SchwabClient  # v1.x uses Client, not SchwabClient
+    from schwab.auth import easy_client, client_from_token_file
     SCHWAB_AVAILABLE = True
 except ImportError:
     SCHWAB_AVAILABLE = False
@@ -46,15 +46,29 @@ class SchwabAPIClient:
             # Use easy_client which handles OAuth flow automatically
             # It will check for existing tokens and prompt for auth if needed
             try:
-                self.client = easy_client(
-                    app_key=app_key,
-                    app_secret=app_secret,
-                    redirect_uri=redirect_uri,
-                    token_path=token_file
-                )
+                # Prefer loading from existing token file (no browser prompt needed)
+                if os.path.exists(token_file):
+                    try:
+                        from schwab.auth import client_from_token_file
+                        self.client = client_from_token_file(token_file, app_key, app_secret)
+                        logger.info("Schwab client initialized from token file")
+                    except Exception as tf_err:
+                        logger.warning(f"client_from_token_file failed: {tf_err}, trying easy_client")
+                        self.client = easy_client(
+                            app_key=app_key,
+                            app_secret=app_secret,
+                            redirect_uri=redirect_uri,
+                            token_path=token_file
+                        )
+                else:
+                    self.client = easy_client(
+                        app_key=app_key,
+                        app_secret=app_secret,
+                        redirect_uri=redirect_uri,
+                        token_path=token_file
+                    )
                 logger.info("Schwab client initialized successfully")
             except Exception as auth_error:
-                # If easy_client fails (e.g., no tokens and can't prompt), client will be None
                 logger.warning(f"Could not initialize Schwab client: {auth_error}")
                 logger.info("User needs to authenticate via the web interface")
                 self.client = None
@@ -81,6 +95,59 @@ class SchwabAPIClient:
         except Exception as e:
             logger.error(f"Error saving tokens: {e}")
     
+    def _refresh_token_if_needed(self):
+        """
+        Check if the access token is expired and refresh it using the refresh token.
+        Schwab access tokens last 30 min; refresh tokens last 7 days.
+        schwab-py should handle this automatically but doesn't always, so we do it explicitly.
+        """
+        if not SCHWAB_AVAILABLE:
+            return
+        try:
+            import base64, requests as _req, time as _time
+            token_file = os.getenv('SCHWAB_TOKEN_FILE', 'schwab_tokens.json')
+            if not os.path.exists(token_file):
+                return
+            with open(token_file) as f:
+                stored = json.load(f)
+
+            created = stored.get('creation_timestamp', 0)
+            token   = stored.get('token', stored)  # support both wrapped and raw formats
+            expires_in = token.get('expires_in', 1800)
+            age = _time.time() - created
+
+            if age < expires_in - 60:
+                return  # still valid (with 60s buffer)
+
+            refresh_token = token.get('refresh_token')
+            if not refresh_token:
+                logger.warning("No refresh token available — cannot auto-refresh")
+                return
+
+            app_key    = os.getenv('SCHWAB_APP_KEY')
+            app_secret = os.getenv('SCHWAB_APP_SECRET')
+            auth_hdr   = base64.b64encode(f'{app_key}:{app_secret}'.encode()).decode()
+
+            r = _req.post(
+                'https://api.schwabapi.com/v1/oauth/token',
+                headers={'Authorization': f'Basic {auth_hdr}',
+                         'Content-Type': 'application/x-www-form-urlencoded'},
+                data={'grant_type': 'refresh_token', 'refresh_token': refresh_token},
+                timeout=15,
+            )
+            if r.status_code == 200:
+                new_token = r.json()
+                schwab_fmt = {'creation_timestamp': _time.time(), 'token': new_token}
+                with open(token_file, 'w') as f:
+                    json.dump(schwab_fmt, f, indent=2)
+                # Re-initialize the client with fresh tokens
+                self.client = client_from_token_file(token_file, app_key, app_secret)
+                logger.info("Schwab token auto-refreshed successfully")
+            else:
+                logger.warning(f"Token refresh failed ({r.status_code}): {r.text[:100]}")
+        except Exception as e:
+            logger.warning(f"Token refresh error: {e}")
+
     def is_authenticated(self) -> bool:
         """Check if client is authenticated"""
         return self.client is not None
@@ -455,6 +522,299 @@ class SchwabAPIClient:
             logger.error(f"Error fetching historical data for {symbol}: {e}")
             raise
     
+    def get_account_hashes(self) -> List[Dict]:
+        """Return list of {account_number, hash_value} for all linked accounts"""
+        self._refresh_token_if_needed()
+        if not self.is_authenticated():
+            raise RuntimeError("Not authenticated with Schwab API")
+        resp = self.client.get_account_numbers()
+        resp.raise_for_status()
+        return resp.json()  # [{accountNumber, hashValue}, ...]
+
+    def get_bto_transactions(self, since=None, until=None):
+        """Backward-compat shim — calls get_all_trade_transactions and filters to BTO equity."""
+        all_txns = self.get_all_trade_transactions(since=since, until=until)
+        return [t for t in all_txns if t['category'] == 'BTO']
+
+    def get_all_trade_transactions(self,
+                                   since: Optional[datetime] = None,
+                                   until: Optional[datetime] = None) -> List[Dict]:
+        """
+        Fetch ALL filled TRADE transactions across all linked accounts.
+
+        Each returned dict has:
+          transaction_id, account_hash, account_number, symbol, date,
+          price_per_share, num_shares, num_contracts,
+          category   – one of: BTO | STC | OPTION_SELL_OPEN | OPTION_BUY_CLOSE |
+                                OPTION_BUY_OPEN | OPTION_SELL_CLOSE | UNKNOWN
+          instruction, asset_type, option_type (PUT/CALL or ''),
+          strike_price, expiration_date, underlying_symbol,
+          needs_review  – True for anything that isn't plain BTO/STC equity
+        """
+        self._refresh_token_if_needed()
+        if not self.is_authenticated():
+            raise RuntimeError("Not authenticated with Schwab API")
+
+        start = since if since else (datetime.now() - timedelta(days=60))
+        end = until or datetime.now()
+
+        # Schwab API limits each get_transactions call to 365 days.
+        # Chunk the requested range into 365-day windows and merge results.
+        chunk_days = 365
+        all_results = []
+
+        try:
+            account_hashes = self.get_account_hashes()
+        except Exception as e:
+            logger.error(f"Error fetching account hashes: {e}")
+            return []
+
+        chunk_start = start
+        while chunk_start < end:
+            chunk_end = min(chunk_start + timedelta(days=chunk_days), end)
+
+            for acct in account_hashes:
+                hash_val = acct.get('hashValue') or acct.get('hash_value', '')
+                if not hash_val:
+                    continue
+                try:
+                    resp = self.client.get_transactions(
+                        hash_val,
+                        start_date=chunk_start,
+                        end_date=chunk_end,
+                        transaction_types=self.client.Transactions.TransactionType.TRADE,
+                    )
+                    resp.raise_for_status()
+                    transactions = resp.json()
+                    if not isinstance(transactions, list):
+                        transactions = [transactions]
+                    all_results.append((hash_val, transactions))
+                    logger.info(f"Fetched {len(transactions)} txns for {hash_val} {chunk_start.date()}–{chunk_end.date()}")
+                except Exception as e:
+                    logger.warning(f"Error fetching transactions {chunk_start}–{chunk_end} for {hash_val}: {e}")
+
+                # Also fetch RECEIVE_AND_DELIVER for assignments and expirations
+                try:
+                    resp2 = self.client.get_transactions(
+                        hash_val,
+                        start_date=chunk_start,
+                        end_date=chunk_end,
+                        transaction_types=self.client.Transactions.TransactionType.RECEIVE_AND_DELIVER,
+                    )
+                    resp2.raise_for_status()
+                    rad_txns = resp2.json()
+                    if not isinstance(rad_txns, list):
+                        rad_txns = [rad_txns]
+                    # Tag these so we can distinguish them in processing
+                    for t in rad_txns:
+                        t['_schwab_type'] = 'RECEIVE_AND_DELIVER'
+                    all_results.append((hash_val, rad_txns))
+                except Exception as e:
+                    logger.warning(f"Error fetching RECEIVE_AND_DELIVER {chunk_start}–{chunk_end} for {hash_val}: {e}")
+            chunk_start = chunk_end + timedelta(seconds=1)
+
+        # Now process all collected raw transactions
+        # Build a mapping so we can look up account numbers
+        acct_map = {
+            a.get('hashValue') or a.get('hash_value', ''): a
+            for a in account_hashes
+        }
+
+        results = []
+        for hash_val, transactions in all_results:
+            acct = acct_map.get(hash_val, {})
+            for txn in transactions:
+                    # Skip non-VALID transactions
+                    if txn.get('status', 'VALID') != 'VALID':
+                        continue
+
+                    schwab_type = txn.get('_schwab_type', 'TRADE')
+
+                    transfer_items = txn.get('transferItems', [])
+
+                    # Parse trade date
+                    raw_time = txn.get('time') or txn.get('tradeDate') or ''
+                    try:
+                        trade_dt   = datetime.fromisoformat(raw_time.replace('Z', '+00:00'))
+                        trade_date = trade_dt.strftime('%Y-%m-%d')
+                    except Exception:
+                        trade_date = datetime.now().strftime('%Y-%m-%d')
+
+                    # -------------------------------------------------------
+                    # Handle RECEIVE_AND_DELIVER: assignments and expirations
+                    # -------------------------------------------------------
+                    if schwab_type == 'RECEIVE_AND_DELIVER':
+                        description = txn.get('description', '')
+                        is_assignment = 'assignment' in description.lower()
+                        is_expiration = 'expiration' in description.lower()
+                        if not (is_assignment or is_expiration):
+                            continue
+                        for ti in transfer_items:
+                            inst = ti.get('instrument', {})
+                            if inst.get('assetType', '').upper() != 'OPTION':
+                                continue
+                            underlying = (inst.get('underlyingSymbol') or inst.get('symbol') or '').upper()
+                            if not underlying:
+                                continue
+                            strike = float(inst.get('strikePrice') or 0)
+                            raw_exp = inst.get('expirationDate') or ''
+                            exp_date = ''
+                            if raw_exp:
+                                try:
+                                    exp_date = datetime.fromisoformat(
+                                        raw_exp.replace('Z', '+00:00')
+                                    ).strftime('%Y-%m-%d')
+                                except Exception:
+                                    exp_date = raw_exp[:10] if len(raw_exp) >= 10 else raw_exp
+                            option_type = (inst.get('putCall') or '').upper()
+                            num_contracts = int(abs(float(ti.get('amount') or 0)))
+                            category = 'OPTION_ASSIGNED' if is_assignment else 'OPTION_EXPIRED'
+                            results.append({
+                                'transaction_id':  str(txn.get('activityId') or ''),
+                                'account_hash':    hash_val,
+                                'account_number':  acct.get('accountNumber', ''),
+                                'symbol':          underlying,
+                                'occ_symbol':      inst.get('symbol', ''),
+                                'date':            trade_date,
+                                'price_per_share': 0,
+                                'num_shares':      0,
+                                'num_contracts':   num_contracts,
+                                'category':        category,
+                                'asset_type':      'OPTION',
+                                'option_type':     option_type,
+                                'strike_price':    strike,
+                                'expiration_date': exp_date,
+                                'description':     description,
+                                'needs_review':    False,
+                                'commission':      0,
+                            })
+                        continue  # done with this RECEIVE_AND_DELIVER event
+
+                    # Sum commissions from CURRENCY fee items
+                    total_commission = 0.0
+                    for ti in transfer_items:
+                        inst = ti.get('instrument', {})
+                        if inst.get('assetType') == 'CURRENCY' and ti.get('feeType') == 'COMMISSION':
+                            total_commission += abs(float(ti.get('amount') or 0))
+
+                    # Process each non-CURRENCY instrument leg
+                    for ti in transfer_items:
+                        inst = ti.get('instrument', {})
+                        asset_type = (inst.get('assetType') or '').upper()
+                        if asset_type in ('CURRENCY', ''):
+                            continue
+
+                        amount         = float(ti.get('amount') or 0)   # +buy/-sell for equity; -sell/+buy for options
+                        price          = float(ti.get('price') or 0)
+                        pos_effect     = (ti.get('positionEffect') or '').upper()
+                        raw_symbol     = (inst.get('symbol') or '').upper()
+                        underlying     = (inst.get('underlyingSymbol') or raw_symbol).upper()
+                        option_type    = (inst.get('putCall') or '').upper()
+                        strike         = float(inst.get('strikePrice') or 0)
+                        description    = inst.get('description', underlying)
+
+                        if not underlying:
+                            continue
+
+                        # Parse option expiration
+                        raw_exp  = inst.get('expirationDate') or ''
+                        exp_date = ''
+                        if raw_exp:
+                            try:
+                                exp_date = datetime.fromisoformat(
+                                    raw_exp.replace('Z', '+00:00')
+                                ).strftime('%Y-%m-%d')
+                            except Exception:
+                                exp_date = raw_exp[:10] if len(raw_exp) >= 10 else raw_exp
+
+                        # Categorise by asset type + amount sign + position effect
+                        if asset_type == 'EQUITY':
+                            qty = abs(amount)
+                            comm_per_share = round(total_commission / qty, 4) if qty else 0
+                            if amount > 0 or pos_effect == 'OPENING':
+                                category, needs_review = 'BTO', False
+                            else:
+                                category, needs_review = 'STC', False
+
+                            results.append({
+                                'transaction_id':  str(txn.get('activityId') or ''),
+                                'account_hash':    hash_val,
+                                'account_number':  acct.get('accountNumber', ''),
+                                'symbol':          underlying,
+                                'occ_symbol':      raw_symbol,
+                                'date':            trade_date,
+                                'price_per_share': price,
+                                'num_shares':      qty,
+                                'num_contracts':   0,
+                                'category':        category,
+                                'asset_type':      'EQUITY',
+                                'option_type':     '',
+                                'strike_price':    0,
+                                'expiration_date': '',
+                                'description':     description,
+                                'needs_review':    needs_review,
+                                'commission':      comm_per_share,
+                            })
+
+                        elif asset_type == 'OPTION':
+                            num_contracts = int(abs(amount))
+                            comm_per_contract = round(total_commission / num_contracts, 4) if num_contracts else 0
+
+                            # amount < 0 = sold contracts; OPENING = sell-to-open
+                            if amount < 0 and pos_effect == 'OPENING':
+                                category, needs_review = 'OPTION_SELL_OPEN', True
+                            elif amount > 0 and pos_effect == 'CLOSING':
+                                category, needs_review = 'OPTION_BUY_CLOSE', True
+                            elif amount > 0 and pos_effect == 'OPENING':
+                                category, needs_review = 'OPTION_BUY_OPEN', True
+                            elif amount < 0 and pos_effect == 'CLOSING':
+                                category, needs_review = 'OPTION_SELL_CLOSE', True
+                            else:
+                                category, needs_review = 'UNKNOWN', True
+
+                            results.append({
+                                'transaction_id':  str(txn.get('activityId') or ''),
+                                'account_hash':    hash_val,
+                                'account_number':  acct.get('accountNumber', ''),
+                                'symbol':          underlying,
+                                'occ_symbol':      raw_symbol,
+                                'date':            trade_date,
+                                'price_per_share': price,
+                                'num_shares':      0,
+                                'num_contracts':   num_contracts,
+                                'category':        category,
+                                'asset_type':      'OPTION',
+                                'option_type':     option_type,
+                                'strike_price':    strike,
+                                'expiration_date': exp_date,
+                                'description':     description,
+                                'needs_review':    needs_review,
+                                'commission':      comm_per_contract,
+                            })
+                        else:
+                            # Unknown asset type — flag for review
+                            results.append({
+                                'transaction_id':  str(txn.get('activityId') or ''),
+                                'account_hash':    hash_val,
+                                'account_number':  acct.get('accountNumber', ''),
+                                'symbol':          underlying,
+                                'occ_symbol':      raw_symbol,
+                                'date':            trade_date,
+                                'price_per_share': price,
+                                'num_shares':      abs(amount),
+                                'num_contracts':   0,
+                                'category':        'UNKNOWN',
+                                'asset_type':      asset_type,
+                                'option_type':     '',
+                                'strike_price':    0,
+                                'expiration_date': '',
+                                'description':     description,
+                                'needs_review':    True,
+                                'commission':      0,
+                            })
+
+        return results
+
     def sync_trades_to_database(self, account_number: Optional[str] = None,
                                 start_date: Optional[datetime] = None,
                                 end_date: Optional[datetime] = None) -> Dict[str, Any]:

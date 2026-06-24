@@ -1,24 +1,44 @@
 import sys
 import os
 
-# Add the project directory to Python path
-project_dir = '/home/YOUR_USERNAME/stock-options-tracker'
+project_dir = os.path.dirname(os.path.abspath(__file__))
 if project_dir not in sys.path:
-    sys.path.append(project_dir)
+    sys.path.insert(0, project_dir)
 
-# Change to the project directory
 os.chdir(project_dir)
 
-# Set environment variables for production (PythonAnywhere)
-# Note: You can also set these in the Web tab's Environment variables section
-# This is useful if you want to keep them in version control (but be careful with secrets!)
-os.environ['SCHWAB_REDIRECT_URI'] = 'https://prometheusprograms.pythonanywhere.com/auth/schwab/callback'
-os.environ['SCHWAB_TOKEN_FILE'] = 'schwab_tokens.json'
-# DO NOT put SCHWAB_APP_KEY and SCHWAB_APP_SECRET here - use Web tab instead for security
+# ── Auto-detect environment from the PythonAnywhere username ─────────────────
+# This lets both sites share the exact same wsgi.py from the same git repo.
+pa_username = os.path.basename(os.path.expanduser('~'))  # e.g. "greenmandev" or "greenmangroup"
 
-# Import the Flask app
+if pa_username == 'greenmangroup':
+    # ── PRODUCTION ────────────────────────────────────────────────────────────
+    os.environ.setdefault('APP_ENV',            'production')
+    os.environ.setdefault('DB_PATH',            f'/home/greenmangroup/inv_track/trades.db')
+    os.environ.setdefault('SCHWAB_REDIRECT_URI','https://greenmangroup.pythonanywhere.com/auth/schwab/callback')
+    os.environ.setdefault('SCHWAB_TOKEN_FILE',  f'/home/greenmangroup/inv_track/schwab_tokens.json')
+
+elif pa_username == 'greenmandev':
+    # ── TEST / STAGING ────────────────────────────────────────────────────────
+    os.environ.setdefault('APP_ENV',            'test')
+    os.environ.setdefault('DB_PATH',            f'/home/greenmandev/inv_track/trades_test.db')
+    os.environ.setdefault('SCHWAB_REDIRECT_URI','https://greenmandev.pythonanywhere.com/auth/schwab/callback')
+    os.environ.setdefault('SCHWAB_TOKEN_FILE',  f'/home/greenmandev/inv_track/schwab_tokens.json')
+
+else:
+    # ── LOCAL DEVELOPMENT ─────────────────────────────────────────────────────
+    os.environ.setdefault('APP_ENV',            'development')
+    os.environ.setdefault('DB_PATH',            os.path.join(project_dir, 'trades.db'))
+    os.environ.setdefault('SCHWAB_REDIRECT_URI','http://localhost:5005/auth/schwab/callback')
+    os.environ.setdefault('SCHWAB_TOKEN_FILE',  os.path.join(project_dir, 'schwab_tokens.json'))
+
+# SCHWAB_APP_KEY and SCHWAB_APP_SECRET must still be set manually on each server
+# (never commit secrets to git). On PythonAnywhere free plan, add them directly
+# in wsgi.py but keep this file out of public repos:
+#   os.environ.setdefault('SCHWAB_APP_KEY',    'your_key_here')
+#   os.environ.setdefault('SCHWAB_APP_SECRET', 'your_secret_here')
+
 from app import app as application
 
-# Optional: Configure for production
-if __name__ == "__main__":
+if __name__ == '__main__':
     application.run()
