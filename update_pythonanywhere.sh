@@ -3,7 +3,9 @@
 
 echo "Updating stock-options-tracker on PythonAnywhere..."
 
-cd /home/prometheusprograms/stock-options-tracker
+# Auto-detect account: greenmandev (test) or greenmangroup (prod)
+USER="$(basename "$HOME")"
+cd "$HOME/inv_track"
 
 # Stash any local changes to trades.db
 git stash push -m "Stash local trades.db changes"
@@ -26,7 +28,7 @@ echo "✓ Code updated successfully"
 echo "✓ Packages installed/updated"
 echo ""
 echo "Next steps:"
-echo "1. Restart your web app in the Web tab"
-echo "2. Visit: http://prometheusprograms.pythonanywhere.com/api/repopulate-cash-flows"
-echo "3. Visit: http://prometheusprograms.pythonanywhere.com/api/repopulate-cost-basis"
+echo "1. Reload your web app in the Web tab"
+echo "2. Visit: https://greenmangroup.pythonanywhere.com/api/env  (prod)"
+echo "   or:   https://greenmandev.pythonanywhere.com/api/env     (test)"
 

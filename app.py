@@ -11,6 +11,7 @@ import zipfile
 import logging
 import math
 from decimal import Decimal, ROUND_HALF_UP
+from env_config import configure_environment
 # Import migrations with fallback if not available
 try:
     from migrations.migrate import run_migrations
@@ -75,8 +76,9 @@ def round_standard(value, decimals=2):
     quantize_str = '1.' + '0' * decimals
     return float(Decimal(str(value)).quantize(Decimal(quantize_str), rounding=ROUND_HALF_UP))
 
-# Load environment variables
+# Load .env first (secrets), then apply PA account overrides (paths/env)
 load_dotenv()
+PA_USERNAME = configure_environment()
 
 app = Flask(__name__)
 
@@ -102,8 +104,7 @@ for _noisy in ('httpcore', 'httpx', 'urllib3', 'yfinance', 'peewee', 'schwab.cli
 
 # Database configuration
 # DB_PATH env var lets test and prod sites point to different databases.
-# Falls back to 'trades.db' in the current working directory for local dev.
-DATABASE = os.getenv('DB_PATH', 'trades.db')
+DATABASE = os.path.abspath(os.getenv('DB_PATH', 'trades.db'))
 
 # Initialize database helper
 init_db_helper(DATABASE)
@@ -5382,7 +5383,7 @@ def webhook_deploy():
             project_dir = current_dir
         else:
             # For PythonAnywhere
-            project_dir = '/home/greenmangroup/cursor_tracker/stock-options-tracker/stock-options-tracker'
+            project_dir = os.path.expanduser('~/inv_track')
         
         print(f"Deploying from: {project_dir}")
         
@@ -5458,16 +5459,13 @@ def webhook_deploy():
                 print(f"Warning: Package installation had issues: {install_result.stderr}")
             
             # Reload WSGI application (for PythonAnywhere)
-            wsgi_file = '/var/www/stockoptionstracker_pythonanywhere_com_wsgi.py'
-            if os.path.exists(wsgi_file):
-                os.utime(wsgi_file, None)
-                print("✓ Reloaded WSGI application")
-            
-            # Also try alternative WSGI path
-            alt_wsgi = '/var/www/greenmangroup_pythonanywhere_com_wsgi.py'
-            if os.path.exists(alt_wsgi):
-                os.utime(alt_wsgi, None)
-                print("✓ Reloaded alternative WSGI application")
+            for wsgi_file in (
+                '/var/www/greenmangroup_pythonanywhere_com_wsgi.py',
+                '/var/www/greenmandev_pythonanywhere_com_wsgi.py',
+            ):
+                if os.path.exists(wsgi_file):
+                    os.utime(wsgi_file, None)
+                    print(f"✓ Reloaded WSGI: {wsgi_file}")
             
             # After deployment, automatically repopulate database tables
             # Wait a moment for the app to reload
@@ -8222,7 +8220,15 @@ def get_env_info():
         'env': APP_ENV,
         'is_production': IS_PRODUCTION,
         'db_path': DATABASE,
+        'pa_username': PA_USERNAME,
+        'cwd': os.getcwd(),
     })
+
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Lightweight health check — no DB required."""
+    return jsonify({'status': 'ok', 'env': APP_ENV})
 
 
 @app.route('/api/schwab/sync-status', methods=['GET'])
